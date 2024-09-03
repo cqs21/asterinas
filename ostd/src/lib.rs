@@ -122,6 +122,35 @@ fn invoke_ffi_init_funcs() {
     }
 }
 
+static mut START: u64 = 0;
+static mut END: u64 = 0;
+static mut SUM: u64 = 0;
+static mut COUNT: u64 = 0;
+/// Timing start.
+pub fn start() {
+    unsafe {
+        START = crate::arch::x86::read_tsc();
+    }
+}
+/// Timing end; print info when reach some threshold.
+pub fn end() {
+    unsafe {
+        END = crate::arch::x86::read_tsc();
+        if START == 0 {
+            return;
+        }
+        SUM += END - START;
+        END = 0;
+        START = 0;
+        COUNT += 1;
+        if COUNT == 100_000 {
+            crate::prelude::println!("avg cycles: {}", SUM / COUNT);
+            SUM = 0;
+            COUNT = 0;
+        }
+    }
+}
+
 /// Simple unit tests for the ktest framework.
 #[cfg(ktest)]
 mod test {

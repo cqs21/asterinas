@@ -93,7 +93,9 @@ impl UserContextApiInternal for UserContext {
         // return when it is syscall or cpu exception type is Fault or Trap.
         loop {
             scheduler::might_preempt();
+            crate::start();
             self.user_context.run();
+            crate::end();
             match CpuException::to_cpu_exception(self.user_context.trap_num as u16) {
                 Some(exception) => {
                     #[cfg(feature = "cvm_guest")]
