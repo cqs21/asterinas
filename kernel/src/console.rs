@@ -21,6 +21,7 @@ impl Write for VirtioConsolesPrinter {
 /// Prints the formatted arguments to the standard output.
 pub fn _print(args: Arguments) {
     VirtioConsolesPrinter.write_fmt(args).unwrap();
+    ostd::arch::framebuffer::print(args);
 }
 
 /// Copied from Rust std: <https://github.com/rust-lang/rust/blob/master/library/std/src/macros.rs>

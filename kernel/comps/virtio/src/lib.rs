@@ -32,7 +32,8 @@ mod dma_buf;
 pub mod queue;
 mod transport;
 
-#[init_component]
+// FIXME: do not init virtio in order to run on Aliyun.
+// #[init_component]
 fn virtio_component_init() -> Result<(), ComponentInitError> {
     // Find all devices and register them to the corresponding crate
     transport::init();

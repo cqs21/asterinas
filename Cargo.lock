@@ -1039,6 +1039,7 @@ dependencies = [
  "buddy_system_allocator",
  "cfg-if",
  "const-assert",
+ "font8x8",
  "gimli 0.28.0",
  "iced-x86",
  "id-alloc",

@@ -1,9 +1,9 @@
 // SPDX-License-Identifier: MPL-2.0
 
-use linux_boot_params::BootParams;
+use linux_boot_params::{BootParams, ScreenInfo};
 use uefi::{
     data_types::Handle,
-    proto::loaded_image::LoadedImage,
+    proto::{console::gop::GraphicsOutput, loaded_image::LoadedImage},
     table::{
         boot::MemoryMap,
         cfg::{ACPI2_GUID, ACPI_GUID},
@@ -67,6 +67,8 @@ fn efi_phase_boot(
     if boot_params.acpi_rsdp_addr == 0 {
         boot_params.acpi_rsdp_addr = get_rsdp_addr(&system_table);
     }
+
+    try_fill_screen_info(&system_table, &mut boot_params.screen_info);
 
     // Load the kernel payload to memory.
     let payload = crate::get_payload(boot_params);
@@ -230,4 +232,27 @@ fn get_rsdp_addr(boot_table: &SystemTable<Boot>) -> u64 {
         }
     }
     panic!("ACPI RSDP not found");
+}
+
+fn try_fill_screen_info(system_table: &SystemTable<Boot>, screen_info: &mut ScreenInfo) {
+    let boot_services = system_table.boot_services();
+    let Ok(handle) = boot_services.get_handle_for_protocol::<GraphicsOutput>() else {
+        uefi_services::println!("[EFI stub] Warning: getting GraphicsOutputProtocol failed!");
+        return;
+    };
+    let Ok(mut graphics) = boot_services.open_protocol_exclusive::<GraphicsOutput>(handle) else {
+        uefi_services::println!("[EFI stub] Warning: opening GraphicsOutputProtocol failed!");
+        return;
+    };
+
+    let (width, height) = graphics.current_mode_info().resolution();
+    screen_info.lfb_width = width as _;
+    screen_info.lfb_height = height as _;
+
+    let mut fb = graphics.frame_buffer();
+    let size = fb.size();
+    let depth = (size * 8) / width / height;
+    screen_info.lfb_base = fb.as_mut_ptr() as _;
+    screen_info.lfb_size = size as _;
+    screen_info.lfb_depth = depth as _;
 }

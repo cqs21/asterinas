@@ -94,8 +94,8 @@ impl CapabilityMsixData {
             }
         }
 
-        let pba_offset = (pba_info & !(0b111u32)) as usize;
-        let table_offset = (table_info & !(0b111u32)) as usize;
+        let pba_offset = (pba_info >> 3) as usize;
+        let table_offset = (table_info >> 3) as usize;
 
         let table_size = (dev.location().read16(cap_ptr + 2) & 0b11_1111_1111) + 1;
         // TODO: Different architecture seems to have different, so we should set different address here.
@@ -119,18 +119,19 @@ impl CapabilityMsixData {
                 }
             }
             // Set message address and disable this msix entry
-            table_bar
-                .io_mem()
-                .write_val((16 * i) as usize + table_offset, &message_address)
-                .unwrap();
-            table_bar
-                .io_mem()
-                .write_val((16 * i + 4) as usize + table_offset, &message_upper_address)
-                .unwrap();
-            table_bar
-                .io_mem()
-                .write_val((16 * i + 12) as usize + table_offset, &1_u32)
-                .unwrap();
+            // FIXME: Aliyun ECS will abort on those code.
+            // table_bar
+            //     .io_mem()
+            //     .write_val((16 * i) as usize + table_offset, &message_address)
+            //     .unwrap();
+            // table_bar
+            //     .io_mem()
+            //     .write_val((16 * i + 4) as usize + table_offset, &message_upper_address)
+            //     .unwrap();
+            // table_bar
+            //     .io_mem()
+            //     .write_val((16 * i + 12) as usize + table_offset, &1_u32)
+            //     .unwrap();
         }
 
         // enable MSI-X, bit15: MSI-X Enable

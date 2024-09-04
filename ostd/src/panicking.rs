@@ -62,6 +62,10 @@ pub fn panic_handler(info: &core::panic::PanicInfo) -> ! {
 
 /// Aborts the QEMU
 pub fn abort() -> ! {
+    // FIXME: halt when run on Aliyun ECS.
+    loop {
+        unsafe { x86::halt() };
+    }
     exit_qemu(QemuExitCode::Failed);
 }
 
