@@ -1,0 +1,19 @@
+#!/bin/bash
+
+# to emulate the aliyun ecs
+
+sudo qemu-system-x86_64 \
+	-machine pc,accel=kvm -cpu Skylake-Server -smp 2 -m 4G \
+	-bios /usr/share/qemu/OVMF.fd \
+	-device piix3-usb-uhci,bus=pci.0,addr=01.2 \
+	-device cirrus-vga \
+	-chardev stdio,id=mux,mux=on,logfile=qemu.log \
+	-device virtio-serial-pci,disable-modern=true \
+	-drive file=./asterinas.qcow2,if=none,id=mydrive \
+	-device virtio-blk-pci,disable-modern=true,drive=mydrive \
+	-netdev user,id=net01,hostfwd=tcp::44624-:22,hostfwd=tcp::51859-:8080 \
+	-device virtio-net-pci,netdev=net01,disable-modern=true \
+	-device virtio-balloon,disable-modern=true \
+	-serial chardev:mux \
+	-vnc :42
+
