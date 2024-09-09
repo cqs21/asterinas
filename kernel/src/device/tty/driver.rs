@@ -91,6 +91,11 @@ fn serial_input_callback(item: u8) {
     tty_driver.push_char(item);
 }
 
+pub fn keyboard_input_callback(item: u8) {
+    let tty_driver = get_tty_driver();
+    tty_driver.push_char(item);
+}
+
 fn get_tty_driver() -> &'static TtyDriver {
     TTY_DRIVER.get().unwrap()
 }

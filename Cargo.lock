@@ -122,6 +122,16 @@ dependencies = [
 ]
 
 [[package]]
+name = "aster-keyboard"
+version = "0.1.0"
+dependencies = [
+ "component",
+ "log",
+ "ostd",
+ "spin 0.9.8",
+]
+
+[[package]]
 name = "aster-network"
 version = "0.1.0"
 dependencies = [
@@ -148,6 +158,7 @@ dependencies = [
  "aster-console",
  "aster-framebuffer",
  "aster-input",
+ "aster-keyboard",
  "aster-network",
  "aster-rights",
  "aster-rights-proc",
