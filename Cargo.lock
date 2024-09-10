@@ -98,8 +98,9 @@ dependencies = [
 name = "aster-framebuffer"
 version = "0.1.0"
 dependencies = [
+ "aster-console",
+ "aster-keyboard",
  "component",
- "font8x8",
  "log",
  "ostd",
  "spin 0.9.8",

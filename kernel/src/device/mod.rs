@@ -26,56 +26,9 @@ pub use urandom::Urandom;
 
 use self::tty::get_n_tty;
 use crate::{
-    device::tty::driver::keyboard_input_callback,
     fs::device::{add_node, Device, DeviceId, DeviceType},
     prelude::*,
 };
-
-fn keyboard_tty_callback(key: Key) {
-    match key {
-        Key::Char(ch) => {
-            keyboard_input_callback(ch as u8);
-        }
-        Key::Enter => {
-            keyboard_input_callback(0x0D);
-        }
-        Key::BackSpace => {
-            keyboard_input_callback(0x7F);
-        }
-        Key::Escape => {
-            keyboard_input_callback(0x1B);
-        }
-        Key::Up => {
-            keyboard_input_callback(0x1B);
-            keyboard_input_callback(0x5B);
-            keyboard_input_callback(0x41);
-        }
-        Key::Down => {
-            keyboard_input_callback(0x1B);
-            keyboard_input_callback(0x5B);
-            keyboard_input_callback(0x42);
-        }
-        Key::Right => {
-            keyboard_input_callback(0x1B);
-            keyboard_input_callback(0x5B);
-            keyboard_input_callback(0x43);
-        }
-        Key::Left => {
-            keyboard_input_callback(0x1B);
-            keyboard_input_callback(0x5B);
-            keyboard_input_callback(0x44);
-        }
-        Key::Ctrl(ch) => {
-            keyboard_input_callback(ch as u8);
-        }
-        Key::Null => return,
-        _ => ostd::arch::serial::print(format_args!("unsupported keyboard input")),
-    }
-}
-
-fn keyboard_tty() {
-    register_callback(&keyboard_tty_callback);
-}
 
 /// Init the device node in fs, must be called after mounting rootfs.
 pub fn init() -> Result<()> {
@@ -84,7 +37,6 @@ pub fn init() -> Result<()> {
     let zero = Arc::new(zero::Zero);
     add_node(zero, "zero")?;
     tty::init();
-    keyboard_tty();
     let console = get_n_tty().clone();
     add_node(console, "console")?;
     let tty = Arc::new(tty::TtyDevice);
