@@ -122,22 +122,42 @@ impl BarManager {
         };
         let mut idx = 0;
         let mut bars = [None, None, None, None, None, None];
+        crate::early_print!(
+            "{:X}:{:X}.{} ",
+            location.bus,
+            location.device,
+            location.function
+        );
         while idx < max {
             if let Ok(bar) = Bar::new(location, idx) {
                 let mut idx_step = 0;
                 match &bar {
                     Bar::Memory(memory_bar) => {
+                        crate::early_print!(
+                            "BAR{}:0x{:X} 0x{:X},",
+                            idx,
+                            memory_bar.base(),
+                            memory_bar.size()
+                        );
                         if memory_bar.address_length() == AddrLen::Bits64 {
                             idx_step = 1;
                         }
                     }
-                    Bar::Io(_) => {}
+                    Bar::Io(io_bar) => {
+                        crate::early_print!(
+                            "BAR{}: 0x{:X} 0x{:X},",
+                            idx,
+                            io_bar.base(),
+                            io_bar.size()
+                        );
+                    }
                 }
                 bars[idx as usize] = Some((bar, true));
                 idx += idx_step;
             }
             idx += 1;
         }
+        crate::early_print!("\n");
         Self { bars }
     }
 

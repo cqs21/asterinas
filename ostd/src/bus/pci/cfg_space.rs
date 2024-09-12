@@ -13,6 +13,7 @@ use super::PciDeviceLocation;
 use crate::{
     arch::device::io_port::{PortRead, PortWrite},
     io_mem::IoMem,
+    sync::SpinLock,
     Error, Result,
 };
 
@@ -187,6 +188,9 @@ pub struct MemoryBar {
 }
 
 impl MemoryBar {
+    /// PCI BAR start address.
+    const BASE_ADDR: u32 = 0xC000_0000;
+
     /// Memory BAR bits type
     pub fn address_length(&self) -> AddrLen {
         self.address_length
@@ -215,28 +219,30 @@ impl MemoryBar {
 
     /// Creates a memory BAR structure.
     fn new(location: &PciDeviceLocation, index: u8) -> Result<Self> {
+        static MAPPED_OFFSET: SpinLock<u32> = SpinLock::new(0);
+
         // Get the original value first, then write all 1 to the register to get the length
         let offset = index as u16 * 4 + PciDeviceCommonCfgOffset::Bar0 as u16;
-        let raw = location.read32(offset);
         location.write32(offset, !0);
-        let len_encoded = location.read32(offset);
-        location.write32(offset, raw);
+        let raw = location.read32(offset);
+        let size = (!(raw & !0xF)).wrapping_add(1);
+
+        // Calc base addr
+        let map_offset = *MAPPED_OFFSET.lock();
+        let base = Self::BASE_ADDR + map_offset;
+        *MAPPED_OFFSET.lock() = map_offset + size;
+        location.write32(offset, base | (raw & 0xF));
+
         let mut address_length = AddrLen::Bits32;
-        // base address, it may be bit64 or bit32
-        let base: u64 = match (raw & 0b110) >> 1 {
-            // bits32
-            0 => (raw & !0xF) as u64,
-            // bits64
+        let (base, address_length) = match (raw & 0b110) >> 1 {
+            0 => (base as u64, AddrLen::Bits32),
             2 => {
-                address_length = AddrLen::Bits64;
-                ((raw & !0xF) as u64) | ((location.read32(offset + 4) as u64) << 32)
+                location.write32(offset + 4, 0x0);
+                (base as u64, AddrLen::Bits64)
             }
-            _ => {
-                return Err(Error::InvalidArgs);
-            }
+            _ => return Err(Error::InvalidArgs),
         };
-        // length
-        let size = !(len_encoded & !0xF).wrapping_add(1);
+
         let prefetchable = raw & 0b1000 != 0;
         // The BAR is located in I/O memory region
         Ok(MemoryBar {

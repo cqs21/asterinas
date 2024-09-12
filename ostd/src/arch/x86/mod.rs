@@ -105,6 +105,24 @@ pub(crate) fn init_on_bsp() {
         }
     }
 
+    let acpi = super::kernel::acpi::ACPI_TABLES.get().unwrap().lock();
+    let platform_info = acpi::PlatformInfo::new(&*acpi).unwrap();
+    if let acpi::InterruptModel::Apic(apic) = platform_info.interrupt_model {
+        crate::early_print!("LAPIC:0x{:X}, ", apic.local_apic_address);
+        for ioapic in apic.io_apics.iter() {
+            crate::early_print!(
+                "IOAPIC{}:0x{:X}, 0x{:X}",
+                ioapic.id,
+                ioapic.address,
+                ioapic.global_system_interrupt_base
+            );
+        }
+    }
+
+    if let Ok(pci_confs) = acpi::PciConfigRegions::new(&*acpi) {
+        crate::early_print!("{:?}", pci_confs);
+    }
+
     // Some driver like serial may use PIC
     kernel::pic::init();
 }

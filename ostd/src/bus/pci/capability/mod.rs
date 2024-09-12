@@ -105,11 +105,14 @@ impl Capability {
         cap_ptr_vec.sort();
         // Push here so that we can calculate the length of the last capability.
         cap_ptr_vec.push(Self::CAPABILITY_TOP);
+        crate::early_print!("caps:");
         let length = cap_ptr_vec.len();
         for i in 0..length - 1 {
             let cap_ptr = cap_ptr_vec[i];
             let next_ptr = cap_ptr_vec[i + 1];
             let cap_type = dev.location().read8(cap_ptr);
+
+            crate::early_print!("0x{:X},", cap_type);
             let data = match cap_type {
                 0x01 => CapabilityData::Pm,
                 0x02 => CapabilityData::Agp,
@@ -143,6 +146,7 @@ impl Capability {
                 cap_data: data,
             });
         }
+        crate::early_print!("\n");
         capabilities
     }
 }

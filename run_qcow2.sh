@@ -3,7 +3,7 @@
 # to emulate the aliyun ecs
 
 sudo qemu-system-x86_64 \
-	-machine pc,accel=kvm -cpu Skylake-Server -smp 2 -m 4G \
+	-machine pc-i440fx-2.1,accel=kvm -cpu host -smp 2 -m 4G \
 	-bios /usr/share/qemu/OVMF.fd \
 	-device piix3-usb-uhci,bus=pci.0,addr=01.2 \
 	-device cirrus-vga \
