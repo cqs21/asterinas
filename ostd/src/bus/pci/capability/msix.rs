@@ -103,8 +103,8 @@ impl CapabilityMsixData {
             }
         }
 
-        let pba_offset = (pba_info >> 3) as usize;
-        let table_offset = (table_info >> 3) as usize;
+        let pba_offset = (pba_info & !(0b111u32)) as usize;
+        let table_offset = (table_info & !(0b111u32)) as usize;
 
         let table_size = (dev.location().read16(cap_ptr + 2) & 0b11_1111_1111) + 1;
         // TODO: Different architecture seems to have different, so we should set different address here.
