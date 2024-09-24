@@ -3,9 +3,9 @@
 use aster_network::EthernetAddr;
 use aster_util::safe_ptr::SafePtr;
 use bitflags::bitflags;
-use ostd::{io_mem::IoMem, Pod};
+use ostd::{bus::pci::cfg_space::Bar, io_mem::IoMem, Pod};
 
-use crate::transport::VirtioTransport;
+use crate::{device::VirtioConfigManager, transport::VirtioTransport};
 
 bitflags! {
     /// Virtio Net Feature bits.
@@ -50,14 +50,14 @@ impl NetworkFeatures {
 
 bitflags! {
     #[repr(C)]
-    #[derive(Pod)]
+    #[derive(Default, Pod)]
     pub struct Status: u16 {
         const VIRTIO_NET_S_LINK_UP = 1;
         const VIRTIO_NET_S_ANNOUNCE = 2;
     }
 }
 
-#[derive(Debug, Clone, Copy, Pod)]
+#[derive(Debug, Default, Clone, Copy, Pod)]
 #[repr(C)]
 pub struct VirtioNetConfig {
     pub mac: EthernetAddr,
@@ -71,9 +71,20 @@ pub struct VirtioNetConfig {
     supported_hash_types: u32,
 }
 
-impl VirtioNetConfig {
-    pub(super) fn new(transport: &dyn VirtioTransport) -> SafePtr<Self, IoMem> {
-        let memory = transport.device_config_memory();
-        SafePtr::new(memory, 0)
+impl VirtioConfigManager<VirtioNetConfig> {
+    pub(super) fn from_bar(&self) -> Option<VirtioNetConfig> {
+        let Some(bar) = self.raw_bar.as_ref() else {
+            return None;
+        };
+        let offset = self.device_config_offset;
+
+        let mut net_config = VirtioNetConfig::default();
+        // Only following fields are defined in legacy interface.
+        for i in 0..6 {
+            net_config.mac.0[i] = bar.read_val::<u8>(offset + i).unwrap();
+        }
+        net_config.status.bits = bar.read_val::<u16>(offset + 0x6).unwrap();
+
+        Some(net_config)
     }
 }

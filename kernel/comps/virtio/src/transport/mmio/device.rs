@@ -7,9 +7,12 @@ use aster_rights::{ReadOp, WriteOp};
 use aster_util::{field_ptr, safe_ptr::SafePtr};
 use log::warn;
 use ostd::{
-    bus::mmio::{
-        bus::MmioDevice,
-        common_device::{MmioCommonDevice, VirtioMmioVersion},
+    bus::{
+        mmio::{
+            bus::MmioDevice,
+            common_device::{MmioCommonDevice, VirtioMmioVersion},
+        },
+        pci::cfg_space::Bar,
     },
     io_mem::IoMem,
     mm::{DmaCoherent, PAGE_SIZE},
@@ -175,6 +178,10 @@ impl VirtioTransport for VirtioMmioTransport {
         Ok(SafePtr::new(self.common_device.io_mem().clone(), offset))
     }
 
+    fn notify_offset(&self) -> usize {
+        0
+    }
+
     fn num_queues(&self) -> u16 {
         // We use the field `queue_num_max` to get queue size.
         // If the queue is not exists, the field should be zero
@@ -196,12 +203,20 @@ impl VirtioTransport for VirtioMmioTransport {
         todo!()
     }
 
-    fn device_config_memory(&self) -> IoMem {
+    fn device_config_memory(&self) -> Option<IoMem> {
         // offset: 0x100~0x200
         let mut io_mem = self.common_device.io_mem().clone();
         let paddr = io_mem.paddr();
         io_mem.resize((paddr + 0x100)..(paddr + 0x200)).unwrap();
-        io_mem
+        Some(io_mem)
+    }
+
+    fn config_bar(&self) -> Option<Bar> {
+        None
+    }
+
+    fn device_config_offset(&self) -> usize {
+        0
     }
 
     fn device_features(&self) -> u64 {

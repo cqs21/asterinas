@@ -118,6 +118,7 @@ pub(crate) fn init_on_bsp() {
             );
         }
     }
+    crate::early_println!();
 
     if let Ok(pci_confs) = acpi::PciConfigRegions::new(&*acpi) {
         crate::early_print!("{:?}", pci_confs);

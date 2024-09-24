@@ -34,7 +34,7 @@ pub struct VirtioVsockConfig {
 
 impl VirtioVsockConfig {
     pub(crate) fn new(transport: &dyn VirtioTransport) -> SafePtr<Self, IoMem> {
-        let memory = transport.device_config_memory();
+        let memory = transport.device_config_memory().unwrap();
         SafePtr::new(memory, 0)
     }
 }

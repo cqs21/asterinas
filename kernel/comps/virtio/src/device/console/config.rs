@@ -3,7 +3,7 @@
 use aster_util::safe_ptr::SafePtr;
 use ostd::{io_mem::IoMem, Pod};
 
-use crate::transport::VirtioTransport;
+use crate::{device::VirtioConfigManager, transport::VirtioTransport};
 
 bitflags::bitflags! {
     pub struct ConsoleFeatures: u64{
@@ -18,18 +18,28 @@ bitflags::bitflags! {
     }
 }
 
-#[derive(Debug, Pod, Clone, Copy)]
+#[derive(Debug, Default, Pod, Clone, Copy)]
 #[repr(C)]
 pub struct VirtioConsoleConfig {
     pub cols: u16,
-    pub row: u16,
+    pub rows: u16,
     pub max_nr_ports: u32,
     pub emerg_wr: u32,
 }
 
-impl VirtioConsoleConfig {
-    pub(super) fn new(transport: &dyn VirtioTransport) -> SafePtr<Self, IoMem> {
-        let memory = transport.device_config_memory();
-        SafePtr::new(memory, 0)
+impl VirtioConfigManager<VirtioConsoleConfig> {
+    pub(super) fn from_bar(&self) -> Option<VirtioConsoleConfig> {
+        let Some(bar) = self.raw_bar.as_ref() else {
+            return None;
+        };
+        let offset = self.device_config_offset;
+
+        let mut console_config = VirtioConsoleConfig::default();
+        // Only following fields are defined in legacy interface.
+        console_config.cols = bar.read_val::<u16>(offset).unwrap();
+        console_config.rows = bar.read_val::<u16>(offset + 0x2).unwrap();
+        console_config.max_nr_ports = bar.read_val::<u32>(offset + 0x4).unwrap();
+
+        Some(console_config)
     }
 }

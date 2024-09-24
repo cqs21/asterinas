@@ -73,6 +73,7 @@ impl PciCommonDevice {
 
         let capabilities = Vec::new();
         let device_id = PciDeviceId::new(location);
+        crate::early_print!("{:04x}:{:04x} ", device_id.vendor_id, device_id.device_id);
         let bar_manager = BarManager::new(location);
         let mut device = Self {
             device_id,
@@ -123,10 +124,10 @@ impl BarManager {
         let mut idx = 0;
         let mut bars = [None, None, None, None, None, None];
         crate::early_print!(
-            "{:X}:{:X}.{} ",
+            "{:x}:{:x}.{} ",
             location.bus,
             location.device,
-            location.function
+            location.function,
         );
         while idx < max {
             if let Ok(bar) = Bar::new(location, idx) {

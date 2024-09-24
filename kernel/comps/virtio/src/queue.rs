@@ -13,12 +13,16 @@ use aster_util::{field_ptr, safe_ptr::SafePtr};
 use bitflags::bitflags;
 use log::debug;
 use ostd::{
+    bus::pci::cfg_space::Bar,
     io_mem::IoMem,
     mm::{DmaCoherent, FrameAllocOptions},
     offset_of, Pod,
 };
 
-use crate::{dma_buf::DmaBuf, transport::VirtioTransport};
+use crate::{
+    dma_buf::DmaBuf,
+    transport::{pci::legacy::VirtioPciTransportLegacy, VirtioTransport},
+};
 
 #[derive(Debug)]
 pub enum QueueError {
@@ -41,7 +45,9 @@ pub struct VirtQueue {
     /// Used ring
     used: SafePtr<UsedRing, DmaCoherent>,
     /// point to notify address
-    notify: SafePtr<u32, IoMem>,
+    notify: Option<SafePtr<u32, IoMem>>,
+    config_bar: Option<Bar>,
+    notify_offset: usize,
 
     /// The index of queue
     queue_idx: u32,
@@ -78,14 +84,26 @@ impl VirtQueue {
             if size > 128 {
                 return Err(QueueError::InvalidArgs);
             }
-            let desc_size = size_of::<Descriptor>() * size as usize;
+
+            let queue_size = transport.max_queue_size(idx).unwrap() as usize;
+            let desc_size = size_of::<Descriptor>() * queue_size as usize;
 
             let (seg1, seg2) = {
-                let continue_segment = FrameAllocOptions::new(2).alloc_contiguous().unwrap();
-                let seg1 = continue_segment.range(0..1);
-                let seg2 = continue_segment.range(1..2);
+                let align_size = VirtioPciTransportLegacy::QUEUE_ALIGN_SIZE;
+                let total_frames =
+                    VirtioPciTransportLegacy::calc_virtqueue_size_aligned(queue_size) / align_size;
+                let continue_segment = FrameAllocOptions::new(total_frames)
+                    .alloc_contiguous()
+                    .unwrap();
+
+                let avial_size = size_of::<u16>() * (3 + queue_size) as usize;
+                let seg1_frames = (desc_size + avial_size).div_ceil(align_size);
+
+                let seg1 = continue_segment.range(0..seg1_frames);
+                let seg2 = continue_segment.range(seg1_frames..total_frames);
                 (seg1, seg2)
             };
+
             let desc_frame_ptr: SafePtr<Descriptor, DmaCoherent> =
                 SafePtr::new(DmaCoherent::map(seg1, true).unwrap(), 0);
             let mut avail_frame_ptr: SafePtr<AvailRing, DmaCoherent> =
@@ -141,15 +159,20 @@ impl VirtQueue {
             }
         }
 
-        let notify = transport.get_notify_ptr(idx).unwrap();
+        let notify = transport.get_notify_ptr(idx).ok();
         field_ptr!(&avail_ring_ptr, AvailRing, flags)
             .write_once(&(0u16))
             .unwrap();
+        let config_bar = transport.config_bar();
+        let notify_offset = transport.notify_offset();
+
         Ok(VirtQueue {
             descs,
             avail: avail_ring_ptr,
             used: used_ring_ptr,
             notify,
+            config_bar,
+            notify_offset,
             queue_size: size,
             queue_idx: idx as u32,
             num_used: 0,
@@ -342,7 +365,14 @@ impl VirtQueue {
 
     /// notify that there are available rings
     pub fn notify(&mut self) {
-        self.notify.write(&self.queue_idx).unwrap();
+        let Some(notify) = &self.notify else {
+            let config_bar = self.config_bar.as_ref().unwrap();
+            config_bar
+                .write_val::<u16>(self.notify_offset, self.queue_idx as u16)
+                .unwrap();
+            return;
+        };
+        notify.write(&self.queue_idx).unwrap();
     }
 }
 

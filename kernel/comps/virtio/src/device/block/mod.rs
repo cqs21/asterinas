@@ -8,6 +8,7 @@ use bitflags::bitflags;
 use int_to_c_enum::TryFromInt;
 use ostd::{io_mem::IoMem, Pod};
 
+use super::VirtioConfigManager;
 use crate::transport::VirtioTransport;
 
 pub static DEVICE_NAME: &str = "Virtio-Block";
@@ -55,13 +56,15 @@ pub enum RespStatus {
     _NotReady = 3,
 }
 
-#[derive(Debug, Copy, Clone, Pod)]
+#[derive(Debug, Default, Copy, Clone, Pod)]
 #[repr(C)]
 pub struct VirtioBlockConfig {
     /// The number of 512-byte sectors.
     capacity: u64,
+    /// The maximum size.
+    size_max: u32,
     /// The maximum segment size.
-    size_max: u64,
+    seg_max: u32,
     /// The geometry of the device.
     geometry: VirtioBlockGeometry,
     /// The block size. If `logical_block_size` is not given in qemu cmdline,
@@ -71,7 +74,9 @@ pub struct VirtioBlockConfig {
     topology: VirtioBlockTopology,
     /// Writeback mode.
     writeback: u8,
-    unused0: [u8; 3],
+    unused0: u8,
+    /// The number of virtqueues.
+    num_queues: u16,
     /// The maximum discard sectors for one segment.
     max_discard_sectors: u32,
     /// The maximum number of discard segments in a discard command.
@@ -88,7 +93,7 @@ pub struct VirtioBlockConfig {
     unused1: [u8; 3],
 }
 
-#[derive(Debug, Copy, Clone, Pod)]
+#[derive(Debug, Default, Copy, Clone, Pod)]
 #[repr(C)]
 pub struct VirtioBlockGeometry {
     cylinders: u16,
@@ -96,7 +101,7 @@ pub struct VirtioBlockGeometry {
     sectors: u8,
 }
 
-#[derive(Debug, Copy, Clone, Pod)]
+#[derive(Debug, Default, Copy, Clone, Pod)]
 #[repr(C)]
 pub struct VirtioBlockTopology {
     /// Exponent for physical block per logical block.
@@ -110,11 +115,6 @@ pub struct VirtioBlockTopology {
 }
 
 impl VirtioBlockConfig {
-    pub(self) fn new(transport: &dyn VirtioTransport) -> SafePtr<Self, IoMem> {
-        let memory = transport.device_config_memory();
-        SafePtr::new(memory, 0)
-    }
-
     pub(self) const fn sector_size() -> usize {
         SECTOR_SIZE
     }
@@ -129,5 +129,28 @@ impl VirtioBlockConfig {
 
     pub(self) fn capacity_bytes(&self) -> usize {
         self.capacity_sectors() * Self::sector_size()
+    }
+}
+
+impl VirtioConfigManager<VirtioBlockConfig> {
+    pub(super) fn from_bar(&self) -> Option<VirtioBlockConfig> {
+        let Some(bar) = self.raw_bar.as_ref() else {
+            return None;
+        };
+        let offset = self.device_config_offset;
+
+        let mut blk_config = VirtioBlockConfig::default();
+        // Only following fields are defined in legacy interface.
+        let cap_low = bar.read_val::<u32>(offset).unwrap() as u64;
+        let cap_high = bar.read_val::<u32>(offset + 0x4).unwrap() as u64;
+        blk_config.capacity = cap_high << 32 | cap_low;
+        blk_config.size_max = bar.read_val::<u32>(offset + 0x8).unwrap();
+        blk_config.seg_max = bar.read_val::<u32>(offset + 0xc).unwrap();
+        blk_config.geometry.cylinders = bar.read_val::<u16>(offset + 0x10).unwrap();
+        blk_config.geometry.heads = bar.read_val::<u8>(offset + 0x12).unwrap();
+        blk_config.geometry.sectors = bar.read_val::<u8>(offset + 0x13).unwrap();
+        blk_config.blk_size = bar.read_val::<u32>(offset + 0x14).unwrap();
+
+        Some(blk_config)
     }
 }

@@ -146,7 +146,6 @@ impl Capability {
                 cap_data: data,
             });
         }
-        crate::early_print!("\n");
         capabilities
     }
 }

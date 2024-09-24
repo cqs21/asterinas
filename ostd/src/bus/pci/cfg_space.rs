@@ -13,8 +13,9 @@ use super::PciDeviceLocation;
 use crate::{
     arch::device::io_port::{PortRead, PortWrite},
     io_mem::IoMem,
+    mm::VmIo,
     sync::SpinLock,
-    Error, Result,
+    Error, Pod, Result,
 };
 
 /// Offset in PCI device's common configuration space(Not the PCI bridge).
@@ -174,6 +175,20 @@ impl Bar {
             // IO BAR
             Self::Io(Arc::new(IoBar::new(&location, index)?))
         })
+    }
+
+    pub fn read_val<T: Pod + PortRead>(&self, offset: usize) -> Result<T> {
+        match self {
+            Bar::Memory(mem_bar) => mem_bar.io_mem().read_val(offset),
+            Bar::Io(io_bar) => io_bar.read(offset as u32),
+        }
+    }
+
+    pub fn write_val<T: Pod + PortWrite>(&self, offset: usize, value: T) -> Result<()> {
+        match self {
+            Bar::Memory(mem_bar) => mem_bar.io_mem().write_val(offset, &value),
+            Bar::Io(io_bar) => io_bar.write(offset as u32, value),
+        }
     }
 }
 

@@ -4,7 +4,14 @@ use alloc::boxed::Box;
 use core::fmt::Debug;
 
 use aster_util::safe_ptr::SafePtr;
-use ostd::{io_mem::IoMem, mm::DmaCoherent, trap::IrqCallbackFunction};
+use ostd::{
+    arch::device::io_port::{PortRead, PortWrite},
+    bus::pci::cfg_space::Bar,
+    io_mem::IoMem,
+    mm::DmaCoherent,
+    trap::IrqCallbackFunction,
+    Pod,
+};
 
 use self::{mmio::virtio_mmio_init, pci::virtio_pci_init};
 use crate::{
@@ -50,7 +57,13 @@ pub trait VirtioTransport: Sync + Send + Debug {
     }
 
     /// Get access to the device config memory.
-    fn device_config_memory(&self) -> IoMem;
+    fn device_config_memory(&self) -> Option<IoMem>;
+
+    /// Get access to the raw pci device bar space.
+    fn config_bar(&self) -> Option<Bar>;
+
+    /// Get the device config space offset (legacy interface only).
+    fn device_config_offset(&self) -> usize;
 
     // ====================Virtqueue related APIs====================
 
@@ -73,6 +86,9 @@ pub trait VirtioTransport: Sync + Send + Debug {
     /// Get notify pointer of a virtqueue. User should send notification (e.g. write 0 to the pointer)
     /// after it add buffers into the corresponding virtqueue.
     fn get_notify_ptr(&self, idx: u16) -> Result<SafePtr<u32, IoMem>, VirtioTransportError>;
+
+    /// Get notify offset in config space (legacy interface only).
+    fn notify_offset(&self) -> usize;
 
     fn is_legacy_version(&self) -> bool;
 

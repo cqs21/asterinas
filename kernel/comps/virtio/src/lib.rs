@@ -33,7 +33,7 @@ pub mod queue;
 mod transport;
 
 // FIXME: do not init virtio in order to run on Aliyun.
-// #[init_component]
+#[init_component]
 fn virtio_component_init() -> Result<(), ComponentInitError> {
     // Find all devices and register them to the corresponding crate
     transport::init();
@@ -79,7 +79,7 @@ fn virtio_component_init() -> Result<(), ComponentInitError> {
 
 fn pop_device_transport() -> Option<Box<dyn VirtioTransport>> {
     if let Some(device) = VIRTIO_PCI_DRIVER.get().unwrap().pop_device_transport() {
-        return Some(Box::new(device));
+        return Some(device);
     }
     if let Some(device) = VIRTIO_MMIO_DRIVER.get().unwrap().pop_device_transport() {
         return Some(Box::new(device));

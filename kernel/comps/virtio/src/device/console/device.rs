@@ -15,13 +15,13 @@ use ostd::{
 
 use super::{config::VirtioConsoleConfig, DEVICE_NAME};
 use crate::{
-    device::{console::config::ConsoleFeatures, VirtioDeviceError},
+    device::{console::config::ConsoleFeatures, VirtioConfigManager, VirtioDeviceError},
     queue::VirtQueue,
     transport::VirtioTransport,
 };
 
 pub struct ConsoleDevice {
-    config: SafePtr<VirtioConsoleConfig, IoMem>,
+    config: VirtioConsoleConfig,
     transport: SpinLock<Box<dyn VirtioTransport>>,
     receive_queue: SpinLock<VirtQueue>,
     transmit_queue: SpinLock<VirtQueue>,
@@ -78,7 +78,13 @@ impl ConsoleDevice {
     }
 
     pub fn init(mut transport: Box<dyn VirtioTransport>) -> Result<(), VirtioDeviceError> {
-        let config = VirtioConsoleConfig::new(transport.as_ref());
+        let config_manager = VirtioConfigManager::<VirtioConsoleConfig>::new(transport.as_ref());
+        let config = match config_manager.from_safe_ptr() {
+            Some(config) => config,
+            None => config_manager.from_bar().unwrap(),
+        };
+        debug!("virtio_console_config = {:?}", config);
+
         const RECV0_QUEUE_INDEX: u16 = 0;
         const TRANSMIT0_QUEUE_INDEX: u16 = 1;
         let receive_queue =

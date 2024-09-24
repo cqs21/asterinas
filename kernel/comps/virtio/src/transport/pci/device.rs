@@ -8,7 +8,8 @@ use log::{info, warn};
 use ostd::{
     bus::{
         pci::{
-            bus::PciDevice, capability::CapabilityData, common_device::PciCommonDevice, PciDeviceId,
+            bus::PciDevice, capability::CapabilityData, cfg_space::Bar,
+            common_device::PciCommonDevice, PciDeviceId,
         },
         BusProbeError,
     },
@@ -39,6 +40,18 @@ pub struct VirtioPciDevice {
     device_id: PciDeviceId,
 }
 
+impl VirtioPciDevice {
+    pub(super) fn new(device_id: PciDeviceId) -> Self {
+        Self { device_id }
+    }
+}
+
+impl PciDevice for VirtioPciDevice {
+    fn device_id(&self) -> PciDeviceId {
+        self.device_id
+    }
+}
+
 pub struct VirtioPciTransport {
     device_type: VirtioDeviceType,
     common_device: PciCommonDevice,
@@ -46,13 +59,6 @@ pub struct VirtioPciTransport {
     device_cfg: VirtioPciCapabilityData,
     notify: VirtioPciNotify,
     msix_manager: VirtioMsixManager,
-    device: Arc<VirtioPciDevice>,
-}
-
-impl PciDevice for VirtioPciDevice {
-    fn device_id(&self) -> PciDeviceId {
-        self.device_id
-    }
 }
 
 impl Debug for VirtioPciTransport {
@@ -118,25 +124,33 @@ impl VirtioTransport for VirtioPciTransport {
         ))
     }
 
+    fn notify_offset(&self) -> usize {
+        0
+    }
+
     fn num_queues(&self) -> u16 {
         field_ptr!(&self.common_cfg, VirtioPciCommonCfg, num_queues)
             .read()
             .unwrap()
     }
 
-    fn device_config_memory(&self) -> IoMem {
-        let mut memory = self
-            .device_cfg
-            .memory_bar()
-            .as_ref()
-            .unwrap()
-            .io_mem()
-            .clone();
-        let new_paddr = memory.paddr() + self.device_cfg.offset() as usize;
-        memory
+    fn device_config_memory(&self) -> Option<IoMem> {
+        let mem_bar = self.device_cfg.memory_bar().as_ref()?;
+        let mut io_mem = mem_bar.io_mem().clone();
+
+        let new_paddr = io_mem.paddr() + self.device_cfg.offset() as usize;
+        io_mem
             .resize(new_paddr..(self.device_cfg.length() as usize + new_paddr))
             .unwrap();
-        memory
+        Some(io_mem)
+    }
+
+    fn config_bar(&self) -> Option<Bar> {
+        None
+    }
+
+    fn device_config_offset(&self) -> usize {
+        0
     }
 
     fn device_features(&self) -> u64 {
@@ -253,10 +267,6 @@ impl VirtioTransport for VirtioPciTransport {
 }
 
 impl VirtioPciTransport {
-    pub(super) fn pci_device(&self) -> &Arc<VirtioPciDevice> {
-        &self.device
-    }
-
     #[allow(clippy::result_large_err)]
     pub(super) fn new(
         common_device: PciCommonDevice,
@@ -336,7 +346,6 @@ impl VirtioPciTransport {
         let common_cfg = common_cfg.unwrap();
         let device_cfg = device_cfg.unwrap();
         let msix_manager = VirtioMsixManager::new(msix);
-        let device_id = *common_device.device_id();
         Ok(Self {
             common_device,
             common_cfg,
@@ -344,7 +353,6 @@ impl VirtioPciTransport {
             notify,
             msix_manager,
             device_type,
-            device: Arc::new(VirtioPciDevice { device_id }),
         })
     }
 }

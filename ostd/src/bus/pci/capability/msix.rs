@@ -152,6 +152,8 @@ impl CapabilityMsixData {
         // enable MSI-X, bit15: MSI-X Enable
         dev.location()
             .write16(cap_ptr + 2, dev.location().read16(cap_ptr + 2) | 0x8000);
+        let msg_ctrl = dev.location().read16(cap_ptr + 2);
+        crate::early_println!(",msg_ctrl:0x{:X}", msg_ctrl);
         // disable INTx, enable Bus master.
         dev.set_command(dev.command() | Command::INTERRUPT_DISABLE | Command::BUS_MASTER);
 
@@ -201,6 +203,12 @@ impl CapabilityMsixData {
     /// Gets mutable IrqLine. User can register callbacks by using this function.
     pub fn irq_mut(&mut self, index: usize) -> Option<&mut IrqLine> {
         self.irqs[index].as_mut()
+    }
+
+    /// Returns true if MSI-X Enable bit is set.
+    pub fn is_enabled(&self) -> bool {
+        let msg_ctrl = self.loc.read16(self.ptr + 2);
+        msg_ctrl & 0x8000 != 0
     }
 }
 

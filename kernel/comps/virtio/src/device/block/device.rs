@@ -10,7 +10,7 @@ use aster_block::{
 };
 use aster_util::safe_ptr::SafePtr;
 use id_alloc::IdAlloc;
-use log::info;
+use log::{debug, info};
 use ostd::{
     io_mem::IoMem,
     mm::{DmaDirection, DmaStream, DmaStreamSlice, FrameAllocOptions, VmIo},
@@ -23,7 +23,7 @@ use super::{BlockFeatures, VirtioBlockConfig};
 use crate::{
     device::{
         block::{ReqType, RespStatus},
-        VirtioDeviceError,
+        VirtioConfigManager, VirtioDeviceError,
     },
     queue::VirtQueue,
     transport::VirtioTransport,
@@ -81,17 +81,16 @@ impl aster_block::BlockDevice for BlockDevice {
     }
 
     fn metadata(&self) -> BlockDeviceMeta {
-        let device_config = self.device.config.read().unwrap();
         BlockDeviceMeta {
             max_nr_segments_per_bio: self.queue.max_nr_segments_per_bio(),
-            nr_sectors: device_config.capacity_sectors(),
+            nr_sectors: self.device.config.capacity_sectors(),
         }
     }
 }
 
 #[derive(Debug)]
 struct DeviceInner {
-    config: SafePtr<VirtioBlockConfig, IoMem>,
+    config: VirtioBlockConfig,
     queue: SpinLock<VirtQueue>,
     transport: SpinLock<Box<dyn VirtioTransport>>,
     block_requests: DmaStream,
@@ -105,9 +104,15 @@ impl DeviceInner {
 
     /// Creates and inits the device.
     pub fn init(mut transport: Box<dyn VirtioTransport>) -> Result<Arc<Self>, VirtioDeviceError> {
-        let config = VirtioBlockConfig::new(transport.as_mut());
+        let config_manager = VirtioConfigManager::<VirtioBlockConfig>::new(transport.as_ref());
+        let config = match config_manager.from_safe_ptr() {
+            Some(config) => config,
+            None => config_manager.from_bar().unwrap(),
+        };
+
+        debug!("virio_blk_config = {:?}", config);
         assert_eq!(
-            config.read().unwrap().block_size(),
+            config.block_size(),
             VirtioBlockConfig::sector_size(),
             "currently not support customized device logical block size"
         );

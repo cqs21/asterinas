@@ -14,9 +14,9 @@ use smoltcp::phy::{DeviceCapabilities, Medium};
 
 use super::{config::VirtioNetConfig, header::VirtioNetHdr};
 use crate::{
-    device::{network::config::NetworkFeatures, VirtioDeviceError},
+    device::{network::config::NetworkFeatures, VirtioConfigManager, VirtioDeviceError},
     queue::{QueueError, VirtQueue},
-    transport::VirtioTransport,
+    transport::{pci::legacy::VirtioPciTransportLegacy, VirtioTransport},
 };
 
 pub struct NetworkDevice {
@@ -38,19 +38,19 @@ impl NetworkDevice {
     }
 
     pub fn init(mut transport: Box<dyn VirtioTransport>) -> Result<(), VirtioDeviceError> {
-        let virtio_net_config = VirtioNetConfig::new(transport.as_mut());
+        let config_manager = VirtioConfigManager::<VirtioNetConfig>::new(transport.as_ref());
+        let config = match config_manager.from_safe_ptr() {
+            Some(config) => config,
+            None => config_manager.from_bar().unwrap(),
+        };
+        debug!("virtio_net_config = {:?}", config);
+        let mac_addr = config.mac;
+
         let features = NetworkFeatures::from_bits_truncate(Self::negotiate_features(
             transport.device_features(),
         ));
-        debug!("virtio_net_config = {:?}", virtio_net_config);
         debug!("features = {:?}", features);
-        let mac_addr = field_ptr!(&virtio_net_config, VirtioNetConfig, mac)
-            .read()
-            .unwrap();
-        let status = field_ptr!(&virtio_net_config, VirtioNetConfig, status)
-            .read()
-            .unwrap();
-        debug!("mac addr = {:x?}, status = {:?}", mac_addr, status);
+
         let mut recv_queue = VirtQueue::new(QUEUE_RECV, QUEUE_SIZE, transport.as_mut())
             .expect("creating recv queue fails");
         let send_queue = VirtQueue::new(QUEUE_SEND, QUEUE_SIZE, transport.as_mut())
@@ -71,7 +71,7 @@ impl NetworkDevice {
             recv_queue.notify();
         }
         let mut device = Self {
-            config: virtio_net_config.read().unwrap(),
+            config,
             mac_addr,
             send_queue,
             recv_queue,

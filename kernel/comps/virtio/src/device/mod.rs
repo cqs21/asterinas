@@ -1,14 +1,42 @@
 // SPDX-License-Identifier: MPL-2.0
 
+use aster_util::safe_ptr::SafePtr;
 use int_to_c_enum::TryFromInt;
+use network::config::VirtioNetConfig;
+use ostd::{bus::pci::cfg_space::Bar, io_mem::IoMem, Pod};
 
-use crate::queue::QueueError;
+use crate::{queue::QueueError, transport::VirtioTransport};
 
 pub mod block;
 pub mod console;
 pub mod input;
 pub mod network;
 pub mod socket;
+
+#[derive(Debug)]
+pub(crate) struct VirtioConfigManager<T: Pod> {
+    safe_ptr: Option<SafePtr<T, IoMem>>,
+    raw_bar: Option<Bar>,
+    device_config_offset: usize,
+}
+
+impl<T: Pod> VirtioConfigManager<T> {
+    pub(crate) fn new(transport: &dyn VirtioTransport) -> Self {
+        VirtioConfigManager {
+            safe_ptr: transport
+                .device_config_memory()
+                .map(|io_mem| SafePtr::new(io_mem, 0)),
+            raw_bar: transport.config_bar(),
+            device_config_offset: transport.device_config_offset(),
+        }
+    }
+
+    pub(crate) fn from_safe_ptr(&self) -> Option<T> {
+        self.safe_ptr
+            .as_ref()
+            .map(|safe_ptr| safe_ptr.read().unwrap())
+    }
+}
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, TryFromInt)]
 #[repr(u8)]
