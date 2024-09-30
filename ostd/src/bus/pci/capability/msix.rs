@@ -99,10 +99,26 @@ impl CapabilityMsixData {
 
         let table_size = (dev.location().read16(cap_ptr + 2) & 0b11_1111_1111) + 1;
         // TODO: Different architecture seems to have different, so we should set different address here.
-        let message_address = 0xFEE0_0000u32;
-        let message_upper_address = 0u32;
+        cfg_if! {
+                if #[cfg(all(target_arch = "x86_64"))] {
+                    use crate::arch::x86::kernel::ACPI_TABLES;
+                    use acpi::platform::interrupt::InterruptModel;
 
-        // Set message address 0xFEE0_0000
+                    let platform_info = ACPI_TABLES.get().unwrap().lock().platform_info().unwrap();
+                    let (msg_addr_upper, msg_addr_lower) = match platform_info.interrupt_model {
+                        InterruptModel::Apic(apic) => {
+                            let upper = (apic.local_apic_address >> 32) as u32;
+                            let lower = (apic.local_apic_address & 0xFFFF_FFFF) as u32;
+                            (upper, lower)
+                        }
+                        _ => (0x0u32, 0xFEE0_0000u32),
+                    };
+                } else {
+                    let (msg_addr_upper, msg_addr_lower) = (0x0u32, 0xFEE0_0000u32);
+                }
+        };
+
+        // Set message address.
         for i in 0..table_size {
             #[cfg(all(target_arch = "x86_64", feature = "cvm_guest"))]
             // SAFETY:
@@ -121,11 +137,11 @@ impl CapabilityMsixData {
             // Set message address and disable this msix entry
             table_bar
                 .io_mem()
-                .write_once((16 * i) as usize + table_offset, &message_address)
+                .write_once((16 * i) as usize + table_offset, &msg_addr_lower)
                 .unwrap();
             table_bar
                 .io_mem()
-                .write_once((16 * i + 4) as usize + table_offset, &message_upper_address)
+                .write_once((16 * i + 4) as usize + table_offset, &msg_addr_upper)
                 .unwrap();
             table_bar
                 .io_mem()
