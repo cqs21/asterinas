@@ -21,7 +21,7 @@ use ostd::{
 use super::{layout::VirtioMmioLayout, multiplex::MultiplexIrq};
 use crate::{
     queue::{AvailRing, Descriptor, UsedRing},
-    transport::{DeviceStatus, VirtioTransport, VirtioTransportError},
+    transport::{ConfigManager, DeviceStatus, VirtioTransport, VirtioTransportError},
     VirtioDeviceType,
 };
 
@@ -170,9 +170,11 @@ impl VirtioTransport for VirtioMmioTransport {
         Ok(())
     }
 
-    fn get_notify_ptr(&self, _idx: u16) -> Result<SafePtr<u32, IoMem>, VirtioTransportError> {
+    fn notify_config(&self, _idx: usize) -> ConfigManager {
+        let io_mem = self.common_device.io_mem().clone();
         let offset = offset_of!(VirtioMmioLayout, queue_notify) as usize;
-        Ok(SafePtr::new(self.common_device.io_mem().clone(), offset))
+
+        ConfigManager::new(Some(io_mem), None, offset)
     }
 
     fn num_queues(&self) -> u16 {
@@ -196,9 +198,11 @@ impl VirtioTransport for VirtioMmioTransport {
         todo!()
     }
 
-    fn device_config_memory(&self) -> IoMem {
+    fn device_config(&self) -> ConfigManager {
         // offset: 0x100~0x200
-        self.common_device.io_mem().slice(0x100..0x200)
+        let io_mem = self.common_device.io_mem().slice(0x100..0x200);
+
+        ConfigManager::new(Some(io_mem), None, 0)
     }
 
     fn device_features(&self) -> u64 {

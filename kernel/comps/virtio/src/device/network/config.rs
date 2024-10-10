@@ -50,14 +50,14 @@ impl NetworkFeatures {
 
 bitflags! {
     #[repr(C)]
-    #[derive(Pod)]
+    #[derive(Default, Pod)]
     pub struct Status: u16 {
         const VIRTIO_NET_S_LINK_UP = 1;
         const VIRTIO_NET_S_ANNOUNCE = 2;
     }
 }
 
-#[derive(Debug, Clone, Copy, Pod)]
+#[derive(Debug, Default, Clone, Copy, Pod)]
 #[repr(C)]
 pub struct VirtioNetConfig {
     pub mac: EthernetAddr,
@@ -72,9 +72,20 @@ pub struct VirtioNetConfig {
 }
 
 impl VirtioNetConfig {
-    pub(super) fn new(transport: &dyn VirtioTransport) -> SafePtr<Self, IoMem> {
-        let memory = transport.device_config_memory();
-        SafePtr::new(memory, 0)
+    pub(super) fn new(transport: &dyn VirtioTransport) -> Self {
+        let config_manager = transport.device_config();
+        if let Ok(net_config) = config_manager.read_config::<Self>() {
+            return net_config;
+        }
+
+        let mut net_config = VirtioNetConfig::default();
+        // Only following fields are defined in legacy interface.
+        for i in 0..6 {
+            net_config.mac.0[i] = config_manager.read_once::<u8>(i).unwrap();
+        }
+        net_config.status.bits = config_manager.read_once::<u16>(0x6).unwrap();
+
+        net_config
     }
 
     pub(super) fn read(this: &SafePtr<Self, IoMem>) -> ostd::prelude::Result<Self> {

@@ -25,7 +25,7 @@ use ostd::{
 };
 use spin::Once;
 
-#[derive(Debug, Clone, Copy, Pod)]
+#[derive(Debug, Default, Clone, Copy, Pod)]
 #[repr(C)]
 pub struct EthernetAddr(pub [u8; 6]);
 

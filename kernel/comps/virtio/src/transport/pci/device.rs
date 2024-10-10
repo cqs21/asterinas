@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: MPL-2.0
 
-use alloc::{boxed::Box, sync::Arc};
+use alloc::boxed::Box;
 use core::fmt::Debug;
 
 use aster_util::{field_ptr, safe_ptr::SafePtr};
@@ -23,7 +23,7 @@ use crate::{
     queue::{AvailRing, Descriptor, UsedRing},
     transport::{
         pci::capability::{VirtioPciCapabilityData, VirtioPciCpabilityType},
-        DeviceStatus, VirtioTransport, VirtioTransportError,
+        ConfigManager, DeviceStatus, VirtioTransport, VirtioTransportError,
     },
     VirtioDeviceType,
 };
@@ -39,6 +39,18 @@ pub struct VirtioPciDevice {
     device_id: PciDeviceId,
 }
 
+impl VirtioPciDevice {
+    pub(super) fn new(device_id: PciDeviceId) -> Self {
+        Self { device_id }
+    }
+}
+
+impl PciDevice for VirtioPciDevice {
+    fn device_id(&self) -> PciDeviceId {
+        self.device_id
+    }
+}
+
 pub struct VirtioPciTransport {
     device_type: VirtioDeviceType,
     common_device: PciCommonDevice,
@@ -46,13 +58,6 @@ pub struct VirtioPciTransport {
     device_cfg: VirtioPciCapabilityData,
     notify: VirtioPciNotify,
     msix_manager: VirtioMsixManager,
-    device: Arc<VirtioPciDevice>,
-}
-
-impl PciDevice for VirtioPciDevice {
-    fn device_id(&self) -> PciDeviceId {
-        self.device_id
-    }
 }
 
 impl Debug for VirtioPciTransport {
@@ -108,14 +113,11 @@ impl VirtioTransport for VirtioPciTransport {
         Ok(())
     }
 
-    fn get_notify_ptr(&self, idx: u16) -> Result<SafePtr<u32, IoMem>, VirtioTransportError> {
-        if idx >= self.num_queues() {
-            return Err(VirtioTransportError::InvalidArgs);
-        }
-        Ok(SafePtr::new(
-            self.notify.io_memory.clone(),
-            (self.notify.offset + self.notify.offset_multiplier * idx as u32) as usize,
-        ))
+    fn notify_config(&self, idx: usize) -> ConfigManager {
+        let io_mem = self.notify.io_memory.clone();
+        let offset = (self.notify.offset + self.notify.offset_multiplier * idx as u32) as usize;
+
+        ConfigManager::new(Some(io_mem), None, offset)
     }
 
     fn num_queues(&self) -> u16 {
@@ -124,12 +126,18 @@ impl VirtioTransport for VirtioPciTransport {
             .unwrap()
     }
 
-    fn device_config_memory(&self) -> IoMem {
-        let memory = self.device_cfg.memory_bar().as_ref().unwrap().io_mem();
-
+    fn device_config(&self) -> ConfigManager {
         let offset = self.device_cfg.offset() as usize;
         let length = self.device_cfg.length() as usize;
-        memory.slice(offset..offset + length)
+        let io_mem = self
+            .device_cfg
+            .memory_bar()
+            .as_ref()
+            .unwrap()
+            .io_mem()
+            .slice(offset..offset + length);
+
+        ConfigManager::new(Some(io_mem), None, 0)
     }
 
     fn device_features(&self) -> u64 {
@@ -246,10 +254,6 @@ impl VirtioTransport for VirtioPciTransport {
 }
 
 impl VirtioPciTransport {
-    pub(super) fn pci_device(&self) -> &Arc<VirtioPciDevice> {
-        &self.device
-    }
-
     #[allow(clippy::result_large_err)]
     pub(super) fn new(
         common_device: PciCommonDevice,
@@ -329,7 +333,6 @@ impl VirtioPciTransport {
         let common_cfg = common_cfg.unwrap();
         let device_cfg = device_cfg.unwrap();
         let msix_manager = VirtioMsixManager::new(msix);
-        let device_id = *common_device.device_id();
         Ok(Self {
             common_device,
             common_cfg,
@@ -337,7 +340,6 @@ impl VirtioPciTransport {
             notify,
             msix_manager,
             device_type,
-            device: Arc::new(VirtioPciDevice { device_id }),
         })
     }
 }
