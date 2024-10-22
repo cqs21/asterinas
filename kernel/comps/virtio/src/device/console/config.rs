@@ -1,7 +1,6 @@
 // SPDX-License-Identifier: MPL-2.0
 
-use aster_util::safe_ptr::SafePtr;
-use ostd::{io_mem::IoMem, Pod};
+use ostd::Pod;
 
 use crate::transport::VirtioTransport;
 
@@ -18,18 +17,28 @@ bitflags::bitflags! {
     }
 }
 
-#[derive(Debug, Pod, Clone, Copy)]
+#[derive(Debug, Default, Pod, Clone, Copy)]
 #[repr(C)]
 pub struct VirtioConsoleConfig {
     pub cols: u16,
-    pub row: u16,
+    pub rows: u16,
     pub max_nr_ports: u32,
     pub emerg_wr: u32,
 }
 
 impl VirtioConsoleConfig {
-    pub(super) fn new(transport: &dyn VirtioTransport) -> SafePtr<Self, IoMem> {
-        let memory = transport.device_config_memory();
-        SafePtr::new(memory, 0)
+    pub(super) fn new(transport: &dyn VirtioTransport) -> Self {
+        let config_manager = transport.device_config();
+        if let Ok(console_config) = config_manager.read_config::<Self>() {
+            return console_config;
+        }
+
+        let mut console_config = VirtioConsoleConfig::default();
+        // Only following fields are defined in legacy interface.
+        console_config.cols = config_manager.read_once::<u16>(0x0).unwrap();
+        console_config.rows = config_manager.read_once::<u16>(0x2).unwrap();
+        console_config.max_nr_ports = config_manager.read_once::<u32>(0x4).unwrap();
+
+        console_config
     }
 }

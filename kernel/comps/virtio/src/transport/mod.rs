@@ -4,7 +4,14 @@ use alloc::boxed::Box;
 use core::fmt::Debug;
 
 use aster_util::safe_ptr::SafePtr;
-use ostd::{io_mem::IoMem, mm::DmaCoherent, trap::IrqCallbackFunction};
+use ostd::{
+    arch::device::io_port::{PortRead, PortWrite},
+    bus::pci::cfg_space::Bar,
+    io_mem::IoMem,
+    mm::{DmaCoherent, PodOnce},
+    trap::IrqCallbackFunction,
+    Pod,
+};
 
 use self::{mmio::virtio_mmio_init, pci::virtio_pci_init};
 use crate::{
@@ -50,7 +57,7 @@ pub trait VirtioTransport: Sync + Send + Debug {
     }
 
     /// Get access to the device config memory.
-    fn device_config_memory(&self) -> IoMem;
+    fn device_config(&self) -> ConfigManager;
 
     // ====================Virtqueue related APIs====================
 
@@ -72,7 +79,7 @@ pub trait VirtioTransport: Sync + Send + Debug {
 
     /// Get notify pointer of a virtqueue. User should send notification (e.g. write 0 to the pointer)
     /// after it add buffers into the corresponding virtqueue.
-    fn get_notify_ptr(&self, idx: u16) -> Result<SafePtr<u32, IoMem>, VirtioTransportError>;
+    fn notify_config(&self, idx: usize) -> ConfigManager;
 
     fn is_legacy_version(&self) -> bool;
 
@@ -92,6 +99,78 @@ pub trait VirtioTransport: Sync + Send + Debug {
         &mut self,
         func: Box<IrqCallbackFunction>,
     ) -> Result<(), VirtioTransportError>;
+}
+
+/// Manage PCI device/notify configuration space (legacy/modern).
+#[derive(Debug)]
+pub struct ConfigManager {
+    io_mem: Option<IoMem>,
+    bar0: Option<Bar>,
+    offset: usize,
+}
+
+impl ConfigManager {
+    pub(super) fn new(io_mem: Option<IoMem>, bar0: Option<Bar>, offset: usize) -> Self {
+        Self {
+            io_mem,
+            bar0,
+            offset,
+        }
+    }
+
+    /// Read complete configuration via IoMem (modern interface).
+    pub(super) fn read_config<T: Pod>(&self) -> Result<T, VirtioTransportError> {
+        let Some(io_mem) = self.io_mem.as_ref() else {
+            return Err(VirtioTransportError::InvalidArgs);
+        };
+
+        SafePtr::new(io_mem, self.offset)
+            .read()
+            .map_err(|_| VirtioTransportError::DeviceStatusError)
+    }
+
+    /// Write complete configuration via IoMem (modern interface).
+    pub(super) fn write_config<T: Pod>(&self, config: &T) -> Result<(), VirtioTransportError> {
+        let Some(io_mem) = self.io_mem.as_ref() else {
+            return Err(VirtioTransportError::InvalidArgs);
+        };
+
+        SafePtr::new(io_mem, self.offset)
+            .write(config)
+            .map_err(|_| VirtioTransportError::DeviceStatusError)
+    }
+
+    /// Return raw IoMem if existed.
+    pub(super) fn get_io_mem(&self) -> Option<IoMem> {
+        self.io_mem.clone()
+    }
+
+    /// Read a specific configuration via Bar0 (legacy interface).
+    pub(super) fn read_once<T: PodOnce + PortRead>(
+        &self,
+        offset: usize,
+    ) -> Result<T, VirtioTransportError> {
+        let Some(bar0) = self.bar0.as_ref() else {
+            return Err(VirtioTransportError::InvalidArgs);
+        };
+
+        bar0.read_once(self.offset + offset)
+            .map_err(|_| VirtioTransportError::DeviceStatusError)
+    }
+
+    /// Write a specific configuration via Bar0 (legacy interface).
+    pub(super) fn write_once<T: PodOnce + PortWrite>(
+        &self,
+        offset: usize,
+        value: T,
+    ) -> Result<(), VirtioTransportError> {
+        let Some(bar0) = self.bar0.as_ref() else {
+            return Err(VirtioTransportError::InvalidArgs);
+        };
+
+        bar0.write_once(self.offset + offset, value)
+            .map_err(|_| VirtioTransportError::DeviceStatusError)
+    }
 }
 
 #[derive(Debug, PartialEq, Eq)]
