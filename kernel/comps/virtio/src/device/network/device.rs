@@ -42,6 +42,7 @@ pub struct NetworkDevice {
 impl NetworkDevice {
     pub(crate) fn negotiate_features(device_features: u64) -> u64 {
         let device_features = NetworkFeatures::from_bits_truncate(device_features);
+        ostd::early_println!("net features:{:?}", device_features);
         let supported_features = NetworkFeatures::support_features();
         let network_features = device_features & supported_features;
         debug!("{:?}", network_features);
@@ -51,6 +52,7 @@ impl NetworkDevice {
     pub fn init(mut transport: Box<dyn VirtioTransport>) -> Result<(), VirtioDeviceError> {
         let config = VirtioNetConfig::new(transport.as_ref());
         debug!("virtio_net_config = {:?}", config);
+        ostd::early_println!("{:?}", config);
         let mac_addr = config.mac;
         let features = NetworkFeatures::from_bits_truncate(Self::negotiate_features(
             transport.device_features(),
@@ -148,6 +150,7 @@ impl NetworkDevice {
     fn receive(&mut self) -> Result<RxBuffer, VirtioNetError> {
         let (token, len) = self.recv_queue.pop_used().map_err(queue_to_network_error)?;
         debug!("receive packet: token = {}, len = {}", token, len);
+        ostd::early_println!("recv packet, token:{}, len:{}", token, len);
         let mut rx_buffer = self
             .rx_buffers
             .remove(token as usize)
@@ -177,6 +180,8 @@ impl NetworkDevice {
         if self.send_queue.should_notify() {
             self.send_queue.notify();
         }
+
+        ostd::early_println!("send packet, token:{}, len:{}", token, packet.len());
 
         debug!("send packet, token = {}, len = {}", token, packet.len());
 

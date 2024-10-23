@@ -66,6 +66,8 @@ impl<E> PollContext<'_, E> {
                     return;
                 };
 
+                ostd::early_println!("consume tx_token, {:?}", pkt.get_key());
+
                 let Some(reply) = self.parse_and_process_ipv4(pkt) else {
                     return;
                 };

@@ -73,6 +73,15 @@ impl PciCommonDevice {
 
         let capabilities = Vec::new();
         let device_id = PciDeviceId::new(location);
+        crate::early_println!(
+            "[PciDevice] {:02x}:{:02x}.{:x} {:04x}:{:04x}.{}",
+            location.bus,
+            location.device,
+            location.function,
+            device_id.device_id,
+            device_id.vendor_id,
+            device_id.revision_id,
+        );
         let bar_manager = BarManager::new(location);
         let mut device = Self {
             device_id,

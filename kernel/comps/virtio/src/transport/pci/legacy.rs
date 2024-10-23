@@ -93,6 +93,7 @@ impl VirtioPciLegacyTransport {
             }
         };
         info!("[Virtio]: Found device:{:?}", device_type);
+        ostd::early_println!("[Virtio]: Found device:{:?}", device_type);
 
         let config_bar = common_device.bar_manager().bar(0).unwrap();
 
@@ -264,6 +265,12 @@ impl VirtioTransport for VirtioPciLegacyTransport {
         func: Box<IrqCallbackFunction>,
         single_interrupt: bool,
     ) -> Result<(), VirtioTransportError> {
+        ostd::early_print!(
+            "register queue callback, idx:{} single:{}, num_queues:{}, ",
+            index,
+            single_interrupt,
+            self.num_queues()
+        );
         if index >= self.num_queues() {
             return Err(VirtioTransportError::InvalidArgs);
         }
@@ -275,6 +282,7 @@ impl VirtioTransport for VirtioPciLegacyTransport {
             self.msix_manager.shared_interrupt_irq()
         };
         irq.on_active(func);
+        ostd::early_println!("vector:{}, irq:{}", vector, irq.num());
 
         self.config_bar
             .write_once(QUEUE_SELECT_OFFSET, index)

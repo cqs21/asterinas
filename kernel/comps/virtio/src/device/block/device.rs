@@ -81,6 +81,7 @@ impl BlockDevice {
     /// Negotiate features for the device specified bits 0~23
     pub(crate) fn negotiate_features(features: u64) -> u64 {
         let mut support_features = BlockFeatures::from_bits_truncate(features);
+        ostd::early_println!("blk features:{:?}", support_features);
         support_features.remove(BlockFeatures::MQ);
         support_features.bits
     }
@@ -117,6 +118,7 @@ impl DeviceInner {
     pub fn init(mut transport: Box<dyn VirtioTransport>) -> Result<Arc<Self>, VirtioDeviceError> {
         let config = VirtioBlockConfig::new(transport.as_ref());
         debug!("virio_blk_config = {:?}", config);
+        ostd::early_println!("{:?}", config);
         assert_eq!(
             config.block_size(),
             VirtioBlockConfig::sector_size(),

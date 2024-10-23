@@ -106,6 +106,8 @@ impl<D, E> EtherIface<D, E> {
         let frame = EthernetFrame::new_checked(data).map_err(|_| None)?;
         let repr = EthernetRepr::parse(&frame).map_err(|_| None)?;
 
+        ostd::early_println!("{:?}", repr);
+
         // Ignore the Ethernet frame if it is not sent to us.
         if !repr.dst_addr.is_broadcast() && repr.dst_addr != self.ether_addr {
             return Err(None);
@@ -126,6 +128,7 @@ impl<D, E> EtherIface<D, E> {
     }
 
     fn process_arp(&self, arp_repr: &ArpRepr, iface_cx: &mut Context) -> Option<ArpRepr> {
+        ostd::early_println!("{:?}", arp_repr);
         match arp_repr {
             ArpRepr::EthernetIpv4 {
                 operation: ArpOperation::Reply,
