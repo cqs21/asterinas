@@ -120,7 +120,7 @@ impl IoMem {
 // know are also suitable for accessing I/O memory.
 
 impl IoMem {
-    fn reader(&self) -> VmReader<'_, Infallible> {
+    pub(crate) fn reader(&self) -> VmReader<'_, Infallible> {
         // SAFETY: The constructor of the `IoMem` structure has already ensured the
         // safety of reading from the mapped physical address, and the mapping is valid.
         unsafe {
@@ -131,7 +131,7 @@ impl IoMem {
         }
     }
 
-    fn writer(&self) -> VmWriter<'_, Infallible> {
+    pub(crate) fn writer(&self) -> VmWriter<'_, Infallible> {
         // SAFETY: The constructor of the `IoMem` structure has already ensured the
         // safety of writing to the mapped physical address, and the mapping is valid.
         unsafe {
