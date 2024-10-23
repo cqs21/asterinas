@@ -125,8 +125,8 @@ impl IoMem {
         // safety of reading from the mapped physical address, and the mapping is valid.
         unsafe {
             VmReader::from_kernel_space(
-                self.kvirt_area.deref().start() as *mut u8,
-                self.kvirt_area.deref().len(),
+                (self.kvirt_area.deref().start() + self.offset) as *mut u8,
+                self.limit,
             )
         }
     }
@@ -136,8 +136,8 @@ impl IoMem {
         // safety of writing to the mapped physical address, and the mapping is valid.
         unsafe {
             VmWriter::from_kernel_space(
-                self.kvirt_area.deref().start() as *mut u8,
-                self.kvirt_area.deref().len(),
+                (self.kvirt_area.deref().start() + self.offset) as *mut u8,
+                self.limit,
             )
         }
     }
@@ -147,9 +147,7 @@ impl VmIo for IoMem {
     fn read(&self, offset: usize, writer: &mut VmWriter) -> Result<()> {
         let offset = offset + self.offset;
         if self
-            .kvirt_area
-            .deref()
-            .len()
+            .limit
             .checked_sub(offset)
             .is_none_or(|remain| remain < writer.avail())
         {
@@ -168,9 +166,7 @@ impl VmIo for IoMem {
     fn write(&self, offset: usize, reader: &mut VmReader) -> Result<()> {
         let offset = offset + self.offset;
         if self
-            .kvirt_area
-            .deref()
-            .len()
+            .limit
             .checked_sub(offset)
             .is_none_or(|remain| remain < reader.remain())
         {
