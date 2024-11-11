@@ -19,6 +19,7 @@ pub mod timer;
 pub mod trap;
 
 use cfg_if::cfg_if;
+use device::keyboard;
 
 cfg_if! {
     if #[cfg(feature = "cvm_guest")] {
@@ -84,6 +85,7 @@ pub(crate) fn init_on_bsp() {
         }
     }
     serial::callback_init();
+    keyboard::init();
 
     // SAFETY: no CPU local objects have been accessed by this far. And
     // we are on the BSP.
