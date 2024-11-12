@@ -40,6 +40,7 @@ use core::{
     cell::UnsafeCell,
     marker::PhantomData,
     mem::{size_of, ManuallyDrop},
+    ops::Range,
     panic,
     sync::atomic::{AtomicU32, AtomicU8, Ordering},
 };
@@ -286,10 +287,21 @@ impl PageMeta for KernelStackMeta {
 /// Initializes the metadata of all physical pages.
 ///
 /// The function returns a list of `Page`s containing the metadata.
-pub(crate) fn init() -> Vec<Page<MetaPageMeta>> {
+pub(crate) fn init() -> Range<usize> {
     let max_paddr = {
         let regions = crate::boot::memory_regions();
-        regions.iter().map(|r| r.base() + r.len()).max().unwrap()
+        regions
+            .iter()
+            .map(|r| {
+                if r.base() < 0x1_0000_0000 {
+                    r.base() + r.len()
+                } else {
+                    0
+                }
+                // r.base() + r.len()
+            })
+            .max()
+            .unwrap()
     };
 
     info!(
@@ -301,43 +313,60 @@ pub(crate) fn init() -> Vec<Page<MetaPageMeta>> {
 
     let num_pages = max_paddr / page_size::<PagingConsts>(1);
     let num_meta_pages = (num_pages * size_of::<MetaSlot>()).div_ceil(PAGE_SIZE);
-    let meta_pages = alloc_meta_pages(num_meta_pages);
+    // let meta_pages = alloc_meta_pages(num_meta_pages);
+    let meta_frames = alloc_meta_pages(num_meta_pages);
     // Map the metadata pages.
     boot_pt::with_borrow(|boot_pt| {
-        for (i, frame_paddr) in meta_pages.iter().enumerate() {
+        // for (i, frame_paddr) in meta_pages.iter().enumerate() {
+        for i in 0..num_meta_pages {
             let vaddr = mapping::page_to_meta::<PagingConsts>(0) + i * PAGE_SIZE;
             let prop = PageProperty {
                 flags: PageFlags::RW,
                 cache: CachePolicy::Writeback,
                 priv_flags: PrivilegedPageFlags::GLOBAL,
             };
+            let frame_number = meta_frames.start + i;
             // SAFETY: we are doing the metadata mappings for the kernel.
-            unsafe { boot_pt.map_base_page(vaddr, frame_paddr / PAGE_SIZE, prop) };
+            // unsafe { boot_pt.map_base_page(vaddr, frame_paddr / PAGE_SIZE, prop) };
+            unsafe { boot_pt.map_base_page(vaddr, frame_number, prop) };
         }
     })
     .unwrap();
     // Now the metadata pages are mapped, we can initialize the metadata.
-    meta_pages
-        .into_iter()
-        .map(|paddr| Page::<MetaPageMeta>::from_unused(paddr, MetaPageMeta::default()))
-        .collect()
+    // meta_pages
+    //     .into_iter()
+    //     .map(|paddr| Page::<MetaPageMeta>::from_unused(paddr, MetaPageMeta::default()))
+    //     .collect()
+    meta_frames
 }
 
-fn alloc_meta_pages(nframes: usize) -> Vec<Paddr> {
-    let mut meta_pages = Vec::new();
+fn alloc_meta_pages(nframes: usize) -> Range<usize> {
+    // let mut meta_pages = Vec::new();
+    // let start_frame = allocator::PAGE_ALLOCATOR
+    //     .get()
+    //     .unwrap()
+    //     .lock()
+    //     .alloc(nframes)
+    //     .unwrap()
+    //     * PAGE_SIZE;
+    // // Zero them out as initialization.
+    // let vaddr = paddr_to_vaddr(start_frame) as *mut u8;
+    // unsafe { core::ptr::write_bytes(vaddr, 0, PAGE_SIZE * nframes) };
+    // for i in 0..nframes {
+    //     let paddr = start_frame + i * PAGE_SIZE;
+    //     meta_pages.push(paddr);
+    // }
+    // meta_pages
+
     let start_frame = allocator::PAGE_ALLOCATOR
         .get()
         .unwrap()
         .lock()
         .alloc(nframes)
-        .unwrap()
-        * PAGE_SIZE;
-    // Zero them out as initialization.
-    let vaddr = paddr_to_vaddr(start_frame) as *mut u8;
+        .unwrap();
+
+    let vaddr = paddr_to_vaddr(start_frame * PAGE_SIZE) as *mut u8;
     unsafe { core::ptr::write_bytes(vaddr, 0, PAGE_SIZE * nframes) };
-    for i in 0..nframes {
-        let paddr = start_frame + i * PAGE_SIZE;
-        meta_pages.push(paddr);
-    }
-    meta_pages
+
+    start_frame..start_frame + nframes
 }

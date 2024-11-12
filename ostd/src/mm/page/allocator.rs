@@ -144,9 +144,14 @@ pub(crate) fn init() {
                 continue;
             }
             // Add global free pages to the frame allocator.
-            allocator.add_frame(start, end);
-            total += (end - start) * PAGE_SIZE;
-            info!(
+            // allocator.add_frame(start, end);
+            // total += (end - start) * PAGE_SIZE;
+            if region.base() < 0x1_0000_0000 {
+                // Add global free pages to the frame allocator.
+                allocator.add_frame(start, end);
+                total += (end - start) * PAGE_SIZE;
+            }
+            crate::early_println!(
                 "Found usable region, start:{:x}, end:{:x}",
                 region.base(),
                 region.base() + region.len()

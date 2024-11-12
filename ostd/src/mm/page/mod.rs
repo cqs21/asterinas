@@ -67,6 +67,7 @@ impl<M: PageMeta> Page<M> {
         usage
             .compare_exchange(0, M::USAGE as u8, Ordering::SeqCst, Ordering::Relaxed)
             .expect("page already in use when trying to get a new handle");
+        // usage.store(M::USAGE as u8, Ordering::SeqCst);
 
         let old_ref_count = ref_count.fetch_add(1, Ordering::Relaxed);
         debug_assert_eq!(old_ref_count, 0);

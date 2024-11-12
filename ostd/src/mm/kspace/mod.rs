@@ -40,7 +40,6 @@
 
 pub(crate) mod kvirt_area;
 
-use alloc::vec::Vec;
 use core::ops::Range;
 
 use align_ext::AlignExt;
@@ -132,7 +131,7 @@ pub static KERNEL_PAGE_TABLE: Once<PageTable<KernelMode, PageTableEntry, PagingC
 ///
 /// This function should be called before:
 ///  - any initializer that modifies the kernel page table.
-pub fn init_kernel_page_table(meta_pages: Vec<Page<MetaPageMeta>>) {
+pub fn init_kernel_page_table(meta_frames: Range<usize>) {
     info!("Initializing the kernel page table");
 
     let regions = crate::boot::memory_regions();
@@ -165,14 +164,16 @@ pub fn init_kernel_page_table(meta_pages: Vec<Page<MetaPageMeta>>) {
     // Map the metadata pages.
     {
         let start_va = mapping::page_to_meta::<PagingConsts>(0);
-        let from = start_va..start_va + meta_pages.len() * PAGE_SIZE;
+        let from = start_va..start_va + meta_frames.len() * PAGE_SIZE;
         let prop = PageProperty {
             flags: PageFlags::RW,
             cache: CachePolicy::Writeback,
             priv_flags: PrivilegedPageFlags::GLOBAL,
         };
         let mut cursor = kpt.cursor_mut(&from).unwrap();
-        for meta_page in meta_pages {
+        for meta_frame in meta_frames {
+            let meta_paddr = meta_frame * PAGE_SIZE;
+            let meta_page = Page::<MetaPageMeta>::from_unused(meta_paddr, MetaPageMeta::default());
             // SAFETY: we are doing the metadata mappings for the kernel.
             unsafe {
                 let _old = cursor.map(meta_page.into(), prop);
