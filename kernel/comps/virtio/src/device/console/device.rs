@@ -4,10 +4,8 @@ use alloc::{boxed::Box, fmt::Debug, string::ToString, sync::Arc, vec::Vec};
 use core::hint::spin_loop;
 
 use aster_console::{AnyConsoleDevice, ConsoleCallback};
-use aster_util::safe_ptr::SafePtr;
 use log::debug;
 use ostd::{
-    io_mem::IoMem,
     mm::{DmaDirection, DmaStream, DmaStreamSlice, FrameAllocOptions, VmReader},
     sync::{RwLock, SpinLock},
     trap::TrapFrame,
@@ -21,7 +19,7 @@ use crate::{
 };
 
 pub struct ConsoleDevice {
-    config: SafePtr<VirtioConsoleConfig, IoMem>,
+    config: VirtioConsoleConfig,
     transport: SpinLock<Box<dyn VirtioTransport>>,
     receive_queue: SpinLock<VirtQueue>,
     transmit_queue: SpinLock<VirtQueue>,
@@ -79,6 +77,8 @@ impl ConsoleDevice {
 
     pub fn init(mut transport: Box<dyn VirtioTransport>) -> Result<(), VirtioDeviceError> {
         let config = VirtioConsoleConfig::new(transport.as_ref());
+        debug!("virtio_console_config = {:?}", config);
+
         const RECV0_QUEUE_INDEX: u16 = 0;
         const TRANSMIT0_QUEUE_INDEX: u16 = 1;
         let receive_queue =

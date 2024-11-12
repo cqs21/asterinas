@@ -11,6 +11,7 @@
 extern crate alloc;
 
 use alloc::boxed::Box;
+use core::hint::spin_loop;
 
 use bitflags::bitflags;
 use component::{init_component, ComponentInitError};
@@ -41,6 +42,10 @@ fn virtio_component_init() -> Result<(), ComponentInitError> {
     while let Some(mut transport) = pop_device_transport() {
         // Reset device
         transport.set_device_status(DeviceStatus::empty()).unwrap();
+        while transport.device_status() != DeviceStatus::empty() {
+            spin_loop();
+        }
+
         // Set to acknowledge
         transport
             .set_device_status(DeviceStatus::ACKNOWLEDGE | DeviceStatus::DRIVER)
@@ -48,12 +53,13 @@ fn virtio_component_init() -> Result<(), ComponentInitError> {
         // negotiate features
         negotiate_features(&mut transport);
 
-        // change to features ok status
-        transport
-            .set_device_status(
-                DeviceStatus::ACKNOWLEDGE | DeviceStatus::DRIVER | DeviceStatus::FEATURES_OK,
-            )
-            .unwrap();
+        if !transport.is_legacy_version() {
+            // change to features ok status
+            let status =
+                DeviceStatus::ACKNOWLEDGE | DeviceStatus::DRIVER | DeviceStatus::FEATURES_OK;
+            transport.set_device_status(status).unwrap();
+        }
+
         let device_type = transport.device_type();
         let res = match transport.device_type() {
             VirtioDeviceType::Block => BlockDevice::init(transport),
@@ -78,7 +84,7 @@ fn virtio_component_init() -> Result<(), ComponentInitError> {
 
 fn pop_device_transport() -> Option<Box<dyn VirtioTransport>> {
     if let Some(device) = VIRTIO_PCI_DRIVER.get().unwrap().pop_device_transport() {
-        return Some(Box::new(device));
+        return Some(device);
     }
     if let Some(device) = VIRTIO_MMIO_DRIVER.get().unwrap().pop_device_transport() {
         return Some(Box::new(device));

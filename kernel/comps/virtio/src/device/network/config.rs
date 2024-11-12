@@ -1,11 +1,13 @@
 // SPDX-License-Identifier: MPL-2.0
 
+use core::mem::offset_of;
+
 use aster_network::EthernetAddr;
 use aster_util::{field_ptr, safe_ptr::SafePtr};
 use bitflags::bitflags;
-use ostd::{io_mem::IoMem, offset_of, Pod};
+use ostd::{io_mem::IoMem, Pod};
 
-use crate::transport::VirtioTransport;
+use crate::transport::{ConfigManager, VirtioTransport};
 
 bitflags! {
     /// Virtio Net Feature bits.
@@ -72,9 +74,29 @@ pub struct VirtioNetConfig {
 }
 
 impl VirtioNetConfig {
-    pub(super) fn new(transport: &dyn VirtioTransport) -> SafePtr<Self, IoMem> {
-        let memory = transport.device_config_memory();
-        SafePtr::new(memory, 0)
+    pub(super) fn new(transport: &dyn VirtioTransport) -> Self {
+        let safe_ptr = transport
+            .device_config_mem()
+            .map(|mem| SafePtr::new(mem, 0));
+        let bar_space = transport.device_config_bar();
+        let config_manager = ConfigManager::<VirtioNetConfig>::new(safe_ptr, bar_space);
+
+        let mut net_config = VirtioNetConfig::new_uninit();
+        // Only following fields are defined in legacy interface.
+        for i in 0..6 {
+            net_config.mac.0[i] = config_manager
+                .read_once::<u8>(offset_of!(Self, mac) + i)
+                .unwrap();
+        }
+        net_config.status.bits = config_manager
+            .read_once::<u16>(offset_of!(Self, status))
+            .unwrap();
+
+        if config_manager.is_modern() {
+            // TODO: read more field if modern interface exists.
+        }
+
+        net_config
     }
 
     pub(super) fn read(this: &SafePtr<Self, IoMem>) -> ostd::prelude::Result<Self> {

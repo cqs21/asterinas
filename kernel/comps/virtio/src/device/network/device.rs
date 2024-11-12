@@ -49,16 +49,14 @@ impl NetworkDevice {
     }
 
     pub fn init(mut transport: Box<dyn VirtioTransport>) -> Result<(), VirtioDeviceError> {
-        let virtio_net_config = VirtioNetConfig::new(transport.as_mut());
+        let config = VirtioNetConfig::new(transport.as_ref());
+        debug!("virtio_net_config = {:?}", config);
+        let mac_addr = config.mac;
         let features = NetworkFeatures::from_bits_truncate(Self::negotiate_features(
             transport.device_features(),
         ));
-        debug!("virtio_net_config = {:?}", virtio_net_config);
         debug!("features = {:?}", features);
 
-        let config = VirtioNetConfig::read(&virtio_net_config).unwrap();
-        let mac_addr = config.mac;
-        debug!("mac addr = {:x?}, status = {:?}", mac_addr, config.status);
         let caps = init_caps(&features, &config);
 
         let send_queue = VirtQueue::new(QUEUE_SEND, QUEUE_SIZE, transport.as_mut())
