@@ -50,6 +50,7 @@ pub mod user;
 
 use core::sync::atomic::{AtomicBool, Ordering};
 
+use bus::usb::XHCI_DRIVER;
 pub use ostd_macros::{main, panic_handler};
 pub use ostd_pod::Pod;
 

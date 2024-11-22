@@ -4,6 +4,7 @@
 
 pub mod mmio;
 pub mod pci;
+pub mod usb;
 
 /// An error that occurs during bus probing.
 #[derive(Debug, PartialEq, Eq, PartialOrd, Ord)]
@@ -18,6 +19,7 @@ pub enum BusProbeError {
 pub(crate) fn init() {
     #[cfg(target_arch = "x86_64")]
     pci::init();
+    usb::init();
 
     mmio::init();
 }
