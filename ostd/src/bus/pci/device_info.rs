@@ -115,17 +115,17 @@ impl PciDeviceLocation {
 impl PciDeviceLocation {
     pub(super) const BIT32_ALIGN_MASK: u16 = 0xFFFC;
 
-    pub(super) fn read8(&self, offset: u16) -> u8 {
+    pub fn read8(&self, offset: u16) -> u8 {
         let val = self.read32(offset & Self::BIT32_ALIGN_MASK);
         ((val >> ((offset as usize & 0b11) << 3)) & 0xFF) as u8
     }
 
-    pub(super) fn read16(&self, offset: u16) -> u16 {
+    pub fn read16(&self, offset: u16) -> u16 {
         let val = self.read32(offset & Self::BIT32_ALIGN_MASK);
         ((val >> ((offset as usize & 0b10) << 3)) & 0xFFFF) as u16
     }
 
-    pub(super) fn read32(&self, offset: u16) -> u32 {
+    pub fn read32(&self, offset: u16) -> u32 {
         debug_assert!(
             (offset & 0b11) == 0,
             "misaligned PCI configuration dword u32 read"

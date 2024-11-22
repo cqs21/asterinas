@@ -3,6 +3,12 @@
 version = 4
 
 [[package]]
+name = "accessor"
+version = "0.3.3"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "bd8b2abd55bf1f9cffbf00fd594566c51a9d31402553284920c1309ca8351086"
+
+[[package]]
 name = "acpi"
 version = "5.1.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -1095,6 +1101,17 @@ dependencies = [
 
 [[package]]
 name = "num-derive"
+version = "0.3.3"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "876a53fff98e03a936a674b29568b0e605f06b29372c2489ff4de23f1949743d"
+dependencies = [
+ "proc-macro2",
+ "quote",
+ "syn 1.0.109",
+]
+
+[[package]]
+name = "num-derive"
 version = "0.4.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "ed3955f1a9c7c0c15e092f9c887db08b1fc683305fdf6eb6684f22555355e202"
@@ -1182,7 +1199,7 @@ dependencies = [
  "log",
  "multiboot2",
  "num",
- "num-derive",
+ "num-derive 0.4.2",
  "num-traits",
  "ostd-macros",
  "ostd-pod",
@@ -1194,10 +1211,12 @@ dependencies = [
  "static_assertions",
  "tdx-guest",
  "unwinding",
+ "usb-device",
  "volatile",
  "x86",
  "x86_64 0.14.13",
  "xarray",
+ "xhci",
 ]
 
 [[package]]
@@ -1255,6 +1274,12 @@ name = "polonius-the-crab"
 version = "0.2.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "c2a69ee997a6282f8462abf1e0d8c38c965e968799e912b3bed8c9e8a28c2f9f"
+
+[[package]]
+name = "portable-atomic"
+version = "1.9.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "cc9c68a3f6da06753e9335d63e27f6b9754dd1920d941135b7ea8224f141adb2"
 
 [[package]]
 name = "ppv-lite86"
@@ -1735,6 +1760,16 @@ dependencies = [
 ]
 
 [[package]]
+name = "usb-device"
+version = "0.3.2"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "98816b1accafbb09085168b90f27e93d790b4bfa19d883466b5e53315b5f06a6"
+dependencies = [
+ "heapless",
+ "portable-atomic",
+]
+
+[[package]]
 name = "utf8parse"
 version = "0.2.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -1838,6 +1873,19 @@ version = "0.1.0"
 source = "git+https://github.com/asterinas/xarray#1dad5d9b74aac30193bd242a97077b4c54933830"
 dependencies = [
  "smallvec",
+]
+
+[[package]]
+name = "xhci"
+version = "0.9.2"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "09f3f0483969259f2adb6524054400d94ac352e59fa37da6c6ca3b9b3d83ff83"
+dependencies = [
+ "accessor",
+ "bit_field",
+ "num-derive 0.3.3",
+ "num-traits",
+ "paste",
 ]
 
 [[package]]

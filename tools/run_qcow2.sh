@@ -36,7 +36,8 @@ qemu-nbd -d /dev/nbd0
 qemu-system-x86_64 \
 	-machine pc-i440fx-2.1,accel=kvm -cpu host -smp 2 -m 4G \
 	-bios /usr/share/qemu/OVMF.fd \
-	-device piix3-usb-uhci,bus=pci.0,addr=01.2 \
+	-device qemu-xhci,bus=pci.0,addr=14.0 \
+	-device usb-kbd \
 	-device cirrus-vga \
 	-chardev stdio,id=mux,mux=on,logfile=${LOG_FILE} \
 	-device virtio-serial-pci,disable-modern=true \
