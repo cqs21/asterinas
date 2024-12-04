@@ -8,6 +8,7 @@ mod command_ring;
 mod descriptor;
 mod device_contexts;
 mod event_ring;
+mod requests;
 mod slot;
 mod transfer_ring;
 mod xhci_device;

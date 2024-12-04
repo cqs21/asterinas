@@ -1,3 +1,58 @@
+/// Descriptor are used to determine the type of descriptor being queried
+/// from a device or being set to a device.
+#[repr(u8)]
+#[derive(Clone, Copy, Debug)]
+pub enum Descriptor {
+    Device = 0,
+    Configuration,
+    String,
+    Interface,
+    Endpoint,
+    Reserved0,
+    Reserved1,
+    InterfacePower,
+    Otg,
+    Debug,
+    InterfaceAssociation,
+    Bos,
+    DeviceCapability,
+    SuperSpeedUsbEndpointCompanion,
+    SuperSpeedPlusIsochronousEndpointCompanion,
+}
+
+impl Descriptor {
+    pub fn type_id(&self) -> u8 {
+        match self {
+            Descriptor::Device => 1,
+            Descriptor::Configuration => 2,
+            Descriptor::String => 3,
+            Descriptor::Interface => 4,
+            Descriptor::Endpoint => 5,
+            Descriptor::Reserved0 => 6,
+            Descriptor::Reserved1 => 7,
+            Descriptor::InterfacePower => 8,
+            Descriptor::Otg => 9,
+            Descriptor::Debug => 10,
+            Descriptor::InterfaceAssociation => 11,
+            Descriptor::Bos => 15,
+            Descriptor::DeviceCapability => 16,
+            Descriptor::SuperSpeedUsbEndpointCompanion => 48,
+            Descriptor::SuperSpeedPlusIsochronousEndpointCompanion => 49,
+        }
+    }
+
+    pub fn length(&self) -> usize {
+        match self {
+            Descriptor::Device => size_of::<DeviceDescriptor>(),
+            Descriptor::Configuration => size_of::<ConfigurationDescriptor>(),
+            Descriptor::InterfaceAssociation => size_of::<InterfaceAssociationDescriptor>(),
+            Descriptor::Interface => size_of::<InterfaceDescriptor>(),
+            Descriptor::Endpoint => size_of::<EndpointDescriptor>(),
+            _ => todo!("implement more Descriptor"),
+        }
+    }
+}
+
 #[derive(Debug)]
 #[repr(packed)]
 pub struct DeviceDescriptor {
