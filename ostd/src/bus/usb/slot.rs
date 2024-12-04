@@ -9,10 +9,19 @@ use xhci::{
 };
 
 use super::{
-    device_contexts::InputContext, transfer_ring::TransferRing, ConfigurationDescriptor,
-    DeviceDescriptor, DoorbellReason, DEFAULT_RING_SIZE,
+    descriptor::Descriptor,
+    device_contexts::InputContext,
+    requests::{
+        DeviceFeatureSelector, EndpointFeatureSelector, GetConfiguration, GetDescriptor, GetStatus,
+        InterfaceFeatureSelector, Recipient, Request, SetConfiguration,
+    },
+    transfer_ring::TransferRing,
+    ConfigurationDescriptor, DeviceDescriptor, DoorbellReason, DEFAULT_RING_SIZE,
 };
-use crate::mm::{paddr_to_vaddr, DmaCoherent, FrameAllocOptions, PAGE_SIZE};
+use crate::{
+    bus::usb::{EndpointDescriptor, InterfaceDescriptor},
+    mm::{paddr_to_vaddr, DmaCoherent, FrameAllocOptions, PAGE_SIZE},
+};
 
 #[derive(Debug)]
 pub struct XhciSlot {
@@ -175,7 +184,7 @@ impl XhciSlot {
                 self.configure_endpoint();
             }
             SlotState::Configured => {
-                self.get_device_descriptor();
+                self.test_request();
                 crate::early_println!("TODO: handle configured completion event")
             }
         };
@@ -234,11 +243,11 @@ impl XhciSlot {
         // Initialize the Data Stage TD.
         let mut data = transfer::DataStage::default();
         data.set_direction(transfer::Direction::In);
+        data.set_data_buffer_pointer(self.extra_buffer.start_paddr() as u64);
         data.set_trb_transfer_length(8);
         data.clear_chain_bit();
         data.clear_interrupt_on_completion();
         data.clear_immediate_data();
-        data.set_data_buffer_pointer(self.extra_buffer.start_paddr() as u64);
         let allowed = transfer::Allowed::DataStage(data);
         self.ctrl_ring().enqueue(allowed).unwrap();
 
@@ -278,7 +287,7 @@ impl XhciSlot {
             SlotState::Addressed => crate::early_println!("TODO: handle addressed transfer event"),
             SlotState::Configured => {
                 crate::early_println!("TODO: handle configured transfer event");
-                let des = self.extra_data::<DeviceDescriptor>();
+                let des = self.extra_data::<EndpointDescriptor>();
                 crate::early_println!("{:?}", des);
             }
         };
@@ -299,12 +308,6 @@ impl XhciSlot {
 
         self.pending_commands.get_or_insert_default().push(allowed);
         self.fs_evaluated = true;
-    }
-
-    fn set_configuration() {
-        // To set a configuration in a device, software shall issue a
-        // Configure Endpoint Command to the xHC in conjunction with issuing USB
-        // SET_CONFIGURATION request to the device.
     }
 
     /*
@@ -354,5 +357,31 @@ impl XhciSlot {
         self.ctrl_ring().enqueue(allowed).unwrap();
 
         self.pending_doorbell.replace((1, 0)); // DB Target = Control EP 0 Enqueue Pointer Update.
+    }
+
+    pub fn send_request(&mut self, request: Request) {
+        request.into_iter().for_each(|trb| {
+            crate::early_println!("{:?}", trb);
+            self.ctrl_ring().enqueue(trb).unwrap();
+        });
+
+        self.pending_doorbell.replace((1, 0)); // DB Target = Control EP 0 Enqueue Pointer Update.
+    }
+
+    /*
+    DeviceDescriptor {
+        length: 18, typ: 1, usb_bcd: 512, class: 0, sub_class: 0, protocol: 0,
+        max_packet_size: 8, vendor_id: 1575, product_id: 1, device_bcd: 0, manufacturer_index: 1,
+        product_index: 4, serial_number_index: 5, nr_configurations: 1
+    }
+    ConfigurationDescriptor {
+        length: 9, typ: 2, total_length: 34, nr_interfaces: 1, value: 1, index: 8,
+        attributes: 160, max_power: 50
+    }
+    */
+    fn test_request(&mut self) {
+        let request = GetDescriptor::new(Descriptor::Interface, 0, 0, &self.extra_buffer);
+        let request = Request::GetDescriptor(request);
+        self.send_request(request);
     }
 }
