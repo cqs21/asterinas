@@ -16,6 +16,7 @@
 #![feature(min_specialization)]
 #![feature(negative_impls)]
 #![feature(ptr_sub_ptr)]
+#![feature(str_from_utf16_endian)]
 #![feature(sync_unsafe_cell)]
 // The `generic_const_exprs` feature is incomplete however required for the page table
 // const generic implementation. We are using this feature in a conservative manner.
@@ -102,6 +103,13 @@ unsafe fn init() {
     arch::irq::enable_local();
 
     invoke_ffi_init_funcs();
+
+    use alloc::sync::Arc;
+
+    use bus::usb::UsbClass;
+
+    let class: Arc<dyn UsbClass> = bus::usb::USB_KBD.get().unwrap().clone();
+    bus::usb::register_class_driver(class);
 
     IN_BOOTSTRAP_CONTEXT.store(false, Ordering::Relaxed);
 }

@@ -117,7 +117,8 @@ impl TransferRing {
 
     pub fn should_skip(&self, addr: usize) -> bool {
         let idx = (addr - self.base()) / BYTES;
-        !(self.dequeue_idx < idx && idx < self.enqueue_idx)
-            || (self.enqueue_idx <= idx && idx <= self.dequeue_idx)
+        (idx < self.dequeue_idx && self.dequeue_idx < self.enqueue_idx)
+            || (self.dequeue_idx < self.enqueue_idx && self.enqueue_idx <= idx)
+            || (self.enqueue_idx <= idx && idx < self.dequeue_idx)
     }
 }

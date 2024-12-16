@@ -1,9 +1,9 @@
-use alloc::{collections::VecDeque, vec::IntoIter};
+use alloc::collections::VecDeque;
 
 use xhci::ring::trb::transfer::{self, Allowed};
 
-use super::descriptor::Descriptor;
-use crate::{mm::HasDaddr, value_offset};
+use super::descriptor::{Descriptor, LangId};
+use crate::mm::HasDaddr;
 
 /// Control request direction of USB traffic.
 #[repr(u8)]
@@ -383,21 +383,28 @@ pub struct GetDescriptor {
     index: u16,
     lang_id: u16,
     buf_addr: usize,
+    length: u16,
 }
 
 impl GetDescriptor {
-    pub fn new<T: HasDaddr>(descriptor: Descriptor, index: u16, lang_id: u16, buffer: T) -> Self {
+    pub fn new<T: HasDaddr>(
+        descriptor: Descriptor,
+        index: u16,
+        lang_id: LangId,
+        buffer: T,
+        length: u16,
+    ) -> Self {
         Self {
             descriptor,
             index,
             lang_id,
             buf_addr: buffer.daddr(),
+            length,
         }
     }
 
     pub fn into_trbs(self) -> TrbIter {
-        let value = (self.descriptor.type_id() as u16) << 8 | self.index;
-        let length = self.descriptor.length();
+        let value = (self.descriptor as u16) << 8 | self.index;
         let setup = Request::setup(
             Direction::In,
             RequestType::Standard,
@@ -405,9 +412,9 @@ impl GetDescriptor {
             RequestCode::GetDescriptor,
             value,
             self.lang_id,
-            length as u16,
+            self.length,
         );
-        let data = Request::data(Direction::In, self.buf_addr as u64, length as u32);
+        let data = Request::data(Direction::In, self.buf_addr as u64, self.length as u32);
         let status = Request::status(Direction::Out);
 
         TrbIter {
@@ -422,21 +429,28 @@ pub struct SetDescriptor {
     index: u16,
     lang_id: u16,
     buf_addr: usize,
+    length: u16,
 }
 
 impl SetDescriptor {
-    pub fn new<T: HasDaddr>(descriptor: Descriptor, index: u16, lang_id: u16, buffer: T) -> Self {
+    pub fn new<T: HasDaddr>(
+        descriptor: Descriptor,
+        index: u16,
+        lang_id: LangId,
+        buffer: T,
+        length: u16,
+    ) -> Self {
         Self {
             descriptor,
             index,
             lang_id,
             buf_addr: buffer.daddr(),
+            length,
         }
     }
 
     pub fn into_trbs(self) -> TrbIter {
-        let value = (self.descriptor.type_id() as u16) << 8 | self.index;
-        let length = self.descriptor.length();
+        let value = (self.descriptor as u16) << 8 | self.index;
         let setup = Request::setup(
             Direction::Out,
             RequestType::Standard,
@@ -444,9 +458,9 @@ impl SetDescriptor {
             RequestCode::SetDescriptor,
             value,
             self.lang_id,
-            length as u16,
+            self.length,
         );
-        let data = Request::data(Direction::Out, self.buf_addr as u64, length as u32);
+        let data = Request::data(Direction::Out, self.buf_addr as u64, self.length as u32);
         let status = Request::status(Direction::In);
 
         TrbIter {
@@ -667,3 +681,95 @@ impl SetIsochronousDelay {
         }
     }
 }
+
+// /// A trait for device-specific USB peripherals. Implement this to add support for
+// /// different host controller.
+// pub trait UsbController: Sync + Sized {
+//     /// Allocates an endpoint and specified endpoint parameters. This method is called by the device
+//     /// and class implementations to allocate endpoints.
+//     fn alloc_endpoint(
+//         &mut self,
+//         ep_dir: Direction,
+//         ep_addr: Option<EndpointAddress>,
+//         ep_type: EndpointType,
+//         max_packet_size: u16,
+//         interval: u8,
+//     ) -> Result<EndpointAddress>;
+
+//     /// Enables and initializes the USB peripheral. Soon after enabling the device will be reset, so
+//     /// there is no need to perform a USB reset in this method.
+//     fn enable(&mut self);
+
+//     /// Called when the host resets the device.
+//     fn reset(&self);
+
+//     /// Sets the device USB address to `addr`.
+//     fn set_device_address(&self, addr: u8);
+
+//     /// Writes a single packet of data to the specified endpoint and returns number of bytes
+//     /// actually written.
+//     fn write(&self, ep_addr: EndpointAddress, buf: &[u8]) -> Result<usize>;
+
+//     /// Reads a single packet of data from the specified endpoint and returns the actual length of
+//     /// the packet.
+//     fn read(&self, ep_addr: EndpointAddress, buf: &mut [u8]) -> Result<usize>;
+
+//     /// Sets or clears the STALL condition for an endpoint. If the endpoint is an OUT endpoint, it
+//     /// should be prepared to receive data again.
+//     fn set_stalled(&self, ep_addr: EndpointAddress, stalled: bool);
+
+//     /// Gets whether the STALL condition is set for an endpoint.
+//     fn is_stalled(&self, ep_addr: EndpointAddress) -> bool;
+
+//     /// Causes the USB peripheral to enter USB suspend mode, lowering power consumption and
+//     /// preparing to detect a USB wakeup event. This will be called after
+//     /// [`poll`](crate::device::UsbDevice::poll) returns [`PollResult::Suspend`]. The device will
+//     /// continue be polled, and it shall return a value other than `Suspend` from `poll` when it no
+//     /// longer detects the suspend condition.
+//     fn suspend(&self);
+
+//     /// Resumes from suspend mode. This may only be called after the peripheral has been previously
+//     /// suspended.
+//     fn resume(&self);
+
+//     /// Registers a Transfer Event handler for any information about events and incoming data.
+//     /// Usually called in a loop or from an interrupt handler.
+//     fn register_event_handler(&self, callback: &'static (dyn Fn(TransferEvent) + Send + Sync));
+// }
+
+// /// A trait for implementing USB classes.
+// pub trait UsbClass<C: UsbController> {
+//     /// Called when a GET_DESCRIPTOR request is received for a configuration descriptor. When
+//     /// called, the implementation should write its interface, endpoint and any extra class
+//     /// descriptors into `writer`.
+//     fn get_configuration_descriptors(&self, writer: &mut DescriptorWriter) -> Result<()>;
+
+//     /// Called when a GET_DESCRIPTOR request is received for a BOS descriptor.
+//     /// When called, the implementation should write its blobs such as capability
+//     /// descriptors into `writer`.
+//     fn get_bos_descriptors(&self, writer: &mut BosWriter) -> Result<()>;
+
+//     /// Gets a class-specific string descriptor.
+//     ///
+//     /// All string descriptor requests are passed to all classes in turn, so implementations
+//     /// should return `None` if an unknown index is requested.
+//     fn get_string(&self, index: u16, lang_id: u16) -> Option<&str>;
+
+//     /// Called when a control request is received with direction HostToDevice.
+//     fn control_out(&mut self, handler: ControlOut<C>);
+
+//     /// Called when a control request is received with direction DeviceToHost.
+//     fn control_in(&mut self, handler: ControlIn<C>);
+
+//     /// Called when endpoint with address `addr` has received data (OUT packet).
+//     fn endpoint_out(&mut self, addr: EndpointAddress);
+
+//     /// Called when endpoint with address `addr` has completed transmitting data (IN packet).
+//     fn endpoint_in(&mut self, addr: EndpointAddress);
+
+//     /// Called when the interfaces alternate setting state is requested.
+//     fn get_alt_setting(&mut self, interface: InterfaceNumber) -> Option<u8>;
+
+//     /// Called when the interfaces alternate setting state is altered.
+//     fn set_alt_setting(&mut self, interface: InterfaceNumber, alternative: u8) -> bool;
+// }
