@@ -1,5 +1,6 @@
-use alloc::{boxed::Box, collections::vec_deque::VecDeque, sync::Arc, vec::Vec};
+use alloc::{borrow::ToOwned, boxed::Box, collections::vec_deque::VecDeque, sync::Arc, vec::Vec};
 use core::{
+    fmt::Debug,
     hint::spin_loop,
     sync::atomic::{AtomicU16, Ordering::Relaxed},
 };
@@ -10,15 +11,16 @@ use xhci::{
     context::{EndpointState, EndpointType, SlotState},
     registers::operational::{UsbCommandRegister, UsbStatusRegister},
     ring::trb::{
-        command, event,
+        command,
+        event::{self, CommandCompletion, TransferEvent},
         transfer::{self, TransferType},
     },
     Registers,
 };
 
 use super::{
-    device_contexts::InputContext, transfer_ring::TransferRing, CommandRing, DeviceContexts,
-    EventRingSegmentTable, TRBRingErr, XhciSlot, DEFAULT_RING_SIZE, XHCI_DRIVER,
+    class::UsbClass, device_contexts::InputContext, transfer_ring::TransferRing, CommandRing,
+    DeviceContexts, EventRingSegmentTable, TRBRingErr, XhciSlot, DEFAULT_RING_SIZE, XHCI_DRIVER,
 };
 use crate::{
     bus::{
@@ -34,35 +36,36 @@ use crate::{
     },
     io_mem::IoMem,
     mm::{paddr_to_vaddr, DmaCoherent, FrameAllocOptions},
+    sync::SpinLock,
     trap::{IrqLine, TrapFrame},
 };
 
 #[derive(Debug)]
-pub struct XhciDeviceId {
+pub struct XHostControllerId {
     device_id: PciDeviceId,
 }
 
-impl PciDevice for XhciDeviceId {
+impl PciDevice for XHostControllerId {
     fn device_id(&self) -> PciDeviceId {
         self.device_id
     }
 }
 
 #[derive(Debug)]
-pub struct XhciDevice {
-    regs: Registers<IoMem>,
+pub struct XHostController {
+    regs: Arc<SpinLock<Registers<IoMem>>>,
     dev_ctxs: DeviceContexts,
-    cmd_ring: CommandRing,
+    cmd_ring: Arc<CommandRing>,
     seg_tables: Vec<Option<EventRingSegmentTable>>,
     msix: CapabilityMsixData,
-    slots: Vec<Option<XhciSlot>>,
+    slots: Vec<Option<Arc<XhciSlot>>>,
 }
 
 // System software utilizes the Doorbell Register to notify the xHC that it has Device Slot
 // related work for the xHC to perform.
 pub type DoorbellReason = (u8, u16); // (target, stream_id)
 
-impl XhciDevice {
+impl XHostController {
     pub(super) fn init(
         pci_device: PciCommonDevice,
     ) -> Result<Arc<dyn PciDevice>, (BusProbeError, PciCommonDevice)> {
@@ -155,9 +158,9 @@ impl XhciDevice {
         (0..max_intrs).for_each(|_| seg_tables.push(None));
 
         let mut xhci_device = Self {
-            regs,
+            regs: Arc::new(SpinLock::new(regs)),
             dev_ctxs,
-            cmd_ring,
+            cmd_ring: Arc::new(cmd_ring),
             seg_tables,
             msix,
             slots,
@@ -175,13 +178,18 @@ impl XhciDevice {
 
         debug!("{:?}", xhci_device.status());
 
-        XHCI_DRIVER.get().unwrap().devices.lock().push(xhci_device);
+        XHCI_DRIVER
+            .get()
+            .unwrap()
+            .controllers
+            .lock()
+            .push(xhci_device);
 
-        Ok(Arc::new(XhciDeviceId { device_id }))
+        Ok(Arc::new(XHostControllerId { device_id }))
     }
 
     fn run(&mut self) {
-        self.regs.operational.usbcmd.update_volatile(|cmd| {
+        self.regs.lock().operational.usbcmd.update_volatile(|cmd| {
             if cmd.run_stop() == false {
                 cmd.set_run_stop();
             }
@@ -189,7 +197,7 @@ impl XhciDevice {
     }
 
     fn stop(&mut self) {
-        self.regs.operational.usbcmd.update_volatile(|cmd| {
+        self.regs.lock().operational.usbcmd.update_volatile(|cmd| {
             if cmd.run_stop() == true {
                 cmd.clear_run_stop();
             }
@@ -197,7 +205,7 @@ impl XhciDevice {
     }
 
     fn status(&self) -> UsbStatusRegister {
-        self.regs.operational.usbsts.read_volatile()
+        self.regs.lock().operational.usbsts.read_volatile()
     }
 
     fn set_interrupter<F>(&mut self, idx: usize, callback: F)
@@ -213,33 +221,30 @@ impl XhciDevice {
 
         // Alloc Event Ring Segment Table.
         let seg_table = EventRingSegmentTable::alloc();
+        let mut regs = self.regs.lock();
         // Program the Interrupter Event Ring Segment Table Size (ERSTSZ) register.
-        self.regs
-            .interrupter_register_set
+        regs.interrupter_register_set
             .interrupter_mut(idx)
             .erstsz
             .update_volatile(|erstsz| {
                 erstsz.set(seg_table.size() as u16);
             });
         // Program the Interrupter Event Ring Dequeue Pointer (ERDP) register.
-        self.regs
-            .interrupter_register_set
+        regs.interrupter_register_set
             .interrupter_mut(idx)
             .erdp
             .update_volatile(|erdp| {
                 erdp.set_event_ring_dequeue_pointer(seg_table.current_dequeue_pointer() as u64);
             });
         // Program the Interrupter Event Ring Segment Table Base Address (ERSTBA) register.
-        self.regs
-            .interrupter_register_set
+        regs.interrupter_register_set
             .interrupter_mut(idx)
             .erstba
             .update_volatile(|erstba| {
                 erstba.set(seg_table.base() as u64);
             });
         // The IMODI field shall default to 4000 (1 ms) upon initialization and reset.
-        self.regs
-            .interrupter_register_set
+        regs.interrupter_register_set
             .interrupter_mut(idx)
             .imod
             .update_volatile(|imod| {
@@ -255,14 +260,13 @@ impl XhciDevice {
 
         // Enable system bus interrupt generation by writing a ‘1’ to the Interrupter Enable (INTE)
         // flag of the USBCMD register.
-        self.regs.operational.usbcmd.update_volatile(|cmd| {
+        regs.operational.usbcmd.update_volatile(|cmd| {
             cmd.set_interrupter_enable();
         });
 
         // Enable the Interrupter by writing a ‘1’ to the Interrupt Enable (IE) field of
         // the Interrupter Management register.
-        self.regs
-            .interrupter_register_set
+        regs.interrupter_register_set
             .interrupter_mut(idx)
             .iman
             .update_volatile(|iman| {
@@ -277,11 +281,12 @@ impl XhciDevice {
 
     fn handle_primary_irq(&mut self) {
         // Clear the op reg interrupt status first, so we can receive interrupts from other MSI-X interrupters.
-        self.regs.operational.usbsts.update_volatile(|sts| {
+        self.regs.lock().operational.usbsts.update_volatile(|sts| {
             sts.clear_event_interrupt();
         });
         // Clear the primary interrupter pending status.
         self.regs
+            .lock()
             .interrupter_register_set
             .interrupter_mut(0)
             .iman
@@ -291,9 +296,10 @@ impl XhciDevice {
 
         let event_dequeue_ptr = self.handle_event_ring();
 
-        crate::early_println!("======updating event dequeue ptr:0x{:x}", event_dequeue_ptr);
+        // crate::early_println!("======updating event dequeue ptr:0x{:x}", event_dequeue_ptr);
         // Update Event Ring Dequeue Pointer.
         self.regs
+            .lock()
             .interrupter_register_set
             .interrupter_mut(0)
             .erdp
@@ -307,7 +313,7 @@ impl XhciDevice {
     fn handle_event_ring(&mut self) -> usize {
         while let Ok(allowed) = self.seg_tables[0].as_mut().unwrap().dequeue() {
             debug!("{:?}", allowed);
-            crate::early_println!("{:?}", allowed);
+            // crate::early_println!("{:?}", allowed);
             // TODO: handle error completion_code() for each Event.
             match allowed {
                 event::Allowed::CommandCompletion(cc) => self.handle_command_completion(cc),
@@ -324,11 +330,11 @@ impl XhciDevice {
             .current_dequeue_pointer()
     }
 
-    fn handle_command_completion(&mut self, cc: event::CommandCompletion) {
+    fn handle_command_completion(&mut self, cc: CommandCompletion) {
         let slot_id = cc.slot_id();
         // TODO: how to deal with slot 0, which is utilized by the xHCI Scratchpad mechanism.
         if slot_id != 0 && self.slots[(slot_id - 1) as usize].is_some() {
-            self.handle_command_completion_at(slot_id);
+            self.handle_command_completion_at(slot_id, cc);
         }
 
         // Update Command Ring Dequeue Pointer.
@@ -337,7 +343,7 @@ impl XhciDevice {
             .unwrap();
     }
 
-    fn handle_command_completion_at(&mut self, slot_id: u8) {
+    fn handle_command_completion_at(&mut self, slot_id: u8, cc: CommandCompletion) {
         let slot = self.slots[(slot_id - 1) as usize].as_mut().unwrap();
         if slot.slot_id() == 0 {
             slot.set_slot_id(slot_id);
@@ -346,27 +352,14 @@ impl XhciDevice {
             self.dev_ctxs.set_slot(slot);
         }
 
-        slot.handle_command_completion();
-
-        let pending_commands = slot.pending_commands();
-        let pending_doorbell = slot.pending_doorbell();
-
-        if let Some(commands) = pending_commands {
-            commands.into_iter().for_each(|allowed| {
-                self.cmd_ring.enqueue(allowed).unwrap();
-            });
-            self.ring_doorbell_at(0, 0, 0);
-        };
-
-        if let Some((target, stream_id)) = pending_doorbell {
-            self.ring_doorbell_at(slot_id as usize, 1, stream_id);
-        }
+        slot.handle_command_completion(cc);
     }
 
     fn handle_port_status_change(&mut self, psc: event::PortStatusChange) {
         let port_id = psc.port_id();
         let port = self
             .regs
+            .lock()
             .port_register_set
             .read_volatile_at(port_id as usize - 1);
         let prc = port.portsc.port_reset_change();
@@ -381,24 +374,10 @@ impl XhciDevice {
         }
     }
 
-    fn handle_transfer_event(&mut self, te: event::TransferEvent) {
+    fn handle_transfer_event(&mut self, te: TransferEvent) {
         let slot_id = te.slot_id();
         let slot = self.slots[(slot_id - 1) as usize].as_mut().unwrap();
         slot.handle_transfer_event(te);
-
-        let pending_commands = slot.pending_commands();
-        let pending_doorbell = slot.pending_doorbell();
-
-        if let Some(commands) = pending_commands {
-            commands.into_iter().for_each(|allowed| {
-                self.cmd_ring.enqueue(allowed).unwrap();
-            });
-            self.ring_doorbell_at(0, 0, 0);
-        };
-
-        if let Some((target, stream_id)) = pending_doorbell {
-            self.ring_doorbell_at(slot_id as usize, 1, stream_id);
-        }
     }
 
     fn add_command(&mut self, command: command::Allowed) -> Result<(), TRBRingErr> {
@@ -407,16 +386,16 @@ impl XhciDevice {
 
     fn ring_doorbell_at(&mut self, idx: usize, target: u8, stream_id: u16) {
         debug_assert!(idx <= self.dev_ctxs.size());
-        self.regs.doorbell.update_volatile_at(idx, |db| {
+        self.regs.lock().doorbell.update_volatile_at(idx, |db| {
             db.set_doorbell_target(target);
             db.set_doorbell_stream_id(stream_id);
         });
     }
 
     fn enumerate_ports(&mut self) {
-        let max_port = self.regs.port_register_set.len();
+        let max_port = self.regs.lock().port_register_set.len();
         for idx in 0..max_port {
-            let mut port = self.regs.port_register_set.read_volatile_at(idx);
+            let mut port = self.regs.lock().port_register_set.read_volatile_at(idx);
             // When the xHC detects a device attach, it shall set the Current Connect
             // Status (CCS) and Connect Status Change (CSC) flags to ‘1’. If the
             // assertion of CSC results in a ‘0’ to ‘1’ transition of Port Status Change
@@ -449,7 +428,10 @@ impl XhciDevice {
                 // Enable the port by resetting the port (writing a '1' to the PORTSC PR bit)
                 // then waiting for a Port Status Change Event.
                 port.portsc.set_port_reset();
-                self.regs.port_register_set.write_volatile_at(idx, port);
+                self.regs
+                    .lock()
+                    .port_register_set
+                    .write_volatile_at(idx, port);
             }
 
             // FIXME: how to deal with other state?
@@ -457,10 +439,18 @@ impl XhciDevice {
     }
 
     fn add_port(&mut self, port_id: u8, port_speed: u8) {
-        let new_slot = XhciSlot::init(port_id, port_speed, self.dev_ctxs.is_64bytes_context());
+        let regs = Arc::downgrade(&self.regs);
+        let cmd_ring = Arc::downgrade(&self.cmd_ring);
+        let new_slot = XhciSlot::init(
+            port_id,
+            port_speed,
+            self.dev_ctxs.is_64bytes_context(),
+            regs,
+            cmd_ring,
+        );
         for slot in self.slots.iter_mut() {
             if slot.is_none() {
-                let _ = slot.insert(new_slot);
+                let _ = slot.insert(Arc::new(new_slot));
                 break;
             }
         }
@@ -493,10 +483,26 @@ impl XhciDevice {
 
     pub fn is_command_ring_running(&self) -> bool {
         self.regs
+            .lock()
             .operational
             .crcr
             .read_volatile()
             .command_ring_running()
+    }
+
+    pub fn register_class_driver(&mut self, class: Arc<dyn UsbClass>) {
+        for slot in self.slots.iter() {
+            let Some(slot) = slot else {
+                continue;
+            };
+
+            let weak_slot = Arc::downgrade(slot);
+            if class.probe(weak_slot.clone()).is_err() {
+                continue;
+            }
+
+            class.init(weak_slot);
+        }
     }
 }
 
@@ -505,7 +511,7 @@ fn default_primary_irq_callback(trap_frame: &TrapFrame) {
         "xHCI primary irq callback, trap_num:{}",
         trap_frame.trap_num
     );
-    let mut xhci_devices = XHCI_DRIVER.get().unwrap().devices.disable_irq().lock();
+    let mut xhci_devices = XHCI_DRIVER.get().unwrap().controllers.disable_irq().lock();
     for dev in xhci_devices.iter_mut() {
         if dev.irq_num(0).unwrap() != trap_frame.trap_num {
             continue;

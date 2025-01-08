@@ -6,6 +6,9 @@
 
 extern crate alloc;
 
+#[macro_use]
+extern crate num_derive;
+
 use alloc::{boxed::Box, vec::Vec};
 use core::ops::Deref;
 
@@ -13,12 +16,14 @@ use component::{init_component, ComponentInitError};
 use ostd::sync::SpinLock;
 
 mod i8042_keyboard;
+mod usb_keyboard;
 
 static KEYBOARD_CALLBACKS: SpinLock<Vec<Box<KeyboardCallback>>> = SpinLock::new(Vec::new());
 
 #[init_component]
 fn init() -> Result<(), ComponentInitError> {
     i8042_keyboard::init();
+    usb_keyboard::init();
     Ok(())
 }
 

@@ -1,6 +1,6 @@
 use alloc::{boxed::Box, sync::Arc, vec::Vec};
 
-use super::XhciDevice;
+use super::XHostController;
 use crate::{
     bus::{
         pci::{
@@ -13,19 +13,19 @@ use crate::{
 };
 
 #[derive(Debug)]
-pub struct XhciDriver {
-    pub devices: SpinLock<Vec<XhciDevice>>,
+pub struct XHostControllerDriver {
+    pub controllers: SpinLock<Vec<XHostController>>,
 }
 
-impl XhciDriver {
+impl XHostControllerDriver {
     pub fn new() -> Self {
         Self {
-            devices: SpinLock::new(Vec::new()),
+            controllers: SpinLock::new(Vec::new()),
         }
     }
 }
 
-impl PciDriver for XhciDriver {
+impl PciDriver for XHostControllerDriver {
     fn probe(
         &self,
         device: PciCommonDevice,
@@ -35,6 +35,6 @@ impl PciDriver for XhciDriver {
             return Err((BusProbeError::DeviceNotMatch, device));
         }
 
-        XhciDevice::init(device)
+        XHostController::init(device)
     }
 }

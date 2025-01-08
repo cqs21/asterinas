@@ -49,6 +49,7 @@ pub fn __ostd_panic_handler(info: &core::panic::PanicInfo) -> ! {
 
 /// Aborts the QEMU
 pub fn abort() -> ! {
+    x86_64::instructions::hlt();
     exit_qemu(QemuExitCode::Failed);
 }
 
