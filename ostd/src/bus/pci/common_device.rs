@@ -154,7 +154,7 @@ impl BarManager {
     }
 
     /// Gain access to the BAR space and return None if that BAR is absent.
-    pub(super) fn bar_space_without_invisible(&self, idx: u8) -> Option<Bar> {
+    pub fn bar_space_without_invisible(&self, idx: u8) -> Option<Bar> {
         if let Some((bar, _)) = self.bars[idx as usize].clone() {
             Some(bar)
         } else {

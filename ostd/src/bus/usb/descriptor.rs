@@ -1,0 +1,115 @@
+#[derive(Debug)]
+#[repr(packed)]
+pub struct DeviceDescriptor {
+    // Size of this descriptor in bytes
+    length: u8,
+    // DEVICE Descriptor Type
+    typ: u8,
+    // USB Specification Release Number in Binary-Coded Decimal
+    usb_bcd: u16,
+    // Class code (assigned by the USB-IF)
+    class: u8,
+    // Subclass code (assigned by the USB-IF)
+    sub_class: u8,
+    // Protocol code (assigned by the USB-IF)
+    protocol: u8,
+    // Maximum packet size for endpoint zero
+    pub max_packet_size: u8,
+    // Vendor ID (assigned by the USB-IF)
+    vendor_id: u16,
+    // Product ID (assigned by the manufacturer)
+    product_id: u16,
+    // Device release number in binary-coded decimal
+    device_bcd: u16,
+    // Index of string descriptor describing manufacturer
+    manufacturer_index: u8,
+    // Index of string descriptor describing product
+    product_index: u8,
+    // Index of string descriptor describing the device’s serial number
+    serial_number_index: u8,
+    // Number of possible configurations
+    nr_configurations: u8,
+}
+
+#[derive(Debug)]
+#[repr(packed)]
+pub struct ConfigurationDescriptor {
+    // Size of this descriptor in bytes
+    length: u8,
+    // CONFIGURATION Descriptor Type
+    typ: u8,
+    // Total length of data returned for this configuration
+    total_length: u16,
+    // Number of interfaces supported by this configuration
+    nr_interfaces: u8,
+    // Value to use as an argument to the SetConfiguration() request to select this configuration
+    value: u8,
+    // Index of string descriptor describing this configuration
+    index: u8,
+    // Configuration characteristics
+    attributes: u8,
+    // Maximum power consumption of the device from the bus in this specific configuration
+    // when the device is fully operational
+    max_power: u8,
+}
+
+#[derive(Debug)]
+#[repr(packed)]
+pub struct InterfaceAssociationDescriptor {
+    // Size of this descriptor in bytes
+    length: u8,
+    // INTERFACE ASSOCIATION Descriptor
+    typ: u8,
+    // Interface number of the first interface that is associated with this function
+    first_interface: u8,
+    // Number of contiguous interfaces that are associated with this function
+    interface_conut: u8,
+    // Class code (assigned by USB-IF)
+    class: u8,
+    // Subclass code (assigned by USB-IF)
+    subclass: u8,
+    // Protocol code (assigned by USB-IF)
+    protocol: u8,
+    // Index of string descriptor describing this function
+    index: u8,
+}
+
+#[derive(Debug)]
+#[repr(packed)]
+pub struct InterfaceDescriptor {
+    // Size of this descriptor in bytes
+    length: u8,
+    // INTERFACE Descriptor Type
+    typ: u8,
+    // Number of this interface
+    number: u8,
+    // Value used to select this alternate setting for the interface identified in the prior field
+    alternate_setting: u8,
+    // Number of endpoints used by this interface (excluding the Default Control Pipe)
+    nr_endpoints: u8,
+    // Class code (assigned by the USB-IF)
+    class: u8,
+    // Subclass code (assigned by the USB-IF)
+    subclass: u8,
+    // Protocol code (assigned by the USB-IF)
+    protocol: u8,
+    // Index of string descriptor describing this interface
+    index: u8,
+}
+
+#[derive(Debug)]
+#[repr(packed)]
+pub struct EndpointDescriptor {
+    // Size of this descriptor in bytes
+    length: u8,
+    // ENDPOINT Descriptor Type
+    typ: u8,
+    // The address of the endpoint on the device described by this descriptor
+    address: u8,
+    // The endpoint’s attributes when it is configured using the bConfigurationValue
+    attributes: u8,
+    // Maximum packet size this endpoint is capable
+    max_packet_size: u16,
+    // Interval for servicing the endpoint for data transfers
+    interval: u8,
+}

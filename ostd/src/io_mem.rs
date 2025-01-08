@@ -2,10 +2,14 @@
 
 //! I/O memory.
 
-use core::ops::{Deref, Range};
+use core::{
+    num::NonZeroUsize,
+    ops::{Deref, Range},
+};
 
 use align_ext::AlignExt;
 use cfg_if::cfg_if;
+use xhci::accessor::Mapper;
 
 use crate::{
     mm::{
@@ -191,4 +195,14 @@ impl VmIoOnce for IoMem {
     fn write_once<T: PodOnce>(&self, offset: usize, new_val: &T) -> Result<()> {
         self.writer().skip(offset).write_once(new_val)
     }
+}
+
+impl Mapper for IoMem {
+    unsafe fn map(&mut self, phys_start: usize, bytes: usize) -> NonZeroUsize {
+        assert!(self.pa <= phys_start);
+        let offset = phys_start.checked_sub(self.pa).unwrap();
+        NonZeroUsize::new(self.kvirt_area.start() + self.offset + offset).unwrap()
+    }
+
+    fn unmap(&mut self, virt_start: usize, bytes: usize) {}
 }
