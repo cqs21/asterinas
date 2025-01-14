@@ -27,7 +27,7 @@ pub use self::{
     scheduler::info::{AtomicCpuId, TaskScheduleInfo},
 };
 pub(crate) use crate::arch::task::{context_switch, TaskContext};
-use crate::{prelude::*, trap::in_interrupt_context, user::UserSpace};
+use crate::{cpu::XSaveArea, prelude::*, trap::in_interrupt_context, user::UserSpace};
 
 /// A task that executes a function to the end.
 ///
@@ -127,6 +127,15 @@ impl Task {
         user_space.fpu_state().save();
     }
 
+    /// Saves the FPU state to signal context area.
+    pub fn save_fpu_state_to_signal_area(&self, area: &mut XSaveArea) {
+        let Some(user_space) = self.user_space.as_ref() else {
+            return;
+        };
+
+        user_space.fpu_state().save_to_signal_area(area);
+    }
+
     /// Restores the FPU state for user task.
     pub fn restore_fpu_state(&self) {
         let Some(user_space) = self.user_space.as_ref() else {
@@ -134,6 +143,15 @@ impl Task {
         };
 
         user_space.fpu_state().restore();
+    }
+
+    /// Restores the FPU state from signal context area.
+    pub fn restore_fpu_state_from_signal_area(&self, area: &XSaveArea) {
+        let Some(user_space) = self.user_space.as_ref() else {
+            return;
+        };
+
+        user_space.fpu_state().restore_from_signal_area(area);
     }
 }
 

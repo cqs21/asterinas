@@ -16,6 +16,7 @@ use cfg_if::cfg_if;
 use log::debug;
 use num_derive::FromPrimitive;
 use num_traits::FromPrimitive;
+use ostd_pod::Pod;
 use spin::Once;
 use x86::bits64::segmentation::wrfsbase;
 pub use x86::cpuid;
@@ -425,12 +426,13 @@ cpu_context_impl_getter_setter!(
 pub struct FpuState {
     state_area: Box<XSaveArea>,
     area_size: usize,
-    is_valid: AtomicBool,
+    is_activated: AtomicBool,
 }
 
 // The legacy SSE/MMX FPU state format (as saved by `FXSAVE` and restored by the `FXRSTOR` instructions).
-#[repr(C, align(16))]
-#[derive(Clone, Copy, Debug)]
+#[repr(C)]
+#[repr(align(16))]
+#[derive(Clone, Copy, Debug, Pod)]
 struct FxSaveArea {
     control: u16,         // x87 FPU Control Word
     status: u16,          // x87 FPU Status Word
@@ -449,9 +451,10 @@ struct FxSaveArea {
 }
 
 /// The modern FPU state format (as saved by the `XSAVE`` and restored by the `XRSTOR` instructions).
-#[repr(C, align(64))]
-#[derive(Clone, Copy, Debug)]
-struct XSaveArea {
+#[repr(C)]
+#[repr(align(64))]
+#[derive(Clone, Copy, Debug, Pod)]
+pub struct XSaveArea {
     fxsave_area: FxSaveArea,
     features: u64,
     compaction: u64,
@@ -459,24 +462,20 @@ struct XSaveArea {
     extended_state_area: [u8; MAX_XSAVE_AREA_SIZE - size_of::<FxSaveArea>() - 64],
 }
 
-impl XSaveArea {
-    fn init() -> Box<Self> {
+impl Default for XSaveArea {
+    fn default() -> Self {
         let features = if CPU_FEATURES.get().unwrap().has_xsave() {
             XCr0::read().bits() & XSTATE_MAX_FEATURES.get().unwrap()
         } else {
             0
         };
 
-        let mut xsave_area = Box::<Self>::new_uninit();
-        let ptr = xsave_area.as_mut_ptr();
-        // SAFETY: it's safe to initialize the XSaveArea field then return the instance.
-        unsafe {
-            core::ptr::write_bytes(ptr, 0, 1);
-            (*ptr).fxsave_area.control = 0x37F;
-            (*ptr).fxsave_area.mxcsr = 0x1F80;
-            (*ptr).features = features;
-            xsave_area.assume_init()
-        }
+        let mut xsave_area = Self::new_zeroed();
+        xsave_area.fxsave_area.control = 0x37F;
+        xsave_area.fxsave_area.mxcsr = 0x1F80;
+        xsave_area.features = features;
+
+        xsave_area
     }
 }
 
@@ -489,19 +488,23 @@ impl FpuState {
         }
 
         Self {
-            state_area: XSaveArea::init(),
+            state_area: Box::new(XSaveArea::default()),
             area_size,
-            is_valid: AtomicBool::new(true),
+            is_activated: AtomicBool::new(true),
         }
     }
 
-    /// Returns whether the instance can contains valid state.
-    pub fn is_valid(&self) -> bool {
-        self.is_valid.load(Relaxed)
+    /// Returns whether the instance is activated (can be saved to or restored from).
+    pub fn is_activated(&self) -> bool {
+        self.is_activated.load(Relaxed)
     }
 
     /// Save CPU's current FPU state into this instance.
     pub fn save(&self) {
+        if !self.is_activated() {
+            return;
+        }
+
         let mem_addr = &*self.state_area as *const _ as *mut u8;
 
         if CPU_FEATURES.get().unwrap().has_xsave() {
@@ -510,14 +513,12 @@ impl FpuState {
             unsafe { _fxsave64(mem_addr) };
         }
 
-        self.is_valid.store(true, Relaxed);
-
         debug!("Save FPU state");
     }
 
     /// Restores CPU's FPU state from this instance.
     pub fn restore(&self) {
-        if !self.is_valid() {
+        if !self.is_activated() {
             return;
         }
 
@@ -531,23 +532,44 @@ impl FpuState {
             unsafe { _fxrstor64(mem_addr) };
         }
 
-        self.is_valid.store(false, Relaxed);
-
         debug!("Restore FPU state");
     }
 
-    /// Clears the state of the instance.
-    ///
-    /// This method does not reset the underlying buffer that contains the
-    /// FPU state; it only marks the buffer __invalid__.
-    pub fn clear(&self) {
-        self.is_valid.store(false, Relaxed);
+    /// Saves CPU's current FPU state into signal context area.
+    pub fn save_to_signal_area(&self, xsave_area: &mut XSaveArea) {
+        self.save();
+        *xsave_area = *self.state_area;
+
+        // reset state
+        let default_state = XSaveArea::default();
+        let src = &default_state as *const _ as *const u8;
+        let dst = &*self.state_area as *const _ as *mut u8;
+        unsafe {
+            core::ptr::copy_nonoverlapping(src, dst, size_of::<XSaveArea>());
+        }
+        self.restore();
+        self.is_activated.store(false, Relaxed);
+
+        debug!("Save FPU state to signal context");
+    }
+
+    /// Restores CPU's FPU state from signal context area.
+    pub fn restore_from_signal_area(&self, xsave_area: &XSaveArea) {
+        self.is_activated.store(true, Relaxed);
+        let src = xsave_area as *const _ as *const u8;
+        let dst = &*self.state_area as *const _ as *mut u8;
+        unsafe {
+            core::ptr::copy_nonoverlapping(src, dst, size_of::<XSaveArea>());
+        }
+        self.restore();
+
+        debug!("Restore FPU state from signal context");
     }
 }
 
 impl Clone for FpuState {
     fn clone(&self) -> Self {
-        let mut state_area = XSaveArea::init();
+        let mut state_area = Box::new(XSaveArea::default());
         state_area.fxsave_area = self.state_area.fxsave_area;
         state_area.features = self.state_area.features;
         state_area.compaction = self.state_area.compaction;
@@ -560,7 +582,7 @@ impl Clone for FpuState {
         Self {
             state_area,
             area_size: self.area_size,
-            is_valid: AtomicBool::new(self.is_valid()),
+            is_activated: AtomicBool::new(self.is_activated()),
         }
     }
 }
