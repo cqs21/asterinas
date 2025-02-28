@@ -30,42 +30,38 @@ pub struct sigaction_t {
 #[derive(Clone, Copy, Pod)]
 #[repr(C)]
 pub struct siginfo_t {
-    pub si_signo: i32,
-    pub si_errno: i32,
-    pub si_code: i32,
+    pub signo: i32,
+    pub errno: i32,
+    pub code: i32,
     _padding: i32,
     /// siginfo_fields should be a union type ( See occlum definition ). But union type have unsafe interfaces.
     /// Here we use a simple byte array.
-    siginfo_fields: siginfo_fields_t,
+    pub fields: siginfo_fields_t,
 }
 
 impl siginfo_t {
     pub fn new(num: SigNum, code: i32) -> Self {
         siginfo_t {
-            si_signo: num.as_u8() as i32,
-            si_errno: 0,
-            si_code: code,
+            signo: num.as_u8() as i32,
+            errno: 0,
+            code: code,
             _padding: 0,
-            siginfo_fields: siginfo_fields_t::zero_fields(),
+            fields: siginfo_fields_t::zero_fields(),
         }
-    }
-
-    pub fn set_si_addr(&mut self, si_addr: Vaddr) {
-        self.siginfo_fields.sigfault.addr = si_addr;
-    }
-
-    pub fn si_addr(&self) -> Vaddr {
-        // let siginfo = *self;
-        read_union_fields!(self.siginfo_fields.sigfault.addr)
     }
 }
 
 #[derive(Clone, Copy, Pod)]
 #[repr(C)]
-union siginfo_fields_t {
+pub union siginfo_fields_t {
     bytes: [u8; 128 - mem::size_of::<i32>() * 4],
-    common: siginfo_common_t,
-    sigfault: siginfo_sigfault_t,
+    pub kill: siginfo_kill_t,
+    pub timer: siginfo_timer_t,
+    pub rt: siginfo_rt_t,
+    pub sigchld: siginfo_sigchld_t,
+    pub sigfault: siginfo_sigfault_t,
+    pub sigpoll: siginfo_sigpoll_t,
+    pub sigsys: siginfo_sigsys_t,
 }
 
 impl siginfo_fields_t {
@@ -78,84 +74,103 @@ impl siginfo_fields_t {
 
 #[derive(Clone, Copy, Pod)]
 #[repr(C)]
-union siginfo_common_t {
-    first: siginfo_common_first_t,
-    second: siginfo_common_second_t,
+pub struct siginfo_kill_t {
+    pub pid: Pid, // sender's pid
+    pub uid: Uid, // sender's uid
 }
 
 #[derive(Clone, Copy, Pod)]
 #[repr(C)]
-union siginfo_common_first_t {
-    piduid: siginfo_piduid_t,
-    timer: siginfo_timer_t,
+pub struct siginfo_timer_t {
+    pub tid: i32,        // timer id
+    pub overrun: i32,    // overrun count
+    pub value: sigval_t, // Additional signal data, user defined.
+    pub private: i32,    // Not used by the kernel. Historic leftover. Always 0.
 }
 
 #[derive(Clone, Copy, Pod)]
 #[repr(C)]
-struct siginfo_piduid_t {
-    pid: Pid,
-    uid: Uid,
-}
-
-#[derive(Clone, Copy, Pod)]
-#[repr(C)]
-struct siginfo_timer_t {
-    timerid: i32,
-    overrun: i32,
-}
-
-#[derive(Clone, Copy, Pod)]
-#[repr(C)]
-union siginfo_common_second_t {
-    value: sigval_t,
-    sigchild: siginfo_sigchild_t,
+pub struct siginfo_rt_t {
+    pub pid: Pid, // sender's pid
+    pub uid: Uid, // sender's uid
+    pub value: sigval_t,
 }
 
 #[derive(Clone, Copy, Pod)]
 #[repr(C)]
 pub union sigval_t {
-    sigval_int: i32,
-    sigval_ptr: Vaddr, //*mut c_void
-}
-
-impl sigval_t {
-    pub fn read_int(&self) -> i32 {
-        read_union_fields!(self.sigval_int)
-    }
-
-    pub fn read_ptr(&self) -> Vaddr {
-        read_union_fields!(self.sigval_ptr)
-    }
+    pub sigval_int: i32,
+    pub sigval_ptr: Vaddr, //*mut c_void
 }
 
 #[derive(Clone, Copy, Pod)]
 #[repr(C)]
-union siginfo_sigchild_t {
-    status: i32,
-    utime: clock_t,
-    stime: clock_t,
+pub struct siginfo_sigchld_t {
+    pub pid: Pid,    // sender's pid
+    pub uid: Uid,    // sender's uid
+    pub status: i32, // exit code
+    pub utime: u64,  // user time consumed
+    pub stime: u64,  // system time consumed
 }
 
 #[derive(Clone, Copy, Pod)]
 #[repr(C)]
-struct siginfo_sigfault_t {
-    addr: Vaddr, //*const c_void
-    addr_lsb: i16,
-    first: siginfo_sigfault_first_t,
+pub struct siginfo_sigfault_t {
+    pub addr: Vaddr, // faulting insn/memory ref
+    pub extra: sigfault_extra_t,
 }
 
 #[derive(Clone, Copy, Pod)]
 #[repr(C)]
-union siginfo_sigfault_first_t {
-    addr_bnd: siginfo_addr_bnd_t,
-    pkey: u32,
+pub union sigfault_extra_t {
+    // used on alpha and sparc
+    pub trapno: i32, // TRAP # which caused the signal
+    // used when si_code=BUS_MCEERR_AR or si_code=BUS_MCEERR_AO
+    pub addr_lsb: i16, // LSB of the reported address
+    // used when si_code=SEGV_BNDERR
+    pub addr_bnd: sigfault_addr_bnd_t,
+    // used when si_code=SEGV_PKUERR
+    pub addr_pkey: sigfault_addr_pkey_t,
+    // used when si_code=TRAP_PERF
+    pub perf: sigfault_perf_t,
 }
 
 #[derive(Clone, Copy, Pod)]
 #[repr(C)]
-union siginfo_addr_bnd_t {
-    lower: Vaddr, // *const c_void
-    upper: Vaddr, // *const c_void,
+pub struct sigfault_addr_bnd_t {
+    pub dummy: [u8; 8],
+    pub lower: Vaddr,
+    pub upper: Vaddr,
+}
+
+#[derive(Clone, Copy, Pod)]
+#[repr(C)]
+pub struct sigfault_addr_pkey_t {
+    pub dummy: [u8; 8],
+    pub pkey: u32,
+}
+
+#[derive(Clone, Copy, Pod)]
+#[repr(C)]
+pub struct sigfault_perf_t {
+    pub data: u64,
+    pub type_: u32,
+    pub flags: u32,
+}
+
+#[derive(Clone, Copy, Pod)]
+#[repr(C)]
+pub struct siginfo_sigpoll_t {
+    pub band: u64, // POLL_IN, POLL_OUT, POLL_MSG
+    pub fd: i32,   // file descriptor
+}
+
+#[derive(Clone, Copy, Pod)]
+#[repr(C)]
+pub struct siginfo_sigsys_t {
+    pub call_addr: Vaddr, // calling user insn
+    pub syscall: i32,     // triggering system call number
+    pub arch: u32,        // AUDIT_ARCH_* of syscall
 }
 
 #[derive(Clone, Copy, Debug, Default, Pod)]
