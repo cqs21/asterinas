@@ -4,8 +4,8 @@ use super::RawSocketOption;
 use crate::{
     impl_raw_socket_option,
     net::socket::ip::stream::options::{
-        Congestion, DeferAccept, Inq, KeepIdle, MaxSegment, NoDelay, SynCnt, UserTimeout,
-        WindowClamp,
+        Congestion, DeferAccept, Inq, KeepAlive, KeepIdle, MaxSegment, NoDelay, SynCnt,
+        UserTimeout, WindowClamp,
     },
     prelude::*,
     util::net::options::SocketOption,
@@ -49,6 +49,7 @@ pub fn new_tcp_option(name: i32) -> Result<Box<dyn RawSocketOption>> {
         CTcpOptionName::NODELAY => Ok(Box::new(NoDelay::new())),
         CTcpOptionName::MAXSEG => Ok(Box::new(MaxSegment::new())),
         CTcpOptionName::KEEPIDLE => Ok(Box::new(KeepIdle::new())),
+        CTcpOptionName::KEEPALIVE => Ok(Box::new(KeepAlive::new())),
         CTcpOptionName::SYNCNT => Ok(Box::new(SynCnt::new())),
         CTcpOptionName::DEFER_ACCEPT => Ok(Box::new(DeferAccept::new())),
         CTcpOptionName::WINDOW_CLAMP => Ok(Box::new(WindowClamp::new())),
@@ -62,6 +63,7 @@ pub fn new_tcp_option(name: i32) -> Result<Box<dyn RawSocketOption>> {
 impl_raw_socket_option!(NoDelay);
 impl_raw_socket_option!(MaxSegment);
 impl_raw_socket_option!(KeepIdle);
+impl_raw_socket_option!(KeepAlive);
 impl_raw_socket_option!(SynCnt);
 impl_raw_socket_option!(DeferAccept);
 impl_raw_socket_option!(WindowClamp);

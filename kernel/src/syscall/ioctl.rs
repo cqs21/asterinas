@@ -69,3 +69,18 @@ pub fn sys_ioctl(fd: FileDesc, cmd: u32, arg: Vaddr, ctx: &Context) -> Result<Sy
     };
     Ok(SyscallReturn::Return(res as _))
 }
+
+#[derive(Debug, Pod, Copy, Clone)]
+#[repr(C)]
+pub struct IfConf {
+    pub ifc_len: i32,
+    pub ifc_buf: Vaddr,
+}
+
+const IFNAMSIZ: usize = 16;
+#[derive(Debug, Pod, Copy, Clone)]
+#[repr(C)]
+pub struct IfReq {
+    pub ifr_name: [u8; IFNAMSIZ],
+    pub ifr_union: [u8; 24],
+}

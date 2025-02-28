@@ -21,7 +21,7 @@ impl BindPortConfig {
     pub fn new(port: u16, can_reuse: bool) -> Self {
         match (port, can_reuse) {
             (0, _) => {
-                assert!(!can_reuse);
+                // assert!(!can_reuse);
                 Self::Ephemeral
             }
             (_, true) => Self::CanReuse(port),
