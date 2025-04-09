@@ -16,6 +16,8 @@ cat > $NIXOS_CONFIG <<EOF
   nixpkgs.buildPlatform.system = "$BUILD_PLATFORM";
   nixpkgs.hostPlatform.system = "$HOST_PLATFORM";
 
+  nixpkgs.config.allowUnfree = true;
+
   imports = [ $ASTER_NIX ];
 
   boot.loader.grub.enable = false;
@@ -26,6 +28,17 @@ cat > $NIXOS_CONFIG <<EOF
     busybox
     python39
     go
+    # zulu -> java
+    # sysbench
+    # membench
+    iperf
+    # lmbench
+    unixbench
+    # iozone
+    fio
+    # hackbench
+    # schbench
+    libmemcached
   ];
 
   systemd.enableCgroupAccounting = false;

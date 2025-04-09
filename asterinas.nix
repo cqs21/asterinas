@@ -1,7 +1,13 @@
 { config, lib, pkgs, ... }:
 let
+  hackbench = pkgs.callPackage ./hackbench.nix { };
+  iozone = pkgs.callPackage ./iozone.nix { };
+  lmbench = pkgs.callPackage ./lmbench.nix { };
+  membench = pkgs.callPackage ./membench.nix { };
+  # sysbench = pkgs.callPackage ./sysbench.nix { };
+  schbench = pkgs.callPackage ./schbench.nix { };
   test = pkgs.callPackage ./test.nix { };
-  packages = [ test ];
+  packages = [ hackbench iozone lmbench membench schbench test ];
 in {
   options = {
     asterinas.enable = lib.mkOption {

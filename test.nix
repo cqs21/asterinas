@@ -4,7 +4,8 @@ let
   stdenv = pkgs.stdenv;
   platform = pkgs.hostPlatform.system;
 in stdenv.mkDerivation {
-  name = "test";
+  pname = "test";
+  version = "0.0.1";
   src = fs.toSource {
     root = ./.;
     fileset = ./test/apps;
@@ -12,7 +13,7 @@ in stdenv.mkDerivation {
   buildInputs = [ pkgs.glibc.static ];
   buildCommand = ''
     if [ ${platform} == "riscv64-linux" ]; then
-      ARCH_PRE="riscv64-unknown-linux-gnu-"
+      CROSS="riscv64-unknown-linux-gnu-"
     fi
 
     BUILD_DIR=$(mktemp -d)
@@ -20,7 +21,7 @@ in stdenv.mkDerivation {
     cp -r $src/test/apps $BUILD_DIR/
 
     pushd $BUILD_DIR
-    make HOST_PLATFORM=${platform} CC="''${ARCH_PRE}gcc" --no-print-directory -C apps
+    make HOST_PLATFORM=${platform} CC="''${CROSS}gcc" --no-print-directory -C apps
     popd
 
     mkdir -p $out/test
