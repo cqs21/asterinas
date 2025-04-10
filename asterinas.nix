@@ -6,6 +6,7 @@ let
   membench = pkgs.callPackage ./membench.nix { };
   # sysbench = pkgs.callPackage ./sysbench.nix { };
   schbench = pkgs.callPackage ./schbench.nix { };
+  syscall_test = pkgs.callPackage ./syscall_test.nix { };
   test = pkgs.callPackage ./test.nix { };
   packages = [ hackbench iozone lmbench membench schbench test ];
 in {
