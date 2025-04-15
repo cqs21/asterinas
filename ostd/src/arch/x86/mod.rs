@@ -20,6 +20,7 @@ pub mod trap;
 
 use allocator::construct_io_mem_allocator_builder;
 use cfg_if::cfg_if;
+use device::i8042_keyboard;
 use spin::Once;
 use x86::cpuid::{CpuId, FeatureInfo};
 
@@ -108,6 +109,8 @@ pub(crate) unsafe fn late_init_on_bsp() {
 
     // Some driver like serial may use PIC
     kernel::pic::init();
+
+    i8042_keyboard::init();
 
     // SAFETY: All the system device memory I/Os have been removed from the builder.
     unsafe {
