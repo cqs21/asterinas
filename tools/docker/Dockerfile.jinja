@@ -29,6 +29,10 @@ RUN apt update && apt-get install -y --no-install-recommends \
     wget \
     zip
 RUN pip3 install yq tomli
+RUN sh <(curl -L https://nixos.org/nix/install) --daemon --yes \
+    && . /etc/profile.d/nix.sh \
+    && nix-env -iA nixpkgs.nixfmt \
+    && nix-collect-garbage
 
 #= Download dependency =====================================================
 

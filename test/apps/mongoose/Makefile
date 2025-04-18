@@ -19,14 +19,11 @@ CFLAGS := -W -Wall -Wextra -g -I. -I$(MONGOOSE_DIR) -DMG_ENABLE_LINES=1
 .PHONY: all 
 all: $(BINS) 
 
-$(SERVER_BIN): $(SERVER_C) $(MONGOOSE_O) | $(BUILD_DIR)
+$(SERVER_BIN): $(SERVER_C) $(MONGOOSE_C) | $(BUILD_DIR)
 	$(CC) $^ $(CFLAGS) -o $@
 
-$(CLIENT_BIN): $(CLIENT_C) $(MONGOOSE_O) | $(BUILD_DIR)
+$(CLIENT_BIN): $(CLIENT_C) $(MONGOOSE_C) | $(BUILD_DIR)
 	$(CC) $^ $(CFLAGS) -o $@
-
-$(MONGOOSE_O): $(MONGOOSE_FILES) 
-	$(CC) -c $(MONGOOSE_C) $(CFLAGS) -o $@
 
 $(MONGOOSE_FILES): | $(MONGOOSE_DIR)
 	$(ATOMIC_WGET) $@ "https://raw.githubusercontent.com/cesanta/mongoose/7.13/$(notdir $@)"  
