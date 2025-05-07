@@ -23,6 +23,10 @@ RUN apt update && apt-get install -y --no-install-recommends \
     tcl-dev \
     unzip \
     zip
+RUN sh <(curl -L https://nixos.org/nix/install) --daemon --yes \
+    && . /etc/profile.d/nix.sh \
+    && nix-env -iA nixpkgs.nixfmt \
+    && nix-collect-garbage
 
 #= Download dependency =====================================================
 
@@ -30,107 +34,6 @@ WORKDIR /opt/linux_binary_cache
 RUN wget https://raw.githubusercontent.com/asterinas/linux_vdso/2a6d2db/vdso64.so -O vdso64.so
 RUN wget https://raw.githubusercontent.com/asterinas/linux_binary_cache/14598b6/vmlinuz-5.15.0-105 \
         -O vmlinuz
-
-#= Build benchmark =========================================================
-
-FROM build-base AS build-benchmarks
-
-# Download the source files of benchmarks
-WORKDIR /root
-RUN apt install -y automake \
-    libtool \
-    pkg-config \
-    libntirpc-dev
-
-RUN wget https://github.com/akopytov/sysbench/archive/1.0.20.tar.gz \
-    && tar -zxvf 1.0.20.tar.gz \
-    && rm 1.0.20.tar.gz
-RUN git clone https://github.com/nicktehrany/membench.git
-RUN git clone https://github.com/esnet/iperf.git
-RUN git clone https://github.com/kdlucas/byte-unixbench.git
-RUN git clone https://github.com/asterinas/lmbench.git
-RUN wget https://www.iozone.org/src/current/iozone3_506.tar
-RUN tar -x -f iozone3_506.tar
-RUN git clone -b fio-3.37 https://github.com/axboe/fio.git
-RUN git clone https://git.kernel.org/pub/scm/linux/kernel/git/clrkwllms/rt-tests.git
-RUN git clone https://git.kernel.org/pub/scm/linux/kernel/git/mason/schbench.git
-RUN wget https://launchpad.net/libmemcached/1.0/1.0.18/+download/libmemcached-1.0.18.tar.gz \
-    && tar -zxvf libmemcached-1.0.18.tar.gz \
-    && rm libmemcached-1.0.18.tar.gz
-
-# Build sysbench
-WORKDIR /root/sysbench-1.0.20
-RUN ./autogen.sh \
-    && ./configure --without-mysql --prefix=/usr/local/benchmark/sysbench \
-    && make -j \
-    && make install
-
-# Build membench
-WORKDIR /root/membench
-RUN make -j \
-    && mkdir /usr/local/benchmark/membench \
-    && cp membench /usr/local/benchmark/membench/
-
-# Build iperf
-WORKDIR /root/iperf
-RUN ./configure --prefix=/usr/local/benchmark/iperf \
-    && make -j \
-    && make install
-
-# Build lmbench
-WORKDIR /root/lmbench
-RUN make -j \
-    && mv bin/x86_64-linux-gnu /usr/local/benchmark/lmbench \
-    && rm /usr/local/benchmark/lmbench/*.o \
-    && rm /usr/local/benchmark/lmbench/*.a
-
-# Build unixbench
-WORKDIR /root/byte-unixbench/UnixBench
-RUN make UB_GCC_OPTIONS=-mno-sse2 -j && mv pgms /usr/local/benchmark/unixbench
-
-# Build iozone
-WORKDIR /root/iozone3_506/src/current
-RUN CFLAGS=-static make linux-AMD64 \
-    && cp iozone /usr/local/benchmark/
-
-# Build fio
-WORKDIR /root/fio
-RUN ./configure --disable-shm --prefix=/usr/local/benchmark/fio \
-    # Remove this when we support syscall timerfd_create and fadvise
-    && sed -i -e '/#define CONFIG_HAVE_TIMERFD_CREATE/d' -e '/#define CONFIG_POSIX_FADVISE/d' config-host.h \
-    && make -j \
-    && make install
-
-# Build hackbench
-WORKDIR /root/rt-tests/src/hackbench
-RUN make hackbench \
-    && cp hackbench /usr/local/benchmark
-
-# Build schbench
-WORKDIR /root/schbench
-RUN make \
-    && cp schbench /usr/local/benchmark/
-
-# Build memaslap for memcached
-WORKDIR /root/libmemcached-1.0.18
-RUN LDFLAGS='-lpthread' CPPFLAGS='-fcommon -fpermissive' CFLAGS='-fpermissive -fcommon' \
-    ./configure --enable-memaslap --prefix=/usr/local/benchmark/libmemcached \
-    && CPPFLAGS='-fcommon' make -j \
-    && make install
-
-# Clear cached files
-WORKDIR /root
-RUN rm -rf sysbench-1.0.20 \
-    membench \
-    iperf \
-    lmbench \
-    byte-unixbench \
-    iozone3_506.tar \
-    iozone3_506 \
-    fio \
-    hackbench \
-    schbench \
-    libmemcached-1.0.18
 
 #= Install applications =======================================================
 
@@ -270,46 +173,6 @@ RUN git clone https://github.com/wg/wrk.git \
 
 RUN rm -rf wrk
 
-#= Build syscall test =========================================================
-
-FROM build-base AS build-bazel
-
-# Install bazel, which is required by the system call test suite from Gvisor project
-RUN mkdir -p /root/bazel
-COPY tools/install_bazel.sh /root/bazel/
-WORKDIR /root/bazel
-RUN ./install_bazel.sh
-RUN apt clean && rm -rf /var/lib/apt/lists/*
-WORKDIR /root
-RUN rm -rf bazel
-
-FROM build-bazel AS syscall_test
-
-# Build the syscall test binaries
-COPY test/syscall_test /root/syscall_test
-WORKDIR /root/syscall_test
-RUN export BUILD_DIR=build && \
-    make ${BUILD_DIR}/syscall_test_bins
-
-#= Build busybox ==============================================================
-
-FROM build-base AS build-busybox
-
-RUN apt clean && rm -rf /var/lib/apt/lists/*
-
-FROM build-busybox AS busybox
-
-WORKDIR /root
-RUN wget -O busybox.tar.bz2 https://busybox.net/downloads/busybox-1.35.0.tar.bz2 \
-    && mkdir /root/busybox \
-    && tar xf busybox.tar.bz2 --strip-components=1 -C /root/busybox \
-    && rm busybox.tar.bz2
-WORKDIR /root/busybox
-RUN make defconfig \
-    && sed -i "s/# CONFIG_STATIC is not set/CONFIG_STATIC=y/g" .config \
-    && sed -i "s/# CONFIG_FEATURE_SH_STANDALONE is not set/CONFIG_FEATURE_SH_STANDALONE=y/g" .config \
-    && make -j
-
 #= The final stages to produce the Asterinas development image ====================
 
 FROM build-base
@@ -339,16 +202,6 @@ RUN apt update && apt-get install -y --no-install-recommends \
     zip
 # Clean apt cache
 RUN apt clean && rm -rf /var/lib/apt/lists/*
-
-# Prepare the system call test suite
-COPY --from=syscall_test /root/syscall_test/build/syscall_test_bins /root/syscall_test_bins
-ENV ASTER_PREBUILT_SYSCALL_TEST=/root/syscall_test_bins
-
-# Install Busybox built from the previous stages
-COPY --from=busybox /root/busybox/busybox /bin/busybox
-
-# Install benchmarks built from the previous stages
-COPY --from=build-benchmarks /usr/local/benchmark /usr/local/benchmark
 
 # Install applications built from the previous stages
 COPY --from=build-applications /usr/local/redis /usr/local/redis
