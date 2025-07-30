@@ -21,6 +21,7 @@ let
     inherit crossSystem;
   };
 in rec {
+  nixos = pkgs.callPackage ./nixos { inherit linux_vdso initramfsCompressed; };
   # Packages needed by initramfs
   apps = pkgs.callPackage ./apps.nix { };
   busybox = pkgs.busybox;

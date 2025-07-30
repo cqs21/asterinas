@@ -12,7 +12,6 @@ NIXPKGS_CACHE_TTL := 2592000 # In seconds
 MKFILE_PATH := $(abspath $(lastword $(MAKEFILE_LIST)))
 CUR_DIR := $(patsubst %/,%,$(dir $(MKFILE_PATH)))
 BUILD_DIR := $(CUR_DIR)/build
-INITRAMFS := $(BUILD_DIR)/initramfs
 INITRAMFS_SKIP_GZIP ?= 0
 ifeq ($(INITRAMFS_SKIP_GZIP),1)
 INITRAMFS_IMAGE := $(BUILD_DIR)/initramfs.cpio
@@ -50,7 +49,7 @@ all: build
 build: $(INITRAMFS_IMAGE) $(EXT2_IMAGE) $(EXFAT_IMAGE)
 
 .PHONY: $(INITRAMFS_IMAGE)
-$(INITRAMFS_IMAGE): $(INITRAMFS)
+$(INITRAMFS_IMAGE):
 	@nix-build \
 		--tarball-ttl $(NIXPKGS_CACHE_TTL) \
 		--argstr target $(ARCH) \
@@ -62,21 +61,8 @@ $(INITRAMFS_IMAGE): $(INITRAMFS)
 		--arg initramfsCompressed $(INITRAMFS_COMPRESSED) \
 		--arg smp $(SMP) \
 		--out-link $@ \
-		nix -A initramfs-image
-
-.PHONY: $(INITRAMFS)
-$(INITRAMFS):
-	@nix-build \
-		--tarball-ttl $(NIXPKGS_CACHE_TTL) \
-		--argstr target $(ARCH) \
-		--arg enableBasicTest $(ENABLE_BASIC_TEST) \
-		--arg enableBenchmark $(ENABLE_BENCHMARK) \
-		--arg enableSyscallTest $(ENABLE_SYSCALL_TEST) \
-		--argstr syscallTestSuite $(SYSCALL_TEST_SUITE) \
-		--argstr syscallTestWorkDir $(SYSCALL_TEST_WORKDIR) \
-		--arg smp $(SMP) \
-		--out-link $@ \
-		nix -A initramfs
+		nix -A \
+		$(if $(filter 1, $(ENABLE_SWITCH_ROOT)), nixos.stage-1-image, initramfs-image)
 
 # Prebuild x86_64 packages
 x86_64_pkgs:
@@ -151,9 +137,27 @@ nix_gc:
 	@nix-collect-garbage -d
 	@nix-store --optimise
 
+.PHONY: $(EXT2_IMAGE)
 $(EXT2_IMAGE):
+	@rm -f $(EXT2_IMAGE)
+ifeq ($(ENABLE_SWITCH_ROOT), 0)
 	@dd if=/dev/zero of=$(EXT2_IMAGE) bs=2G count=1
 	@mke2fs $(EXT2_IMAGE)
+else
+	@nix-build \
+		--tarball-ttl $(NIXPKGS_CACHE_TTL) \
+		--argstr target $(ARCH) \
+		--arg enableBasicTest $(ENABLE_BASIC_TEST) \
+		--arg enableBenchmark $(ENABLE_BENCHMARK) \
+		--arg enableSyscallTest $(ENABLE_SYSCALL_TEST) \
+		--argstr syscallTestSuite $(SYSCALL_TEST_SUITE) \
+		--argstr syscallTestWorkDir $(SYSCALL_TEST_WORKDIR) \
+		--arg initramfsCompressed $(INITRAMFS_COMPRESSED) \
+		--arg smp $(SMP) \
+		--out-link $@ \
+		nix -A \
+		nixos.stage-2-image
+endif
 
 $(EXFAT_IMAGE):
 	@fallocate -l 64M $(EXFAT_IMAGE)

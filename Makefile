@@ -22,6 +22,7 @@ FEATURES ?=
 NO_DEFAULT_FEATURES ?= 0
 COVERAGE ?= 0
 ENABLE_BASIC_TEST ?= false
+ENABLE_SWITCH_ROOT ?= 0
 # End of global build options.
 
 # GDB debugging and profiling options.
@@ -56,6 +57,10 @@ CARGO_OSDK_COMMON_ARGS := --target-arch=$(ARCH)
 # The build arguments also apply to the `cargo osdk run` command.
 CARGO_OSDK_BUILD_ARGS := --kcmd-args="ostd.log_level=$(LOG_LEVEL)"
 CARGO_OSDK_TEST_ARGS :=
+
+ifeq ($(ENABLE_SWITCH_ROOT), 1)
+CARGO_OSDK_BUILD_ARGS += --init-args="/init root=vext2 init=/bin/bash rd.break=0"
+endif
 
 ifeq ($(AUTO_TEST), syscall)
 BUILD_SYSCALL_TEST := 1
