@@ -113,6 +113,7 @@ fn init_in_first_kthread(fs_resolver: &FsResolver) {
     // Work queue should be initialized before interrupt is enabled,
     // in case any irq handler uses work queue as bottom half
     thread::work_queue::init_in_first_kthread();
+    device::init_in_first_kthread();
     net::init_in_first_kthread();
     fs::init_in_first_kthread(fs_resolver);
     ipc::init_in_first_kthread();

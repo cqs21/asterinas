@@ -37,12 +37,14 @@ extern crate alloc;
 pub mod bio;
 pub mod id;
 mod impl_block_device;
+mod partition;
 mod prelude;
 pub mod request_queue;
+pub mod sysnode;
 
 use component::{init_component, ComponentInitError};
-use ostd::sync::SpinLock;
 use spin::Once;
+use sysnode::{BlockSysNode, DeviceManager};
 
 use self::{
     bio::{BioEnqueueError, SubmittedBio},
@@ -58,10 +60,13 @@ pub trait BlockDevice: Send + Sync + Any + Debug {
 
     /// Returns the metadata of the block device.
     fn metadata(&self) -> BlockDeviceMeta;
+
+    /// Returns a `SysTree` node that represents the block device under `/sys/block`.
+    fn sysnode(&self) -> Arc<BlockSysNode>;
 }
 
 /// Metadata for a block device.
-#[derive(Debug, Clone, Copy)]
+#[derive(Debug, Default, Clone, Copy)]
 pub struct BlockDeviceMeta {
     /// The upper limit for the number of segments per bio.
     pub max_nr_segments_per_bio: usize,
@@ -76,51 +81,28 @@ impl dyn BlockDevice {
     }
 }
 
-pub fn register_device(name: String, device: Arc<dyn BlockDevice>) {
-    COMPONENT
-        .get()
-        .unwrap()
-        .block_device_table
-        .lock()
-        .insert(name, device);
+pub fn register_device(device: Arc<dyn BlockDevice>) {
+    DEVICE_MANAGER.get().unwrap().register_device(device)
 }
 
-pub fn get_device(str: &str) -> Option<Arc<dyn BlockDevice>> {
-    COMPONENT
-        .get()
-        .unwrap()
-        .block_device_table
-        .lock()
-        .get(str)
-        .cloned()
+pub fn get_device(name: &str) -> Option<Arc<dyn BlockDevice>> {
+    DEVICE_MANAGER.get().unwrap().get_device(name)
 }
 
-pub fn all_devices() -> Vec<(String, Arc<dyn BlockDevice>)> {
-    let block_devs = COMPONENT.get().unwrap().block_device_table.lock();
-    block_devs
-        .iter()
-        .map(|(name, device)| (name.clone(), device.clone()))
-        .collect()
+pub fn all_devices() -> Vec<Arc<dyn BlockDevice>> {
+    DEVICE_MANAGER.get().unwrap().all_devices()
 }
 
-static COMPONENT: Once<Component> = Once::new();
+static DEVICE_MANAGER: Once<Arc<DeviceManager>> = Once::new();
 
 #[init_component]
-fn component_init() -> Result<(), ComponentInitError> {
-    let a = Component::init()?;
-    COMPONENT.call_once(|| a);
+fn init_early() -> Result<(), ComponentInitError> {
+    DEVICE_MANAGER.call_once(DeviceManager::new);
     Ok(())
 }
 
-#[derive(Debug)]
-struct Component {
-    block_device_table: SpinLock<BTreeMap<String, Arc<dyn BlockDevice>>>,
-}
-
-impl Component {
-    pub fn init() -> Result<Self, ComponentInitError> {
-        Ok(Self {
-            block_device_table: SpinLock::new(BTreeMap::new()),
-        })
-    }
+#[init_component("in_first_kthread")]
+fn init_in_first_kthread() -> Result<(), ComponentInitError> {
+    all_devices().iter().for_each(partition::parse);
+    Ok(())
 }
