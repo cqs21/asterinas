@@ -7,7 +7,12 @@ This crate is used for the initialization of the component system, which provide
 
 ### Register component
 
-Registering a crate as component by marking a function in the lib.rs with `#[init_component]` macro. The specific definition of the function can refer to the comments in the macro.
+Registering a crate as component by marking a function in the lib.rs with `#[init_component]` macro. You can specify initialization stage:
+
+- `#[init_component]` - uses default "early" stage
+- `#[init_component("stage-name")]` - uses specified stage
+
+The specific definition of the function can refer to the comments in the macro.
 
 ### Component initialization
 
@@ -45,7 +50,7 @@ fn init() -> Result<(), component::ComponentInitError> {
 }
 
 fn main(){
-    component::init_all(component::parse_metadata!()).unwrap();
+    component::init_all("early", component::parse_metadata!()).unwrap();
     assert_eq!(INIT_COUNT.load(Relaxed),2);
 }
 ```
