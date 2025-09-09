@@ -11,11 +11,15 @@ mod priority;
 use init_comp::ComponentInitFunction;
 use proc_macro::TokenStream;
 use quote::quote;
-use syn::parse_macro_input;
+use syn::{parse_macro_input, LitStr};
 
 pub(crate) const COMPONENT_FILE_NAME: &str = "Components.toml";
 
 /// Register a function to be called when the component system is initialized. The function should not public.
+///
+/// You can specify the initialization stage:
+/// - `#[init_component]` - uses default "early" stage
+/// - `#[init_component("stage-name")]` - uses specified stage
 ///
 /// Example:
 /// ```rust
@@ -23,7 +27,6 @@ pub(crate) const COMPONENT_FILE_NAME: &str = "Components.toml";
 /// fn init() -> Result<(), component::ComponentInitError> {
 ///     Ok(())
 /// }
-///
 /// ```
 ///
 /// It will expand to
@@ -32,26 +35,23 @@ pub(crate) const COMPONENT_FILE_NAME: &str = "Components.toml";
 ///     Ok(())
 /// }
 ///
-/// const fn file() -> &'static str{
-///     file!()
-/// }
-///
-/// component::submit!(component::ComponentRegistry::new(&init,file()));
+/// component::submit!(component::ComponentRegistry::new("early", &init, file!()));
 /// ```
 /// The priority will calculate automatically
 ///
 #[proc_macro_attribute]
-pub fn init_component(_: TokenStream, input: TokenStream) -> proc_macro::TokenStream {
+pub fn init_component(args: TokenStream, input: TokenStream) -> proc_macro::TokenStream {
+    let stage = if args.is_empty() {
+        LitStr::new("early", proc_macro2::Span::call_site())
+    } else {
+        parse_macro_input!(args as LitStr)
+    };
     let function = parse_macro_input!(input as ComponentInitFunction);
     let function_name = &function.function_name;
     quote! {
         #function
 
-        const fn file() -> &'static str{
-            file!()
-        }
-
-        component::submit!(component::ComponentRegistry::new(&#function_name,file()));
+        component::submit!(component::ComponentRegistry::new(#stage, &#function_name, file!()));
     }
     .into()
 }
@@ -65,7 +65,7 @@ pub fn init_component(_: TokenStream, input: TokenStream) -> proc_macro::TokenSt
 /// Example:
 ///
 /// ```rust
-///     component::init_all(component::parse_metadata!());
+///     component::init_all("early", component::parse_metadata!());
 /// ```
 ///
 #[proc_macro]

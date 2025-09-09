@@ -28,16 +28,22 @@ pub enum ComponentInitError {
 }
 
 pub struct ComponentRegistry {
+    stage: &'static str,
     function: &'static (dyn Fn() -> Result<(), ComponentInitError> + Sync),
     path: &'static str,
 }
 
 impl ComponentRegistry {
     pub const fn new(
+        stage: &'static str,
         function: &'static (dyn Fn() -> Result<(), ComponentInitError> + Sync),
         path: &'static str,
     ) -> Self {
-        Self { function, path }
+        Self {
+            stage,
+            function,
+            path,
+        }
     }
 }
 
@@ -46,6 +52,7 @@ inventory::collect!(ComponentRegistry);
 impl Debug for ComponentRegistry {
     fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
         f.debug_struct("ComponentRegistry")
+            .field("stage", &self.stage)
             .field("path", &self.path)
             .finish()
     }
@@ -105,17 +112,22 @@ pub enum ComponentSystemInitError {
     NotIncludeAllComponent(String),
 }
 
-/// Component system initialization. It will collect invoke all functions that are marked by init_component based on dependencies between crates.
+/// Initialize the component system for a specific stage. It collects and invokes all
+/// functions marked with `#[init_component]` (or `#[init_component("stage-name")]`) that belong
+/// to the given stage, honoring dependencies/priority between crates.
 ///
 /// The collection of ComponentInfo usually generate by `parse_metadata` macro.
 ///
 /// ```rust
-///     component::init_all(component::parse_metadata!());
+///     component::init_all("early", component::parse_metadata!());
 /// ```
 ///
-pub fn init_all(components: Vec<ComponentInfo>) -> Result<(), ComponentSystemInitError> {
+pub fn init_all(
+    stage: &str,
+    components: Vec<ComponentInfo>,
+) -> Result<(), ComponentSystemInitError> {
     let components_info = parse_input(components);
-    match_and_call(components_info)?;
+    match_and_call(stage, components_info)?;
     Ok(())
 }
 
@@ -130,10 +142,15 @@ fn parse_input(components: Vec<ComponentInfo>) -> BTreeMap<String, ComponentInfo
 
 /// Match the ComponentInfo with ComponentRegistry. The key is the relative path of one component
 fn match_and_call(
+    stage: &str,
     mut components: BTreeMap<String, ComponentInfo>,
 ) -> Result<(), ComponentSystemInitError> {
     let mut infos = Vec::new();
     for registry in inventory::iter::<ComponentRegistry> {
+        if registry.stage != stage {
+            continue;
+        }
+
         // relative/path/to/comps/pci/src/lib.rs
         let mut str: String = registry.path.to_owned();
         str = str.replace('\\', "/");
@@ -169,7 +186,7 @@ fn match_and_call(
 
     infos.sort();
     debug!("component infos: {infos:?}");
-    info!("Components initializing...");
+    info!("Components {stage} initializing...");
 
     for i in infos {
         info!("Component initializing:{:?}", i);
@@ -179,6 +196,6 @@ fn match_and_call(
             info!("Component initialize complete");
         }
     }
-    info!("All components initialization completed");
+    info!("All components {stage} initialization completed");
     Ok(())
 }
