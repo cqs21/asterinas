@@ -11,7 +11,7 @@ use super::{
     fs_resolver::{FsPath, FsResolver},
     path::Mount,
     ramfs::RamFs,
-    utils::{FileSystem, InodeMode, InodeType},
+    utils::{InodeMode, InodeType},
 };
 use crate::{fs::path::is_dot, prelude::*};
 
@@ -105,21 +105,8 @@ pub fn init_in_first_kthread(fs_resolver: &FsResolver) -> Result<()> {
             }
         }
     }
-    // Mount DevFS
-    let dev_path = fs_resolver.lookup(&FsPath::try_from("/dev")?)?;
-    dev_path.mount(RamFs::new())?;
 
     println!("[kernel] rootfs is ready");
-    Ok(())
-}
-
-pub fn mount_fs_at(
-    fs: Arc<dyn FileSystem>,
-    fs_path: &FsPath,
-    fs_resolver: &FsResolver,
-) -> Result<()> {
-    let target_path = fs_resolver.lookup(fs_path)?;
-    target_path.mount(fs)?;
     Ok(())
 }
 

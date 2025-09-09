@@ -50,7 +50,7 @@ fn init() -> core::result::Result<(), ComponentInitError> {
     let root_key = AeadKey::random();
     let device =
         MlsDisk::create(raw_disk, root_key, None).map_err(|_| ComponentInitError::Unknown)?;
-    aster_block::register_device("mlsdisk".to_string(), Arc::new(device));
+    aster_block::register_device(Arc::new(device));
     Ok(())
 }
 
@@ -132,6 +132,7 @@ impl BlockSet for RawDisk {
 mod test {
     use aster_block::{
         bio::{BioEnqueueError, BioStatus, BioType, SubmittedBio},
+        sysnode::BlockSysNode,
         BlockDevice, BlockDeviceMeta, SECTOR_SIZE,
     };
     use ostd::{
@@ -189,6 +190,10 @@ mod test {
                 max_nr_segments_per_bio: usize::MAX,
                 nr_sectors: self.blocks.size() / SECTOR_SIZE,
             }
+        }
+
+        fn sysnode(&self) -> Arc<BlockSysNode> {
+            todo!()
         }
     }
 

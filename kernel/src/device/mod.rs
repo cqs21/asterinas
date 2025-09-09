@@ -1,5 +1,6 @@
 // SPDX-License-Identifier: MPL-2.0
 
+mod block;
 mod null;
 mod pty;
 mod random;
@@ -13,19 +14,32 @@ mod tdxguest;
 
 use alloc::format;
 
+pub use block::find_block_device;
 pub use pty::{new_pty_pair, PtyMaster, PtySlave};
 pub use random::Random;
 pub use urandom::Urandom;
 
 use crate::{
-    fs::device::{add_node, Device, DeviceId, DeviceType},
+    fs::{
+        device::{add_node, Device, DeviceId, DeviceType},
+        fs_resolver::FsPath,
+        ramfs::RamFs,
+    },
     prelude::*,
 };
+
+pub fn init_in_first_kthread() {
+    block::init_in_first_kthread();
+}
 
 /// Init the device node in fs, must be called after mounting rootfs.
 pub fn init_in_first_process(ctx: &Context) -> Result<()> {
     let fs = ctx.thread_local.borrow_fs();
     let fs_resolver = fs.resolver().read();
+
+    // Mount DevFS
+    let dev_path = fs_resolver.lookup(&FsPath::try_from("/dev")?)?;
+    dev_path.mount(RamFs::new())?;
 
     let null = Arc::new(null::Null);
     add_node(null, "null", &fs_resolver)?;
@@ -59,6 +73,8 @@ pub fn init_in_first_process(ctx: &Context) -> Result<()> {
     pty::init_in_first_process(&fs_resolver)?;
 
     shm::init_in_first_process(&fs_resolver)?;
+
+    block::init_in_first_process(&fs_resolver)?;
 
     Ok(())
 }

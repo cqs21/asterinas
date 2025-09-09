@@ -10,8 +10,6 @@ mod super_block;
 mod upcase_table;
 mod utils;
 
-pub use fs::{ExfatFs, ExfatMountOptions};
-
 use crate::fs::exfat::fs::ExfatType;
 
 pub(super) fn init() {
@@ -24,6 +22,7 @@ mod test {
 
     use aster_block::{
         bio::{BioEnqueueError, BioStatus, BioType, SubmittedBio},
+        sysnode::BlockSysNode,
         BlockDevice, BlockDeviceMeta,
     };
     use ostd::{
@@ -36,7 +35,7 @@ mod test {
         fs::{
             exfat::{
                 constants::{EXFAT_RESERVED_CLUSTERS, MAX_NAME_LENGTH},
-                ExfatFs, ExfatMountOptions,
+                fs::{ExfatFs, ExfatMountOptions},
             },
             utils::{generate_random_operation, new_fs_in_memory, Inode, InodeMode, InodeType},
         },
@@ -110,6 +109,10 @@ mod test {
                 max_nr_segments_per_bio: usize::MAX,
                 nr_sectors: self.sectors_count(),
             }
+        }
+
+        fn sysnode(&self) -> Arc<BlockSysNode> {
+            todo!()
         }
     }
     /// Exfat disk image

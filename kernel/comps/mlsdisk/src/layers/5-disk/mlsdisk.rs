@@ -15,6 +15,7 @@ use core::{
     sync::atomic::{AtomicBool, Ordering},
 };
 
+use aster_block::sysnode::BlockSysNode;
 use ostd::mm::{HasSize, VmIo};
 use ostd_pod::Pod;
 
@@ -162,6 +163,10 @@ impl<D: BlockSet + 'static> aster_block::BlockDevice for MlsDisk<D> {
             max_nr_segments_per_bio: usize::MAX,
             nr_sectors: (BLOCK_SIZE / SECTOR_SIZE) * self.total_blocks(),
         }
+    }
+
+    fn sysnode(&self) -> Arc<BlockSysNode> {
+        todo!()
     }
 }
 

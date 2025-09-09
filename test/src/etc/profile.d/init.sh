@@ -7,3 +7,5 @@
 mount -t sysfs none /sys
 mount -t proc none /proc
 mount -t cgroup2 none /sys/fs/cgroup
+mount -t ext2 /dev/vda /ext2
+mount -t exfat /dev/vdb /exfat
