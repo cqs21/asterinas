@@ -15,6 +15,7 @@ use core::{
     sync::atomic::{AtomicBool, Ordering},
 };
 
+use aster_systree::SysBranchNode;
 use ostd::mm::{HasSize, VmIo};
 use ostd_pod::Pod;
 
@@ -67,6 +68,20 @@ struct DiskInner<D: BlockSet> {
     is_dropped: AtomicBool,
     /// Scope lock for control write and sync operation.
     write_sync_region: RwLock<()>,
+}
+
+impl<D: BlockSet + 'static> aster_device::Device for MlsDisk<D> {
+    fn type_(&self) -> aster_device::DeviceType {
+        aster_device::DeviceType::Block
+    }
+
+    fn id(&self) -> Option<aster_device::DeviceId> {
+        None
+    }
+
+    fn sysnode(&self) -> Arc<dyn SysBranchNode> {
+        todo!()
+    }
 }
 
 impl<D: BlockSet + 'static> aster_block::BlockDevice for MlsDisk<D> {

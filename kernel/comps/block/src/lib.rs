@@ -37,12 +37,16 @@ extern crate alloc;
 pub mod bio;
 pub mod id;
 mod impl_block_device;
+mod partition;
 mod prelude;
 pub mod request_queue;
+pub mod sysnode;
 
+use aster_device::Device;
 use component::{init_component, ComponentInitError};
 use ostd::sync::SpinLock;
 use spin::Once;
+use sysnode::{BlockSysNode, DeviceManager};
 
 use self::{
     bio::{BioEnqueueError, SubmittedBio},
@@ -52,7 +56,7 @@ use self::{
 pub const BLOCK_SIZE: usize = ostd::mm::PAGE_SIZE;
 pub const SECTOR_SIZE: usize = 512;
 
-pub trait BlockDevice: Send + Sync + Any + Debug {
+pub trait BlockDevice: Device + Send + Sync + Any + Debug {
     /// Enqueues a new `SubmittedBio` to the block device.
     fn enqueue(&self, bio: SubmittedBio) -> Result<(), BioEnqueueError>;
 
@@ -61,7 +65,7 @@ pub trait BlockDevice: Send + Sync + Any + Debug {
 }
 
 /// Metadata for a block device.
-#[derive(Debug, Clone, Copy)]
+#[derive(Debug, Default, Clone, Copy)]
 pub struct BlockDeviceMeta {
     /// The upper limit for the number of segments per bio.
     pub max_nr_segments_per_bio: usize,
@@ -76,39 +80,24 @@ impl dyn BlockDevice {
     }
 }
 
-pub fn register_device(name: String, device: Arc<dyn BlockDevice>) {
-    COMPONENT
-        .get()
-        .unwrap()
-        .block_device_table
-        .lock()
-        .insert(name, device);
+pub fn register_device(device: Arc<dyn BlockDevice>) {
+    aster_device::add_device(device.clone());
+    DEVICE_MANAGER.get().unwrap().register_device(device);
 }
 
-pub fn get_device(str: &str) -> Option<Arc<dyn BlockDevice>> {
-    COMPONENT
-        .get()
-        .unwrap()
-        .block_device_table
-        .lock()
-        .get(str)
-        .cloned()
+pub fn get_device(name: &str) -> Option<Arc<dyn BlockDevice>> {
+    DEVICE_MANAGER.get().unwrap().get_device(name)
 }
 
-pub fn all_devices() -> Vec<(String, Arc<dyn BlockDevice>)> {
-    let block_devs = COMPONENT.get().unwrap().block_device_table.lock();
-    block_devs
-        .iter()
-        .map(|(name, device)| (name.clone(), device.clone()))
-        .collect()
+pub fn all_devices() -> Vec<Arc<dyn BlockDevice>> {
+    DEVICE_MANAGER.get().unwrap().all_devices()
 }
 
-static COMPONENT: Once<Component> = Once::new();
+static DEVICE_MANAGER: Once<Arc<DeviceManager>> = Once::new();
 
 #[init_component]
-fn component_init() -> Result<(), ComponentInitError> {
-    let a = Component::init()?;
-    COMPONENT.call_once(|| a);
+fn init_early() -> Result<(), ComponentInitError> {
+    DEVICE_MANAGER.call_once(DeviceManager::new);
     Ok(())
 }
 

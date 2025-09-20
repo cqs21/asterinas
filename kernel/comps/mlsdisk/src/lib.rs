@@ -50,7 +50,7 @@ fn init() -> core::result::Result<(), ComponentInitError> {
     let root_key = AeadKey::random();
     let device =
         MlsDisk::create(raw_disk, root_key, None).map_err(|_| ComponentInitError::Unknown)?;
-    aster_block::register_device("mlsdisk".to_string(), Arc::new(device));
+    aster_block::register_device(Arc::new(device));
     Ok(())
 }
 
@@ -134,6 +134,8 @@ mod test {
         bio::{BioEnqueueError, BioStatus, BioType, SubmittedBio},
         BlockDevice, BlockDeviceMeta, SECTOR_SIZE,
     };
+    use aster_device::{Device, DeviceId, DeviceType};
+    use aster_systree::SysBranchNode;
     use ostd::{
         mm::{FrameAllocOptions, Segment, VmIo},
         prelude::*,
@@ -153,6 +155,20 @@ mod test {
                 .alloc_segment(nblocks)
                 .unwrap();
             Self { blocks }
+        }
+    }
+
+    impl Device for MemoryDisk {
+        fn type_(&self) -> DeviceType {
+            DeviceType::Block
+        }
+
+        fn id(&self) -> Option<DeviceId> {
+            None
+        }
+
+        fn sysnode(&self) -> Arc<dyn SysBranchNode> {
+            todo!()
         }
     }
 

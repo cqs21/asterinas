@@ -8,13 +8,23 @@ use alloc::{
     vec,
     vec::Vec,
 };
-use core::{fmt::Debug, hint::spin_loop};
+use core::{
+    fmt::Debug,
+    hint::spin_loop,
+    ops::Range,
+    sync::atomic::{AtomicU32, Ordering},
+};
 
 use aster_block::{
     bio::{bio_segment_pool_init, BioEnqueueError, BioStatus, BioType, SubmittedBio},
     request_queue::{BioRequest, BioRequestSingleQueue},
+    sysnode::{BlockCommonInfo, BlockExtraInfo, BlockSysNode},
     BlockDeviceMeta,
 };
+use aster_device::{
+    DeviceId, DeviceIdAllocator, DeviceType, NoConflictMinorIdAllocator, MINOR_BITS,
+};
+use aster_systree::{SysBranchNode, SysStr};
 use aster_util::mem_obj_slice::Slice;
 use id_alloc::IdAlloc;
 use log::{debug, info};
@@ -24,6 +34,7 @@ use ostd::{
     sync::SpinLock,
     Pod,
 };
+use spin::Once;
 
 use super::{BlockFeatures, VirtioBlockConfig, VirtioBlockFeature};
 use crate::{
@@ -40,18 +51,67 @@ pub struct BlockDevice {
     device: Arc<DeviceInner>,
     /// The software staging queue.
     queue: BioRequestSingleQueue,
+    device_id: DeviceId,
+    sysnode: Arc<dyn SysBranchNode>,
 }
 
+static DEVICE_ID_ALLOCATOR: Once<DeviceIdAllocator> = Once::new();
+
+/// The number of minor device numbers allocated for each virtio disk,
+/// including the whole disk and its partitions. If a disk has more than
+/// 16 partitions, the extended major:minor numbers will be assigned.
+const VIRTIO_DEVICE_MINORS: u32 = 16;
+
+/// The number of virtio block devices, used to assign minor device numbers.
+static NR_BLOCK_DEVICE: AtomicU32 = AtomicU32::new(0);
+
 impl BlockDevice {
+    /// Returns the formatted device name.
+    ///
+    /// The device name starts at "vda". The 26th device is "vdz" and the 27th is "vdaa".
+    /// The last one for two lettered suffix is "vdzz" which is followed by "vdaaa".
+    fn formatted_device_name(mut index: u32) -> String {
+        const VIRTIO_DISK_PREFIX: &str = "vd";
+
+        let mut suffix = Vec::new();
+        loop {
+            suffix.push((b'a' + (index % 26) as u8) as char);
+            index /= 26;
+            if index == 0 {
+                break;
+            }
+            index -= 1;
+        }
+        suffix.reverse();
+        let mut name = String::from(VIRTIO_DISK_PREFIX);
+        name.extend(suffix);
+        name
+    }
+
     /// Creates a new VirtIO-Block driver and registers it.
     pub(crate) fn init(transport: Box<dyn VirtioTransport>) -> Result<(), VirtioDeviceError> {
-        let is_legacy = transport.is_legacy_version();
+        if DEVICE_ID_ALLOCATOR.get().is_none() {
+            let ida = aster_device::register_device_ids(
+                DeviceType::Block,
+                0,
+                0..1 << MINOR_BITS,
+                NoConflictMinorIdAllocator::new(),
+            )
+            .unwrap();
+            DEVICE_ID_ALLOCATOR.call_once(|| ida);
+        };
+
+        let ida = DEVICE_ID_ALLOCATOR.get().unwrap();
+
         let device = DeviceInner::init(transport)?;
-        let device_id = if is_legacy {
-            // FIXME: legacy device do not support `GetId` request.
-            "legacy_blk".to_string()
-        } else {
-            device.request_device_id()
+
+        let index = NR_BLOCK_DEVICE.fetch_add(1, Ordering::Relaxed);
+        let device_id = ida.allocate(VIRTIO_DEVICE_MINORS * index).unwrap();
+        let name = Self::formatted_device_name(index);
+        let common_info = BlockCommonInfo {
+            major: device_id.major,
+            minor: device_id.minor,
+            size: device.config_manager.capacity_sectors() as u64,
         };
 
         let block_device = Arc::new(Self {
@@ -61,9 +121,11 @@ impl BlockDevice {
             queue: BioRequestSingleQueue::with_max_nr_segments_per_bio(
                 (DeviceInner::QUEUE_SIZE - 2) as usize,
             ),
+            device_id,
+            sysnode: BlockSysNode::new(SysStr::from(name), common_info, BlockExtraInfo::Device),
         });
 
-        aster_block::register_device(device_id, block_device);
+        aster_block::register_device(block_device);
 
         bio_segment_pool_init();
         Ok(())
@@ -87,6 +149,20 @@ impl BlockDevice {
         let mut support_features = BlockFeatures::from_bits_truncate(features);
         support_features.remove(BlockFeatures::MQ);
         support_features.bits
+    }
+}
+
+impl aster_device::Device for BlockDevice {
+    fn type_(&self) -> aster_device::DeviceType {
+        aster_device::DeviceType::Block
+    }
+
+    fn id(&self) -> Option<aster_device::DeviceId> {
+        Some(self.device_id)
+    }
+
+    fn sysnode(&self) -> Arc<dyn aster_systree::SysBranchNode> {
+        self.sysnode.clone()
     }
 }
 
