@@ -1,12 +1,31 @@
 // SPDX-License-Identifier: MPL-2.0
 
-use ostd::sync::SpinLock;
+use alloc::{
+    format,
+    sync::{Arc, Weak},
+};
+
+use aster_device::{Device, DeviceId, DeviceType};
+use aster_systree::{
+    inherit_sys_branch_node, BranchNodeFields, Error, SysAttrSetBuilder, SysBranchNode, SysObj,
+    SysPerms, SysStr,
+};
+use aster_util::printer::VmPrinter;
+use inherit_methods_macro::inherit_methods;
+use ostd::{
+    mm::{VmReader, VmWriter},
+    sync::SpinLock,
+};
 
 use crate::{
-    device::tty::{PushCharError, Tty, TtyDriver},
+    device::{
+        pty::UNIX98_PTY_SLAVE_ID_ALLOCATOR,
+        tty::{PushCharError, Tty, TtyDriver},
+    },
     events::IoEvents,
+    fs::{device::DeviceFile, inode_handle::FileIo},
     prelude::{return_errno_with_message, Errno, Result},
-    process::signal::Pollee,
+    process::signal::{PollHandle, Pollable, Pollee},
     util::ring_buffer::RingBuffer,
 };
 
@@ -20,16 +39,18 @@ const BUFFER_CAPACITY: usize = 8192;
 pub struct PtyDriver {
     output: SpinLock<RingBuffer<u8>>,
     pollee: Pollee,
+    device: Arc<PtyDevice>,
 }
 
 /// A pseudoterminal slave.
 pub type PtySlave = Tty<PtyDriver>;
 
 impl PtyDriver {
-    pub(super) fn new() -> Self {
+    pub(super) fn new(index: u32) -> Self {
         Self {
             output: SpinLock::new(RingBuffer::new(BUFFER_CAPACITY)),
             pollee: Pollee::new(),
+            device: PtyDevice::new(index),
         }
     }
 
@@ -115,5 +136,76 @@ impl TtyDriver for PtyDriver {
 
     fn set_font(&self, _font: aster_console::BitmapFont) -> Result<()> {
         return_errno_with_message!(Errno::ENOTTY, "the console has no support for font setting");
+    }
+
+    fn as_device(&self) -> Arc<dyn Device> {
+        self.device.clone()
+    }
+}
+
+#[derive(Debug)]
+pub struct PtyDevice {
+    id: DeviceId,
+    fields: BranchNodeFields<dyn SysBranchNode, Self>,
+}
+
+impl Device for PtyDevice {
+    fn device_type(&self) -> DeviceType {
+        DeviceType::Char
+    }
+
+    fn device_id(&self) -> Option<DeviceId> {
+        Some(self.id)
+    }
+
+    fn sysnode(&self) -> Arc<dyn SysBranchNode> {
+        self.weak_self().upgrade().unwrap()
+    }
+
+    fn as_any(&self) -> &dyn core::any::Any {
+        self
+    }
+}
+
+inherit_sys_branch_node!(PtyDevice, fields, {
+    fn perms(&self) -> SysPerms {
+        SysPerms::DEFAULT_RW_PERMS
+    }
+});
+
+#[inherit_methods(from = "self.fields")]
+impl PtyDevice {
+    pub fn init_parent(&self, parent: Weak<dyn SysBranchNode>);
+    pub fn weak_self(&self) -> &Weak<Self>;
+    pub fn child(&self, name: &str) -> Option<Arc<dyn SysBranchNode>>;
+    pub fn add_child(&self, new_child: Arc<dyn SysBranchNode>) -> aster_systree::Result<()>;
+    pub fn remove_child(&self, child_name: &str) -> aster_systree::Result<Arc<dyn SysBranchNode>>;
+}
+
+impl PtyDevice {
+    fn new(index: u32) -> Arc<Self> {
+        let id = UNIX98_PTY_SLAVE_ID_ALLOCATOR
+            .get()
+            .unwrap()
+            .allocate(index)
+            .unwrap();
+        let name = SysStr::from(format!("{}", index));
+
+        let builder = SysAttrSetBuilder::new();
+        let attrs = builder.build().expect("Failed to build attribute set");
+
+        Arc::new_cyclic(|weak_self| PtyDevice {
+            id,
+            fields: BranchNodeFields::new(name, attrs, weak_self.clone()),
+        })
+    }
+}
+
+impl Drop for PtyDevice {
+    fn drop(&mut self) {
+        UNIX98_PTY_SLAVE_ID_ALLOCATOR
+            .get()
+            .unwrap()
+            .release(self.id.minor());
     }
 }

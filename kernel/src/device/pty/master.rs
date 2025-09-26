@@ -2,11 +2,13 @@
 
 use alloc::format;
 
+use aster_device::{Device, DeviceId};
 use ostd::task::Task;
 
 use super::{driver::PtyDriver, PtySlave};
 use crate::{
     current_userspace,
+    device::pty::{PtmxDevice, PTMX},
     events::IoEvents,
     fs::{
         devpts::DevPts,
@@ -41,7 +43,7 @@ pub struct PtyMaster {
 
 impl PtyMaster {
     pub(super) fn new(ptmx: Arc<dyn Inode>, index: u32) -> Arc<Self> {
-        let slave = PtySlave::new(index, PtyDriver::new());
+        let slave = PtySlave::new(index, PtyDriver::new(index));
 
         Arc::new(Self { ptmx, slave })
     }

@@ -5,9 +5,9 @@
 
 use super::*;
 use crate::{
-    device::PtySlave,
+    device::{tty::TtyDriver, PtySlave},
     events::IoEvents,
-    fs::inode_handle::FileIo,
+    fs::{device::DeviceFile, inode_handle::FileIo},
     process::signal::{PollHandle, Pollable},
 };
 
@@ -144,7 +144,7 @@ impl Inode for PtySlaveInode {
         self.fs.upgrade().unwrap()
     }
 
-    fn as_device(&self) -> Option<Arc<dyn Device>> {
+    fn as_device(&self) -> Option<Arc<dyn DeviceFile>> {
         Some(self.device.clone())
     }
 }
