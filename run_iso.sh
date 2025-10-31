@@ -1,7 +1,7 @@
 #!/bin/bash
 
 rm -f asterinas.img
-dd if=/dev/zero of=asterinas.img bs=1M count=4096
+dd if=/dev/zero of=asterinas.img bs=1M count=8192
 
 qemu-system-x86_64 \
 	-cpu host -smp 1 -m 8G -enable-kvm \

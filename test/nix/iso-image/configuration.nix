@@ -55,6 +55,8 @@
     '';
     boot.postBootCommands = ''
       echo "Executing postBootCommands..."
+      echo "nameserver 30.64.127.127" > /etc/resolv.conf
+      PATH=$PATH:/nix/var/nix/profiles/system/sw/bin
       ${pkgs.bash}/bin/sh
     '';
     system.systemBuilderCommands = ''
@@ -65,6 +67,14 @@
       ln -s ${config.asterinas.kernel} $out/kernel
       ln -s ${config.asterinas.initramfs}/initrd $out/initrd
     '';
+
+    networking.nameservers = [ "30.64.127.127" ];
+
+    nix.settings = {
+      filter-syscalls = false;
+      require-sigs = false;
+      sandbox = false;
+    };
 
     systemd.enableCgroupAccounting = false;
 
