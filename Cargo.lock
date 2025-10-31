@@ -95,9 +95,12 @@ name = "aster-block"
 version = "0.1.0"
 dependencies = [
  "align_ext",
+ "aster-device",
+ "aster-systree",
  "aster-util",
  "bitvec",
  "component",
+ "inherit-methods-macro",
  "int-to-c-enum",
  "log",
  "ostd",
@@ -179,6 +182,8 @@ version = "0.1.0"
 dependencies = [
  "aes-gcm",
  "aster-block",
+ "aster-device",
+ "aster-systree",
  "bittle",
  "component",
  "ctr",
@@ -352,6 +357,7 @@ dependencies = [
  "aster-bigtcp",
  "aster-block",
  "aster-console",
+ "aster-device",
  "aster-input",
  "aster-network",
  "aster-pci",
@@ -362,6 +368,7 @@ dependencies = [
  "bitflags 1.3.2",
  "component",
  "id-alloc",
+ "inherit-methods-macro",
  "int-to-c-enum",
  "log",
  "ostd",

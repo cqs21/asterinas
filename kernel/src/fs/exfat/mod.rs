@@ -10,8 +10,6 @@ mod super_block;
 mod upcase_table;
 mod utils;
 
-pub use fs::{ExfatFs, ExfatMountOptions};
-
 use crate::fs::exfat::fs::ExfatType;
 
 pub(super) fn init() {
@@ -26,18 +24,18 @@ mod test {
         bio::{BioEnqueueError, BioStatus, BioType, SubmittedBio},
         BlockDevice, BlockDeviceMeta,
     };
+    use aster_device::{Device, DeviceId, DeviceIdAllocator, DeviceType};
+    use aster_systree::SysBranchNode;
     use ostd::{
         mm::{io_util::HasVmReaderWriter, FrameAllocOptions, Segment, VmIo, PAGE_SIZE},
         prelude::*,
     };
     use rand::{rngs::SmallRng, RngCore, SeedableRng};
 
+    use super::fs::{ExfatFs, ExfatMountOptions};
     use crate::{
         fs::{
-            exfat::{
-                constants::{EXFAT_RESERVED_CLUSTERS, MAX_NAME_LENGTH},
-                ExfatFs, ExfatMountOptions,
-            },
+            exfat::constants::{EXFAT_RESERVED_CLUSTERS, MAX_NAME_LENGTH},
             utils::{generate_random_operation, new_fs_in_memory, Inode, InodeMode, InodeType},
         },
         prelude::*,
@@ -81,6 +79,20 @@ mod test {
         }
     }
 
+    impl Device for ExfatMemoryDisk {
+        fn type_(&self) -> DeviceType {
+            DeviceType::Block
+        }
+
+        fn id(&self) -> Option<DeviceId> {
+            None
+        }
+
+        fn sysnode(&self) -> Arc<dyn SysBranchNode> {
+            todo!()
+        }
+    }
+
     impl BlockDevice for ExfatMemoryDisk {
         fn enqueue(&self, bio: SubmittedBio) -> core::prelude::v1::Result<(), BioEnqueueError> {
             let start_device_ofs = bio.sid_range().start.to_raw() as usize * SECTOR_SIZE;
@@ -110,6 +122,10 @@ mod test {
                 max_nr_segments_per_bio: usize::MAX,
                 nr_sectors: self.sectors_count(),
             }
+        }
+
+        fn id_allocator(&self) -> &'static DeviceIdAllocator {
+            todo!()
         }
     }
     /// Exfat disk image

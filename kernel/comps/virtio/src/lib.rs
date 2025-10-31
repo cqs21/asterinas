@@ -4,6 +4,7 @@
 #![no_std]
 #![deny(unsafe_code)]
 #![feature(trait_alias)]
+#![feature(trait_upcasting)]
 #![feature(linked_list_cursors)]
 
 extern crate alloc;
@@ -11,6 +12,7 @@ extern crate alloc;
 use alloc::boxed::Box;
 use core::hint::spin_loop;
 
+use aster_device::{register_device_ids, DeviceIdAllocator, DeviceType, MINOR_BITS};
 use bitflags::bitflags;
 use component::{init_component, ComponentInitError};
 use device::{
@@ -22,6 +24,7 @@ use device::{
     VirtioDeviceType,
 };
 use log::{error, warn};
+use spin::Once;
 use transport::{mmio::VIRTIO_MMIO_DRIVER, pci::VIRTIO_PCI_DRIVER, DeviceStatus};
 
 use crate::transport::VirtioTransport;
@@ -31,8 +34,17 @@ mod dma_buf;
 pub mod queue;
 mod transport;
 
+/// The upper limit for virtio block device minor numbers (not included).
+const VIRTIO_BLOCK_MINOR_MAX: u32 = 1 << MINOR_BITS;
+
+static VIRTIO_BLOCK_ID_ALLOCATOR: Once<DeviceIdAllocator> = Once::new();
+
 #[init_component]
 fn virtio_component_init() -> Result<(), ComponentInitError> {
+    VIRTIO_BLOCK_ID_ALLOCATOR.call_once(|| {
+        register_device_ids(DeviceType::Block, 0, 0..VIRTIO_BLOCK_MINOR_MAX).unwrap()
+    });
+
     // Find all devices and register them to the corresponding crate
     transport::init();
     // For vsock table static init
