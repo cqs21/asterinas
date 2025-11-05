@@ -1,5 +1,6 @@
 // SPDX-License-Identifier: MPL-2.0
 
+mod disk;
 mod mem;
 pub mod misc;
 mod pty;
@@ -20,6 +21,10 @@ use crate::{
     prelude::*,
 };
 
+pub fn init_in_first_kthread() {
+    disk::init_in_first_kthread();
+}
+
 /// Init the device node in fs, must be called after mounting rootfs.
 pub fn init_in_first_process(ctx: &Context) -> Result<()> {
     let fs = ctx.thread_local.borrow_fs();
@@ -29,6 +34,7 @@ pub fn init_in_first_process(ctx: &Context) -> Result<()> {
     let dev_path = fs_resolver.lookup(&FsPath::try_from("/dev")?)?;
     dev_path.mount(RamFs::new(), PerMountFlags::default(), ctx)?;
 
+    disk::init_in_first_process();
     mem::init_in_first_process();
     tty::init_in_first_process();
     misc::init_in_first_process();

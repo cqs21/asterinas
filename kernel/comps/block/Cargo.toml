@@ -12,8 +12,11 @@ align_ext = { path = "../../../ostd/libs/align_ext" }
 int-to-c-enum = { path = "../../libs/int-to-c-enum" }
 aster-util = { path = "../../libs/aster-util" }
 component = { path = "../../libs/comp-sys/component" }
+aster-device = { path = "../device" }
+aster-systree = { path = "../systree" }
 log = "0.4"
 bitvec = { version = "1.0.1", default-features = false, features = ["alloc"] }
+inherit-methods-macro = { git = "https://github.com/asterinas/inherit-methods-macro", rev = "98f7e3e" }
 
 [lints]
 workspace = true

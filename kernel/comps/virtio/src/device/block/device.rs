@@ -3,25 +3,35 @@
 use alloc::{
     boxed::Box,
     collections::BTreeMap,
-    string::{String, ToString},
-    sync::Arc,
-    vec,
+    format,
+    string::String,
+    sync::{Arc, Weak},
     vec::Vec,
 };
-use core::{fmt::Debug, hint::spin_loop};
+use core::{
+    fmt::Debug,
+    sync::atomic::{AtomicU32, Ordering},
+};
 
 use aster_block::{
+    alloc_extended_device_id,
     bio::{bio_segment_pool_init, BioEnqueueError, BioStatus, BioType, SubmittedBio},
     request_queue::{BioRequest, BioRequestSingleQueue},
-    BlockDeviceMeta,
+    BlockDeviceMeta, PartitionInfo, PartitionNode, LEGACY_PARTITION_LIMIT,
 };
-use aster_util::mem_obj_slice::Slice;
+use aster_device::{Device, DeviceId, DeviceIdAllocator, DeviceType};
+use aster_systree::{
+    inherit_sys_branch_node, BranchNodeFields, Error, SysAttrSetBuilder, SysBranchNode, SysObj,
+    SysPerms, SysStr,
+};
+use aster_util::{mem_obj_slice::Slice, printer::VmPrinter};
 use id_alloc::IdAlloc;
+use inherit_methods_macro::inherit_methods;
 use log::{debug, info};
 use ostd::{
     arch::trap::TrapFrame,
-    mm::{DmaDirection, DmaStream, FrameAllocOptions, HasSize, VmIo},
-    sync::SpinLock,
+    mm::{DmaDirection, DmaStream, FrameAllocOptions, HasSize, VmIo, VmWriter},
+    sync::{Mutex, SpinLock},
     Pod,
 };
 
@@ -33,37 +43,139 @@ use crate::{
     },
     queue::VirtQueue,
     transport::{ConfigManager, VirtioTransport},
+    VIRTIO_BLOCK_ID_ALLOCATOR,
 };
+
+/// The number of minor device numbers allocated for each virtio disk,
+/// including the whole disk and its partitions. If a disk has more than
+/// 16 partitions, the extended major:minor numbers will be assigned.
+const VIRTIO_DEVICE_MINORS: u32 = 16;
+
+/// The number of virtio block devices, used to assign minor device numbers.
+static NR_BLOCK_DEVICE: AtomicU32 = AtomicU32::new(0);
 
 #[derive(Debug)]
 pub struct BlockDevice {
     device: Arc<DeviceInner>,
     /// The software staging queue.
     queue: BioRequestSingleQueue,
+    partitions: Mutex<Option<Vec<Arc<PartitionNode>>>>,
+    id: DeviceId,
+    fields: BranchNodeFields<dyn SysBranchNode, Self>,
+}
+
+impl Device for BlockDevice {
+    fn type_(&self) -> DeviceType {
+        DeviceType::Block
+    }
+
+    fn id(&self) -> Option<DeviceId> {
+        Some(self.id)
+    }
+
+    fn sysnode(&self) -> Arc<dyn SysBranchNode> {
+        self.weak_self().upgrade().unwrap()
+    }
+}
+
+inherit_sys_branch_node!(BlockDevice, fields, {
+    fn perms(&self) -> SysPerms {
+        SysPerms::DEFAULT_RW_PERMS
+    }
+
+    fn read_attr_at(
+        &self,
+        name: &str,
+        offset: usize,
+        writer: &mut VmWriter,
+    ) -> aster_systree::Result<usize> {
+        // Check if attribute exists
+        if !self.fields.attr_set().contains(name) {
+            return Err(Error::NotFound);
+        }
+
+        let attr = self.fields.attr_set().get(name).unwrap();
+        // Check if attribute is readable
+        if !attr.perms().can_read() {
+            return Err(Error::PermissionDenied);
+        }
+
+        let mut printer = VmPrinter::new_skip(writer, offset);
+        let res = match name {
+            "dev" => writeln!(printer, "{}:{}", self.id.major(), self.id.minor()),
+            "size" => writeln!(printer, "{}", self.device.config_manager.capacity_sectors()),
+            _ => Ok(()),
+        };
+        res.map_err(|_| Error::AttributeError)?;
+
+        Ok(printer.bytes_written())
+    }
+});
+
+#[inherit_methods(from = "self.fields")]
+impl BlockDevice {
+    pub fn init_parent(&self, parent: Weak<dyn SysBranchNode>);
+    pub fn weak_self(&self) -> &Weak<Self>;
+    pub fn child(&self, name: &str) -> Option<Arc<dyn SysBranchNode>>;
+    pub fn add_child(&self, new_child: Arc<dyn SysBranchNode>) -> aster_systree::Result<()>;
+    pub fn remove_child(&self, child_name: &str) -> aster_systree::Result<Arc<dyn SysBranchNode>>;
 }
 
 impl BlockDevice {
+    /// Returns the formatted device name.
+    ///
+    /// The device name starts at "vda". The 26th device is "vdz" and the 27th is "vdaa".
+    /// The last one for two lettered suffix is "vdzz" which is followed by "vdaaa".
+    fn formatted_device_name(mut index: u32) -> String {
+        const VIRTIO_DISK_PREFIX: &str = "vd";
+
+        let mut suffix = Vec::new();
+        loop {
+            suffix.push((b'a' + (index % 26) as u8) as char);
+            index /= 26;
+            if index == 0 {
+                break;
+            }
+            index -= 1;
+        }
+        suffix.reverse();
+        let mut name = String::from(VIRTIO_DISK_PREFIX);
+        name.extend(suffix);
+        name
+    }
+
     /// Creates a new VirtIO-Block driver and registers it.
     pub(crate) fn init(transport: Box<dyn VirtioTransport>) -> Result<(), VirtioDeviceError> {
-        let is_legacy = transport.is_legacy_version();
         let device = DeviceInner::init(transport)?;
-        let device_id = if is_legacy {
-            // FIXME: legacy device do not support `GetId` request.
-            "legacy_blk".to_string()
-        } else {
-            device.request_device_id()
-        };
 
-        let block_device = Arc::new(Self {
+        let index = NR_BLOCK_DEVICE.fetch_add(1, Ordering::Relaxed);
+        let id = VIRTIO_BLOCK_ID_ALLOCATOR
+            .get()
+            .unwrap()
+            .allocate(index * VIRTIO_DEVICE_MINORS)
+            .unwrap();
+        let name = Self::formatted_device_name(index);
+
+        let mut builder = SysAttrSetBuilder::new();
+        // Add common attributes.
+        builder.add(SysStr::from("dev"), SysPerms::DEFAULT_RO_ATTR_PERMS);
+        builder.add(SysStr::from("size"), SysPerms::DEFAULT_RO_ATTR_PERMS);
+        builder.add(SysStr::from("uevent"), SysPerms::DEFAULT_RW_ATTR_PERMS);
+        let attrs = builder.build().expect("Failed to build attribute set");
+
+        let block_device = Arc::new_cyclic(|weak_self| BlockDevice {
             device,
             // Each bio request includes an additional 1 request and 1 response descriptor,
             // therefore this upper bound is set to (QUEUE_SIZE - 2).
             queue: BioRequestSingleQueue::with_max_nr_segments_per_bio(
                 (DeviceInner::QUEUE_SIZE - 2) as usize,
             ),
+            partitions: Mutex::new(None),
+            id,
+            fields: BranchNodeFields::new(SysStr::from(name), attrs, weak_self.clone()),
         });
 
-        aster_block::register_device(device_id, block_device);
+        aster_block::register_device(block_device);
 
         bio_segment_pool_init();
         Ok(())
@@ -100,6 +212,64 @@ impl aster_block::BlockDevice for BlockDevice {
             max_nr_segments_per_bio: self.queue.max_nr_segments_per_bio(),
             nr_sectors: self.device.config_manager.capacity_sectors(),
         }
+    }
+
+    fn id_allocator(&self) -> &'static DeviceIdAllocator {
+        VIRTIO_BLOCK_ID_ALLOCATOR.get().unwrap()
+    }
+
+    fn set_partitions(&self, infos: Vec<Option<PartitionInfo>>) {
+        let mut new_partitions = Vec::new();
+        for (index, info_opt) in infos.iter().enumerate() {
+            let Some(info) = info_opt else {
+                continue;
+            };
+
+            let index = index as u32 + 1;
+            let id = if index < LEGACY_PARTITION_LIMIT {
+                self.id_allocator()
+                    .allocate(self.id.minor() + index)
+                    .unwrap()
+            } else {
+                alloc_extended_device_id(0)
+            };
+            let name = format!("{}{}", self.name(), index);
+            let device = self.weak_self().clone();
+
+            let partition = PartitionNode::new(index, id, name, device, *info);
+            new_partitions.push(partition);
+        }
+
+        let mut partitions = self.partitions.lock();
+        if let Some(old_partitions) = partitions.as_ref() {
+            old_partitions.iter().for_each(|p| {
+                let _ = self.remove_child(p.name());
+            });
+        };
+
+        new_partitions.iter().for_each(|p| {
+            let _ = self.add_child(p.clone());
+        });
+
+        *partitions = Some(new_partitions);
+    }
+
+    fn partitions(&self) -> Option<Vec<Arc<dyn aster_block::BlockDevice>>> {
+        let partitions = self.partitions.lock();
+        let devices = partitions
+            .as_ref()?
+            .iter()
+            .map(|p| p.clone() as Arc<dyn aster_block::BlockDevice>)
+            .collect();
+        Some(devices)
+    }
+}
+
+impl Drop for BlockDevice {
+    fn drop(&mut self) {
+        use aster_block::BlockDevice;
+
+        self.id_allocator().release(self.id.minor());
     }
 }
 
@@ -238,73 +408,6 @@ impl DeviceInner {
 
     fn handle_config_change(&self) {
         info!("Virtio block device config space change");
-    }
-
-    // TODO: Most logic is the same as read and write, there should be a refactor.
-    // TODO: Should return an Err instead of panic if the device fails.
-    fn request_device_id(&self) -> String {
-        let id = self.id_allocator.disable_irq().lock().alloc().unwrap();
-        let req_slice = {
-            let req_slice = Slice::new(&self.block_requests, id * REQ_SIZE..(id + 1) * REQ_SIZE);
-            let req = BlockReq {
-                type_: ReqType::GetId as _,
-                reserved: 0,
-                sector: 0,
-            };
-            req_slice.write_val(0, &req).unwrap();
-            req_slice.sync().unwrap();
-            req_slice
-        };
-
-        let resp_slice = {
-            let resp_slice =
-                Slice::new(&self.block_responses, id * RESP_SIZE..(id + 1) * RESP_SIZE);
-            resp_slice.write_val(0, &BlockResp::default()).unwrap();
-            resp_slice
-        };
-        const MAX_ID_LENGTH: usize = 20;
-        let device_id_stream = {
-            let segment = FrameAllocOptions::new()
-                .zeroed(false)
-                .alloc_segment(1)
-                .unwrap();
-            Arc::new(DmaStream::map(segment.into(), DmaDirection::FromDevice, false).unwrap())
-        };
-        let device_id_slice = Slice::new(&device_id_stream, 0..MAX_ID_LENGTH);
-        let outputs = vec![&device_id_slice, &resp_slice];
-
-        let mut queue = self.queue.disable_irq().lock();
-        let token = queue
-            .add_dma_buf(&[&req_slice], outputs.as_slice())
-            .expect("add queue failed");
-        if queue.should_notify() {
-            queue.notify();
-        }
-        while !queue.can_pop() {
-            spin_loop();
-        }
-        queue.pop_used_with_token(token).expect("pop used failed");
-
-        resp_slice.sync().unwrap();
-        self.id_allocator.disable_irq().lock().free(id);
-        let resp: BlockResp = resp_slice.read_val(0).unwrap();
-        match RespStatus::try_from(resp.status).unwrap() {
-            RespStatus::Ok => {}
-            _ => panic!("io error in block device"),
-        };
-
-        let device_id = {
-            device_id_slice.sync().unwrap();
-            let mut device_id = vec![0u8; MAX_ID_LENGTH];
-            let _ = device_id_slice.read_bytes(0, &mut device_id);
-            let len = device_id
-                .iter()
-                .position(|&b| b == 0)
-                .unwrap_or(MAX_ID_LENGTH);
-            device_id.truncate(len);
-            device_id
-        };
-        String::from_utf8(device_id).unwrap()
     }
 
     /// Reads data from the device, this function is non-blocking.

@@ -5,7 +5,8 @@
 #![feature(let_chains)]
 #![feature(negative_impls)]
 #![feature(slice_as_chunks)]
-#![expect(dead_code, unused_imports)]
+#![allow(unfulfilled_lint_expectations)]
+#![expect(dead_code, deprecated, unused_imports)]
 
 mod error;
 mod layers;
@@ -50,7 +51,7 @@ fn init() -> core::result::Result<(), ComponentInitError> {
     let root_key = AeadKey::random();
     let device =
         MlsDisk::create(raw_disk, root_key, None).map_err(|_| ComponentInitError::Unknown)?;
-    aster_block::register_device("mlsdisk".to_string(), Arc::new(device));
+    aster_block::register_device(Arc::new(device));
     Ok(())
 }
 
@@ -134,6 +135,8 @@ mod test {
         bio::{BioEnqueueError, BioStatus, BioType, SubmittedBio},
         BlockDevice, BlockDeviceMeta, SECTOR_SIZE,
     };
+    use aster_device::{Device, DeviceId, DeviceIdAllocator, DeviceType};
+    use aster_systree::SysBranchNode;
     use ostd::{
         mm::{FrameAllocOptions, Segment, VmIo},
         prelude::*,
@@ -153,6 +156,20 @@ mod test {
                 .alloc_segment(nblocks)
                 .unwrap();
             Self { blocks }
+        }
+    }
+
+    impl Device for MemoryDisk {
+        fn type_(&self) -> DeviceType {
+            DeviceType::Block
+        }
+
+        fn id(&self) -> Option<DeviceId> {
+            None
+        }
+
+        fn sysnode(&self) -> Arc<dyn SysBranchNode> {
+            todo!()
         }
     }
 
@@ -189,6 +206,10 @@ mod test {
                 max_nr_segments_per_bio: usize::MAX,
                 nr_sectors: self.blocks.size() / SECTOR_SIZE,
             }
+        }
+
+        fn id_allocator(&self) -> &'static DeviceIdAllocator {
+            todo!()
         }
     }
 
