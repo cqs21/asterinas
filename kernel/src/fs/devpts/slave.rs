@@ -8,6 +8,7 @@ use crate::{
     device::PtySlave,
     events::IoEvents,
     fs::{
+        device::DeviceFile,
         inode_handle::FileIo,
         utils::{AccessMode, StatusFlags},
     },
