@@ -20,6 +20,7 @@ use super::{
 };
 use crate::{
     fs::{
+        device::DeviceId,
         path::{is_dot, is_dot_or_dotdot, is_dotdot},
         utils::{
             Extension, FallocMode, Inode as _, InodeMode, Metadata, Permission, XattrName,
@@ -88,8 +89,10 @@ impl Inode {
 
     pub fn metadata(&self) -> Metadata {
         let inner = self.inner.read();
+        let fs = self.fs.upgrade().unwrap();
+        let (major, minor) = fs.block_device().id();
         Metadata {
-            dev: 0, // TODO: ID of block device
+            dev: DeviceId::new(major, minor).as_encoded_u64(),
             ino: self.ino() as _,
             size: inner.file_size() as _,
             blk_size: BLOCK_SIZE,
