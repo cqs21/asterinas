@@ -34,14 +34,19 @@
 extern crate alloc;
 
 pub mod bio;
+mod device_id;
 pub mod id;
 mod impl_block_device;
+mod partition;
 mod prelude;
 pub mod request_queue;
 
 use component::{init_component, ComponentInitError};
-use ostd::sync::SpinLock;
-use spin::Once;
+pub use device_id::{
+    allocate_extended_device_id, register_device_ids, release_extended_device_id, DeviceIdAllocator,
+};
+use ostd::sync::Mutex;
+pub use partition::{PartitionInfo, PartitionNode};
 
 use self::{
     bio::{BioEnqueueError, SubmittedBio},
@@ -57,10 +62,32 @@ pub trait BlockDevice: Send + Sync + Any + Debug {
 
     /// Returns the metadata of the block device.
     fn metadata(&self) -> BlockDeviceMeta;
+
+    /// Returns the name of the block device.
+    fn name(&self) -> &str;
+
+    /// Returns the device ID of the block device.
+    fn id(&self) -> (u32, u32);
+
+    /// Returns the device ID allocator of the block device.
+    fn id_allocator(&self) -> Arc<DeviceIdAllocator>;
+
+    /// Returns whether the block device is a partition.
+    fn is_partition(&self) -> bool {
+        false
+    }
+
+    /// Sets the partitions of the block device.
+    fn set_partitions(&self, _infos: Vec<Option<PartitionInfo>>) {}
+
+    /// Returns the partitions of the block device.
+    fn partitions(&self) -> Option<Vec<Arc<dyn BlockDevice>>> {
+        None
+    }
 }
 
 /// Metadata for a block device.
-#[derive(Debug, Clone, Copy)]
+#[derive(Debug, Default, Clone, Copy)]
 pub struct BlockDeviceMeta {
     /// The upper limit for the number of segments per bio.
     pub max_nr_segments_per_bio: usize,
@@ -75,51 +102,53 @@ impl dyn BlockDevice {
     }
 }
 
-pub fn register_device(name: String, device: Arc<dyn BlockDevice>) {
-    COMPONENT
-        .get()
-        .unwrap()
-        .block_device_table
-        .lock()
-        .insert(name, device);
+/// Adds a block device to the manager.
+pub fn add_device(name: String, device: Arc<dyn BlockDevice>) {
+    if device.is_partition() {
+        return;
+    }
+
+    let _ = DEVICE_TABLE.lock().insert(name, device);
 }
 
-pub fn get_device(str: &str) -> Option<Arc<dyn BlockDevice>> {
-    COMPONENT
-        .get()
-        .unwrap()
-        .block_device_table
-        .lock()
-        .get(str)
-        .cloned()
+/// Removes the block device with the given name.
+pub fn remove_device(name: &str) {
+    let _ = DEVICE_TABLE.lock().remove(name);
 }
 
-pub fn all_devices() -> Vec<(String, Arc<dyn BlockDevice>)> {
-    let block_devs = COMPONENT.get().unwrap().block_device_table.lock();
-    block_devs
-        .iter()
-        .map(|(name, device)| (name.clone(), device.clone()))
-        .collect()
+/// Returns the block device with the given name, maybe a partition.
+pub fn get_device(name: &str) -> Option<Arc<dyn BlockDevice>> {
+    let devices = DEVICE_TABLE.lock();
+    let (key, device) = devices.iter().find(|(key, _)| name.contains(*key))?;
+
+    if key == name {
+        return Some(device.clone());
+    }
+
+    let partitions = device.partitions()?;
+    partitions.into_iter().find(|p| p.name() == name)
 }
 
-static COMPONENT: Once<Component> = Once::new();
+/// Returns all block devices, excluding partitions.
+pub fn all_devices() -> Vec<Arc<dyn BlockDevice>> {
+    DEVICE_TABLE.lock().values().cloned().collect()
+}
+
+static DEVICE_TABLE: Mutex<BTreeMap<String, Arc<dyn BlockDevice>>> = Mutex::new(BTreeMap::new());
 
 #[init_component]
-fn component_init() -> Result<(), ComponentInitError> {
-    let a = Component::init()?;
-    COMPONENT.call_once(|| a);
+fn init() -> Result<(), ComponentInitError> {
+    device_id::init();
+
     Ok(())
 }
 
-#[derive(Debug)]
-struct Component {
-    block_device_table: SpinLock<BTreeMap<String, Arc<dyn BlockDevice>>>,
-}
-
-impl Component {
-    pub fn init() -> Result<Self, ComponentInitError> {
-        Ok(Self {
-            block_device_table: SpinLock::new(BTreeMap::new()),
-        })
+#[init_component(process)]
+fn init_in_first_process() -> Result<(), component::ComponentInitError> {
+    for device in DEVICE_TABLE.lock().values() {
+        let partitions = partition::parse(device);
+        device.set_partitions(partitions);
     }
+
+    Ok(())
 }

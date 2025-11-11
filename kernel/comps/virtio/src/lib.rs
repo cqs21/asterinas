@@ -8,9 +8,10 @@
 
 extern crate alloc;
 
-use alloc::boxed::Box;
+use alloc::{boxed::Box, sync::Arc};
 use core::hint::spin_loop;
 
+use aster_block::{register_device_ids, DeviceIdAllocator};
 use bitflags::bitflags;
 use component::{init_component, ComponentInitError};
 use device::{
@@ -22,6 +23,7 @@ use device::{
     VirtioDeviceType,
 };
 use log::{error, warn};
+use spin::Once;
 use transport::{mmio::VIRTIO_MMIO_DRIVER, pci::VIRTIO_PCI_DRIVER, DeviceStatus};
 
 use crate::transport::VirtioTransport;
@@ -31,8 +33,12 @@ mod dma_buf;
 pub mod queue;
 mod transport;
 
+static VIRTIO_BLOCK_ID_ALLOCATOR: Once<Arc<DeviceIdAllocator>> = Once::new();
+
 #[init_component]
 fn virtio_component_init() -> Result<(), ComponentInitError> {
+    VIRTIO_BLOCK_ID_ALLOCATOR.call_once(|| Arc::new(register_device_ids(0).unwrap()));
+
     // Find all devices and register them to the corresponding crate
     transport::init();
     // For vsock table static init

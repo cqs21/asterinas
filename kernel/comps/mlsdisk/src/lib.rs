@@ -5,7 +5,8 @@
 #![feature(let_chains)]
 #![feature(negative_impls)]
 #![feature(slice_as_chunks)]
-#![expect(dead_code, unused_imports)]
+#![allow(unfulfilled_lint_expectations)]
+#![expect(dead_code, deprecated, unused_imports)]
 
 mod error;
 mod layers;
@@ -50,7 +51,7 @@ fn init() -> core::result::Result<(), ComponentInitError> {
     let root_key = AeadKey::random();
     let device =
         MlsDisk::create(raw_disk, root_key, None).map_err(|_| ComponentInitError::Unknown)?;
-    aster_block::register_device("mlsdisk".to_string(), Arc::new(device));
+    aster_block::add_device("mlsdisk".to_string(), Arc::new(device));
     Ok(())
 }
 
@@ -132,7 +133,7 @@ impl BlockSet for RawDisk {
 mod test {
     use aster_block::{
         bio::{BioEnqueueError, BioStatus, BioType, SubmittedBio},
-        BlockDevice, BlockDeviceMeta, SECTOR_SIZE,
+        BlockDevice, BlockDeviceMeta, DeviceIdAllocator, SECTOR_SIZE,
     };
     use ostd::{
         mm::{FrameAllocOptions, Segment, VmIo},
@@ -189,6 +190,18 @@ mod test {
                 max_nr_segments_per_bio: usize::MAX,
                 nr_sectors: self.blocks.size() / SECTOR_SIZE,
             }
+        }
+
+        fn name(&self) -> &str {
+            todo!()
+        }
+
+        fn id(&self) -> (u32, u32) {
+            todo!()
+        }
+
+        fn id_allocator(&self) -> Arc<DeviceIdAllocator> {
+            todo!()
         }
     }
 

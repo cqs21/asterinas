@@ -1,5 +1,6 @@
 // SPDX-License-Identifier: MPL-2.0
 
+mod disk;
 mod full;
 mod null;
 mod pty;
@@ -27,6 +28,10 @@ use crate::{
     },
     prelude::*,
 };
+
+pub fn init_in_first_kthread() {
+    disk::init_in_first_kthread();
+}
 
 /// Init the device node in fs, must be called after mounting rootfs.
 pub fn init_in_first_process(ctx: &Context) -> Result<()> {
@@ -72,6 +77,8 @@ pub fn init_in_first_process(ctx: &Context) -> Result<()> {
     pty::init_in_first_process(&fs_resolver, ctx)?;
 
     shm::init_in_first_process(&fs_resolver, ctx)?;
+
+    disk::init_in_first_process(&fs_resolver)?;
 
     Ok(())
 }
