@@ -27,6 +27,7 @@ pub struct PtyDriver {
     pollee: Pollee,
     is_master_closed: AtomicBool,
     opened_slaves: AtomicUsize,
+    has_opened: AtomicBool,
 }
 
 /// A pseudoterminal slave.
@@ -39,6 +40,7 @@ impl PtyDriver {
             pollee: Pollee::new(),
             is_master_closed: AtomicBool::new(false),
             opened_slaves: AtomicUsize::new(0),
+            has_opened: AtomicBool::new(false),
         }
     }
 
@@ -49,7 +51,7 @@ impl PtyDriver {
 
         let mut output = self.output.lock();
         if output.is_empty() {
-            if self.opened_slaves.load(Ordering::Relaxed) == 0 {
+            if self.opened_slaves.load(Ordering::Relaxed) == 0 && self.has_opened() {
                 return_errno_with_message!(
                     Errno::EIO,
                     "the pty master does not have opened slaves"
@@ -78,6 +80,14 @@ impl PtyDriver {
 
     pub(super) fn opened_slaves(&self) -> &AtomicUsize {
         &self.opened_slaves
+    }
+
+    pub(super) fn has_opened(&self) -> bool {
+        self.has_opened.load(Ordering::Relaxed)
+    }
+
+    pub(super) fn set_has_opened(&self) {
+        self.has_opened.store(true, Ordering::Relaxed);
     }
 }
 

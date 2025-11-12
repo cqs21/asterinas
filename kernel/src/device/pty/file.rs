@@ -24,7 +24,8 @@ impl PtySlaveFile {
             .driver()
             .opened_slaves()
             .fetch_add(1, Ordering::Relaxed);
-        slave.driver().pollee().invalidate();
+        slave.driver().set_has_opened();
+        slave.driver().pollee().notify(IoEvents::IN);
         PtySlaveFile(slave)
     }
 }

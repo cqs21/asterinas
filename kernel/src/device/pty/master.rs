@@ -62,7 +62,9 @@ impl PtyMaster {
             events |= IoEvents::OUT;
         }
 
-        if self.slave.driver().opened_slaves().load(Ordering::Relaxed) == 0 {
+        if self.slave.driver().opened_slaves().load(Ordering::Relaxed) == 0
+            && self.slave.driver().has_opened()
+        {
             events |= IoEvents::HUP;
         }
 
