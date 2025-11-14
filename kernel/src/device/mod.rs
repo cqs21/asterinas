@@ -1,24 +1,18 @@
 // SPDX-License-Identifier: MPL-2.0
 
+mod char;
 mod disk;
-mod full;
-mod null;
+mod mem;
+pub mod misc;
 mod pty;
-mod random;
 mod shm;
 pub mod tty;
-mod urandom;
-mod zero;
-
-#[cfg(all(target_arch = "x86_64", feature = "cvm_guest"))]
-pub mod tdxguest;
 
 use alloc::format;
 
 use device_id::DeviceId;
+pub use mem::{getrandom, geturandom};
 pub use pty::{new_pty_pair, PtyMaster, PtySlave};
-pub use random::Random;
-pub use urandom::Urandom;
 
 use crate::{
     fs::{
@@ -32,6 +26,8 @@ use crate::{
 
 pub fn init_in_first_kthread() {
     disk::init_in_first_kthread();
+    mem::init_in_first_kthread();
+    misc::init_in_first_kthread();
 }
 
 /// Init the device node in fs, must be called after mounting rootfs.
@@ -43,11 +39,7 @@ pub fn init_in_first_process(ctx: &Context) -> Result<()> {
     let dev_path = fs_resolver.lookup(&FsPath::try_from("/dev")?)?;
     dev_path.mount(RamFs::new(), PerMountFlags::default(), ctx)?;
 
-    let null = Arc::new(null::Null);
-    add_node(null, "null", &fs_resolver)?;
-
-    let zero = Arc::new(zero::Zero);
-    add_node(zero, "zero", &fs_resolver)?;
+    char::init_in_first_process(&fs_resolver)?;
 
     tty::init();
 
@@ -60,20 +52,6 @@ pub fn init_in_first_process(ctx: &Context) -> Result<()> {
     for (index, tty) in tty::iter_n_tty().enumerate() {
         add_node(tty.clone(), &format!("tty{}", index), &fs_resolver)?;
     }
-
-    #[cfg(target_arch = "x86_64")]
-    ostd::if_tdx_enabled!({
-        add_node(Arc::new(tdxguest::TdxGuest), "tdx_guest", &fs_resolver)?;
-    });
-
-    let random = Arc::new(random::Random);
-    add_node(random, "random", &fs_resolver)?;
-
-    let urandom = Arc::new(urandom::Urandom);
-    add_node(urandom, "urandom", &fs_resolver)?;
-
-    let full = Arc::new(full::Full);
-    add_node(full, "full", &fs_resolver)?;
 
     pty::init_in_first_process(&fs_resolver, ctx)?;
 
@@ -88,16 +66,11 @@ pub fn init_in_first_process(ctx: &Context) -> Result<()> {
 // Instead of hardcoding every device numbers in this function,
 // a registration mechanism should be used to allow each driver to
 // allocate device IDs either statically or dynamically.
-pub fn get_device(devid: DeviceId) -> Result<Arc<dyn Device>> {
-    let major = devid.major().get();
-    let minor = devid.minor().get();
-
-    match (major, minor) {
-        (1, 3) => Ok(Arc::new(null::Null)),
-        (1, 5) => Ok(Arc::new(zero::Zero)),
-        (5, 0) => Ok(Arc::new(tty::TtyDevice)),
-        (1, 8) => Ok(Arc::new(random::Random)),
-        (1, 9) => Ok(Arc::new(urandom::Urandom)),
-        _ => return_errno_with_message!(Errno::EINVAL, "the device ID is invalid or unsupported"),
-    }
+pub fn get_device(id: DeviceId) -> Result<Arc<dyn Device>> {
+    char::lookup(id)
+        .map(|char| char.as_device())
+        .ok_or(Error::with_message(
+            Errno::EINVAL,
+            "the device ID is invalid or unsupported",
+        ))
 }

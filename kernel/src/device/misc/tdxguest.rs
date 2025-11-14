@@ -1,10 +1,11 @@
 // SPDX-License-Identifier: MPL-2.0
 
+use alloc::sync::{Arc, Weak};
 use core::{mem::size_of, time::Duration};
 
 use align_ext::AlignExt;
 use aster_util::{field_ptr, safe_ptr::SafePtr};
-use device_id::{DeviceId, MajorId, MinorId};
+use device_id::{DeviceId, MinorId};
 use ostd::{
     mm::{DmaCoherent, FrameAllocOptions, HasPaddr, HasSize, VmIo, PAGE_SIZE},
     sync::WaitQueue,
@@ -16,6 +17,7 @@ use tdx_guest::{
 };
 
 use crate::{
+    device::char::CharDevice,
     events::IoEvents,
     fs::{
         device::{Device, DeviceType},
@@ -36,15 +38,48 @@ pub struct TdxReportRequest {
     tdx_report: [u8; TDX_REPORT_LEN],
 }
 
-pub struct TdxGuest;
+const TDX_GUEST_MINOR: u32 = 0x7b;
+
+/// The `/dev/tdx_guest` device.
+#[derive(Debug)]
+pub struct TdxGuest {
+    id: DeviceId,
+    weak_self: Weak<Self>,
+}
+
+impl TdxGuest {
+    pub fn new() -> Arc<Self> {
+        let major = super::MISC_MAJOR.get().unwrap().get();
+        let minor = MinorId::new(TDX_GUEST_MINOR);
+
+        Arc::new_cyclic(|weak| Self {
+            id: DeviceId::new(major, minor),
+            weak_self: weak.clone(),
+        })
+    }
+}
 
 impl Device for TdxGuest {
     fn type_(&self) -> DeviceType {
-        DeviceType::Misc
+        DeviceType::Char
     }
 
     fn id(&self) -> DeviceId {
-        DeviceId::new(MajorId::new(0xa), MinorId::new(0x7b))
+        self.id
+    }
+}
+
+impl CharDevice for TdxGuest {
+    fn name(&self) -> &str {
+        "tdx_guest"
+    }
+
+    fn id(&self) -> DeviceId {
+        self.id
+    }
+
+    fn as_device(&self) -> Arc<dyn Device> {
+        self.weak_self.upgrade().unwrap()
     }
 }
 
