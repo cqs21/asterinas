@@ -1062,7 +1062,7 @@ impl InodeInner {
 
     pub fn write_link(&mut self, target: &str) -> Result<()> {
         if target.len() <= MAX_FAST_SYMLINK_LEN {
-            return self.inode_impl.write_link(target);
+            return self.inode_impl.write_fast_link(target);
         }
 
         self.page_cache.resize(target.len())?;
@@ -1076,8 +1076,8 @@ impl InodeInner {
 
     pub fn read_link(&self) -> Result<String> {
         let file_size = self.inode_impl.file_size();
-        if file_size <= MAX_FAST_SYMLINK_LEN {
-            return self.inode_impl.read_link();
+        if self.inode_impl.desc.is_fast_symlink() {
+            return self.inode_impl.read_fast_link();
         }
 
         let mut symlink = vec![0u8; file_size];
@@ -1335,16 +1335,14 @@ impl InodeImpl {
         device_id
     }
 
-    pub fn read_link(&self) -> Result<String> {
+    pub fn read_fast_link(&self) -> Result<String> {
         let symlink_str = core::str::from_utf8(&self.desc.block_ptrs.as_bytes()[..self.desc.size])?;
         Ok(symlink_str.to_owned())
     }
 
-    pub fn write_link(&mut self, target: &str) -> Result<()> {
+    pub fn write_fast_link(&mut self, target: &str) -> Result<()> {
         let target_len = target.len();
         self.desc.block_ptrs.as_bytes_mut()[..target_len].copy_from_slice(target.as_bytes());
-        self.block_manager.block_ptrs.write().as_bytes_mut()[..target_len]
-            .copy_from_slice(target.as_bytes());
         if self.desc.size != target_len {
             self.resize(target_len)?;
         }
@@ -2204,9 +2202,7 @@ impl InodeDesc {
     ///
     /// Ext2 allows the `block_count` to exceed the actual number of blocks utilized.
     pub fn blocks_count(&self) -> Ext2Bid {
-        let blocks = self.size_to_blocks(self.size);
-        debug_assert!(blocks <= sectors_to_blocks(self.sector_count));
-        blocks
+        sectors_to_blocks(self.sector_count)
     }
 
     fn size_to_blocks(&self, size: usize) -> Ext2Bid {
@@ -2214,6 +2210,18 @@ impl InodeDesc {
             return 0;
         }
         size.div_ceil(BLOCK_SIZE) as Ext2Bid
+    }
+
+    /// Returns whether the inode is a fast symlink.
+    ///
+    /// Reference: <https://elixir.bootlin.com/linux/v6.18/source/fs/ext2/inode.c#L48-L55>.
+    fn is_fast_symlink(&self) -> bool {
+        if self.type_ != InodeType::SymLink {
+            return false;
+        }
+
+        let extra_sectors = self.acl.map_or(0, |_| blocks_to_sectors(1));
+        self.sector_count == extra_sectors
     }
 }
 
