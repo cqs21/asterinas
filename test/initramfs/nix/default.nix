@@ -22,6 +22,7 @@ let
     inherit crossSystem;
   };
 in rec {
+  jtreg = pkgs.callPackage ./jtreg.nix { };
   # Packages needed by initramfs
   apps = pkgs.callPackage ./apps.nix { testPlatform = basicTestPlatform; };
   busybox = pkgs.busybox;
