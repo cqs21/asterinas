@@ -248,6 +248,10 @@ impl Pollable for InodeHandle {
 }
 
 impl FileLike for InodeHandle {
+    fn supports_epoll(&self) -> bool {
+        self.file_io.is_some()
+    }
+
     fn read(&self, writer: &mut VmWriter) -> Result<usize> {
         if !self.rights.contains(Rights::READ) {
             return_errno_with_message!(Errno::EBADF, "the file is not opened readable");

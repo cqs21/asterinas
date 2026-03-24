@@ -96,6 +96,13 @@ impl EpollFile {
     ) -> Result<()> {
         self.warn_unsupported_flags(&ep_flags);
 
+        if !file.supports_epoll() {
+            return_errno_with_message!(
+                Errno::EPERM,
+                "the target file descriptor does not support epoll"
+            );
+        }
+
         // Add the new entry to the interest list and start monitoring its events
         let ready_entry = {
             let mut interest = self.interest.lock();

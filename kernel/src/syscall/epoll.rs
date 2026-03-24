@@ -60,6 +60,10 @@ pub fn sys_epoll_ctl(
         epfd, op, fd, event_addr
     );
 
+    if fd == epfd {
+        return_errno_with_message!(Errno::EINVAL, "epoll fd cannot watch itself");
+    }
+
     const EPOLL_CTL_ADD: i32 = 1;
     const EPOLL_CTL_DEL: i32 = 2;
     const EPOLL_CTL_MOD: i32 = 3;

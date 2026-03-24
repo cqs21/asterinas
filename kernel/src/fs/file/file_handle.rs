@@ -20,6 +20,15 @@ use crate::{
 
 /// The basic operations defined on a file
 pub trait FileLike: Pollable + Send + Sync + Any {
+    /// Returns whether this file descriptor can be monitored by `epoll`.
+    ///
+    /// Linux rejects `epoll_ctl(EPOLL_CTL_ADD)` with `EPERM` for some file
+    /// types such as regular files, even though other polling APIs may treat
+    /// them as always ready.
+    fn supports_epoll(&self) -> bool {
+        true
+    }
+
     fn read(&self, writer: &mut VmWriter) -> Result<usize> {
         return_errno_with_message!(Errno::EBADF, "the file is not valid for reading");
     }
