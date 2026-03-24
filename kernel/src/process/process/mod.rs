@@ -808,24 +808,6 @@ impl Process {
     }
 }
 
-/// Enqueues a process-directed kernel signal asynchronously.
-///
-/// This is the asynchronous version of [`Process::enqueue_signal`]. By asynchronous, this method
-/// submits a work item and returns, so this method doesn't sleep and can be used in atomic mode.
-pub fn enqueue_signal_async(process: Weak<Process>, signum: SigNum) {
-    use super::signal::signals::kernel::KernelSignal;
-    use crate::thread::work_queue;
-
-    work_queue::submit_work_func(
-        move || {
-            if let Some(process) = process.upgrade() {
-                process.enqueue_signal(Box::new(KernelSignal::new(signum)));
-            }
-        },
-        work_queue::WorkPriority::High,
-    );
-}
-
 /// Broadcasts a process-directed kernel signal asynchronously.
 ///
 /// This is the asynchronous version of [`ProcessGroup::broadcast_signal`]. By asynchronous, this

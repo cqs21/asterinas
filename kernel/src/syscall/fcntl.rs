@@ -7,13 +7,22 @@ use crate::{
     fs::{
         file::{
             FileLike, StatusFlags,
-            file_table::{FdFlags, FileDesc, WithFileTable, get_file_fast},
+            file_table::{FdFlags, FileAsyncOwner, FileDesc, WithFileTable, get_file_fast},
         },
         ramfs::memfd::{FileSeals, MemfdInodeHandle},
         vfs::range_lock::{FileRange, OFFSET_MAX, RangeLockItem, RangeLockType},
     },
     prelude::*,
-    process::{Pid, ResourceType, process_table},
+    process::{
+        Pgid, Pid, ResourceType,
+        posix_thread::thread_table,
+        process_table,
+        signal::{
+            constants::{SIGIO, SIGKILL, SIGSTOP},
+            sig_num::SigNum,
+        },
+    },
+    thread::Tid,
 };
 
 pub fn sys_fcntl(fd: FileDesc, cmd: i32, arg: u64, ctx: &Context) -> Result<SyscallReturn> {
@@ -36,6 +45,10 @@ pub fn sys_fcntl(fd: FileDesc, cmd: i32, arg: u64, ctx: &Context) -> Result<Sysc
         FcntlCmd::F_GETLEASE => handle_getlease(fd, ctx),
         FcntlCmd::F_GETOWN => handle_getown(fd, ctx),
         FcntlCmd::F_SETOWN => handle_setown(fd, arg, ctx),
+        FcntlCmd::F_SETSIG => handle_setsig(fd, arg, ctx),
+        FcntlCmd::F_GETSIG => handle_getsig(fd, ctx),
+        FcntlCmd::F_SETOWN_EX => handle_setown_ex(fd, arg, ctx),
+        FcntlCmd::F_GETOWN_EX => handle_getown_ex(fd, arg, ctx),
         FcntlCmd::F_SETPIPE_SZ => handle_setpipe_sz(fd, arg, ctx),
         FcntlCmd::F_GETPIPE_SZ => handle_getpipe_sz(fd, ctx),
         FcntlCmd::F_ADD_SEALS => handle_addseal(fd, arg, ctx),
@@ -150,33 +163,69 @@ fn handle_setlk(
 fn handle_getown(fd: FileDesc, ctx: &Context) -> Result<SyscallReturn> {
     let mut file_table = ctx.thread_local.borrow_file_table_mut();
     file_table.read_with(|inner| {
-        let pid = inner.get_entry(fd)?.owner().unwrap_or(0);
-        Ok(SyscallReturn::Return(pid as _))
+        let owner = inner.get_entry(fd)?.owner();
+        let value = match owner {
+            None => 0,
+            Some(FileAsyncOwner::Thread(tid)) => tid as i32,
+            Some(FileAsyncOwner::Process(pid)) => pid as i32,
+            Some(FileAsyncOwner::ProcessGroup(pgid)) => -(pgid as i32),
+        };
+        Ok(SyscallReturn::Return(value as _))
     })
 }
 
 fn handle_setown(fd: FileDesc, arg: u64, ctx: &Context) -> Result<SyscallReturn> {
-    // A process ID is specified as a positive value; a process group ID is specified as a negative value.
-    let abs_arg = (arg as i32).unsigned_abs();
-    if abs_arg > i32::MAX as u32 {
-        return_errno_with_message!(Errno::EINVAL, "process (group) id overflowed");
-    }
-    let pid = Pid::try_from(abs_arg)
-        .map_err(|_| Error::with_message(Errno::EINVAL, "invalid process (group) id"))?;
-
-    let owner_process = if pid == 0 {
-        None
-    } else {
-        Some(process_table::get_process(pid).ok_or(Error::with_message(
-            Errno::ESRCH,
-            "cannot set_owner with an invalid pid",
-        ))?)
-    };
+    let owner = file_async_owner_from_setown_arg(arg)?;
 
     let file_table = ctx.thread_local.borrow_file_table();
     let mut file_table_locked = file_table.unwrap().write();
     let file_entry = file_table_locked.get_entry_mut(fd)?;
-    file_entry.set_owner(owner_process.as_ref())?;
+    file_entry.set_owner(owner)?;
+    Ok(SyscallReturn::Return(0))
+}
+
+fn handle_setsig(fd: FileDesc, arg: u64, ctx: &Context) -> Result<SyscallReturn> {
+    let signal = signal_from_setsig_arg(arg)?;
+
+    let file_table = ctx.thread_local.borrow_file_table();
+    let mut file_table_locked = file_table.unwrap().write();
+    let file_entry = file_table_locked.get_entry_mut(fd)?;
+    file_entry.set_signal(signal)?;
+    Ok(SyscallReturn::Return(0))
+}
+
+fn handle_getsig(fd: FileDesc, ctx: &Context) -> Result<SyscallReturn> {
+    let mut file_table = ctx.thread_local.borrow_file_table_mut();
+    file_table.read_with(|inner| {
+        let signal = inner
+            .get_entry(fd)?
+            .signal()
+            .map_or(0, |signal| signal.as_u8());
+        Ok(SyscallReturn::Return(signal as _))
+    })
+}
+
+fn handle_setown_ex(fd: FileDesc, arg: u64, ctx: &Context) -> Result<SyscallReturn> {
+    let owner_ex_ptr = arg as Vaddr;
+    let owner_ex = ctx.user_space().read_val::<f_owner_ex>(owner_ex_ptr)?;
+    let owner = owner_ex.try_to_async_owner()?;
+
+    let file_table = ctx.thread_local.borrow_file_table();
+    let mut file_table_locked = file_table.unwrap().write();
+    let file_entry = file_table_locked.get_entry_mut(fd)?;
+    file_entry.set_owner(owner)?;
+    Ok(SyscallReturn::Return(0))
+}
+
+fn handle_getown_ex(fd: FileDesc, arg: u64, ctx: &Context) -> Result<SyscallReturn> {
+    let owner_ex_ptr = arg as Vaddr;
+    let mut file_table = ctx.thread_local.borrow_file_table_mut();
+    let owner_ex = file_table.read_with(|inner| {
+        inner
+            .get_entry(fd)
+            .map(|entry| f_owner_ex::from_async_owner(entry.owner()))
+    })?;
+    ctx.user_space().write_val(owner_ex_ptr, &owner_ex)?;
     Ok(SyscallReturn::Return(0))
 }
 
@@ -255,6 +304,10 @@ enum FcntlCmd {
     F_SETLKW = 7,
     F_SETOWN = 8,
     F_GETOWN = 9,
+    F_SETSIG = 10,
+    F_GETSIG = 11,
+    F_SETOWN_EX = 15,
+    F_GETOWN_EX = 16,
     F_SETLEASE = 1024,
     F_GETLEASE = 1025,
     F_DUPFD_CLOEXEC = 1030,
@@ -262,6 +315,91 @@ enum FcntlCmd {
     F_GETPIPE_SZ = 1032,
     F_ADD_SEALS = 1033,
     F_GET_SEALS = 1034,
+}
+
+#[expect(non_camel_case_types)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, TryFromInt)]
+#[repr(i32)]
+enum FOwnerType {
+    F_OWNER_TID = 0,
+    F_OWNER_PID = 1,
+    F_OWNER_PGRP = 2,
+}
+
+#[repr(C)]
+#[derive(Debug, Copy, Clone, Pod)]
+struct f_owner_ex {
+    type_: i32,
+    pid: i32,
+}
+
+impl f_owner_ex {
+    fn from_async_owner(owner: Option<FileAsyncOwner>) -> Self {
+        match owner {
+            Some(FileAsyncOwner::Thread(tid)) => Self {
+                type_: FOwnerType::F_OWNER_TID as i32,
+                pid: tid as i32,
+            },
+            Some(FileAsyncOwner::Process(pid)) => Self {
+                type_: FOwnerType::F_OWNER_PID as i32,
+                pid: pid as i32,
+            },
+            Some(FileAsyncOwner::ProcessGroup(pgid)) => Self {
+                type_: FOwnerType::F_OWNER_PGRP as i32,
+                pid: pgid as i32,
+            },
+            None => Self {
+                type_: FOwnerType::F_OWNER_PID as i32,
+                pid: 0,
+            },
+        }
+    }
+
+    fn try_to_async_owner(&self) -> Result<Option<FileAsyncOwner>> {
+        if self.pid == 0 {
+            return Ok(None);
+        }
+
+        let owner_type = FOwnerType::try_from(self.type_)?;
+        let pid = u32::try_from(self.pid)
+            .map_err(|_| Error::with_message(Errno::EINVAL, "invalid owner id"))?;
+
+        match owner_type {
+            FOwnerType::F_OWNER_TID => {
+                let tid = Tid::try_from(pid)
+                    .map_err(|_| Error::with_message(Errno::EINVAL, "invalid thread id"))?;
+                if thread_table::get_thread(tid).is_none() {
+                    return_errno_with_message!(
+                        Errno::ESRCH,
+                        "cannot set owner with an invalid tid"
+                    );
+                }
+                Ok(Some(FileAsyncOwner::Thread(tid)))
+            }
+            FOwnerType::F_OWNER_PID => {
+                let process_pid = Pid::try_from(pid)
+                    .map_err(|_| Error::with_message(Errno::EINVAL, "invalid process id"))?;
+                if process_table::get_process(process_pid).is_none() {
+                    return_errno_with_message!(
+                        Errno::ESRCH,
+                        "cannot set owner with an invalid pid"
+                    );
+                }
+                Ok(Some(FileAsyncOwner::Process(process_pid)))
+            }
+            FOwnerType::F_OWNER_PGRP => {
+                let pgid = Pgid::try_from(pid)
+                    .map_err(|_| Error::with_message(Errno::EINVAL, "invalid process group id"))?;
+                if process_table::get_process_group(&pgid).is_none() {
+                    return_errno_with_message!(
+                        Errno::ESRCH,
+                        "cannot set owner with an invalid pgid"
+                    );
+                }
+                Ok(Some(FileAsyncOwner::ProcessGroup(pgid)))
+            }
+        }
+    }
 }
 
 #[expect(non_camel_case_types)]
@@ -356,4 +494,51 @@ fn lease_type_from_arg(arg: u64) -> Result<RangeLockType> {
     let lease_type =
         u16::try_from(arg).map_err(|_| Error::with_message(Errno::EINVAL, "invalid lease type"))?;
     Ok(RangeLockType::try_from(lease_type)?)
+}
+
+fn file_async_owner_from_setown_arg(arg: u64) -> Result<Option<FileAsyncOwner>> {
+    let owner_id = arg as i32;
+    if owner_id == 0 {
+        return Ok(None);
+    }
+
+    if owner_id > 0 {
+        let pid = u32::try_from(owner_id)
+            .map_err(|_| Error::with_message(Errno::EINVAL, "invalid process id"))?;
+        let pid = Pid::try_from(pid)
+            .map_err(|_| Error::with_message(Errno::EINVAL, "invalid process id"))?;
+        if process_table::get_process(pid).is_none() {
+            return_errno_with_message!(Errno::ESRCH, "cannot set owner with an invalid pid");
+        }
+        return Ok(Some(FileAsyncOwner::Process(pid)));
+    }
+
+    let pgid = owner_id.unsigned_abs();
+    let pgid = Pgid::try_from(pgid)
+        .map_err(|_| Error::with_message(Errno::EINVAL, "invalid process group id"))?;
+    if process_table::get_process_group(&pgid).is_none() {
+        return_errno_with_message!(Errno::ESRCH, "cannot set owner with an invalid pgid");
+    }
+    Ok(Some(FileAsyncOwner::ProcessGroup(pgid)))
+}
+
+fn signal_from_setsig_arg(arg: u64) -> Result<Option<SigNum>> {
+    if arg == 0 {
+        return Ok(None);
+    }
+
+    let signal = u8::try_from(arg)
+        .map_err(|_| Error::with_message(Errno::EINVAL, "invalid signal number"))?;
+    let signal = SigNum::try_from(signal)?;
+    if signal == SIGKILL || signal == SIGSTOP {
+        return_errno_with_message!(
+            Errno::EINVAL,
+            "SIGKILL and SIGSTOP are not allowed for F_SETSIG"
+        );
+    }
+    if signal == SIGIO {
+        return Ok(None);
+    }
+
+    Ok(Some(signal))
 }

@@ -9,10 +9,12 @@ use crate::{
     events::{IoEvents, Observer},
     prelude::*,
     process::{
-        Pid, Process,
+        Pgid, Pid,
         posix_thread::FileTableRefMut,
-        signal::{PollAdaptor, constants::SIGIO},
+        process_table,
+        signal::{PollAdaptor, constants::SIGIO, sig_num::SigNum, signals::kernel::KernelSignal},
     },
+    thread::Tid,
 };
 
 pub type FileDesc = i32;
@@ -271,7 +273,8 @@ pub(crate) use get_file_fast;
 pub struct FileTableEntry {
     file: Arc<dyn FileLike>,
     flags: AtomicU8,
-    owner: Option<Owner>,
+    owner: Option<OwnerRegistration>,
+    signal: Option<SigNum>,
 }
 
 impl FileTableEntry {
@@ -280,6 +283,7 @@ impl FileTableEntry {
             file,
             flags: AtomicU8::new(flags.bits()),
             owner: None,
+            signal: None,
         }
     }
 
@@ -287,8 +291,8 @@ impl FileTableEntry {
         &self.file
     }
 
-    pub fn owner(&self) -> Option<Pid> {
-        self.owner.as_ref().map(|(pid, _)| *pid)
+    pub fn owner(&self) -> Option<FileAsyncOwner> {
+        self.owner.as_ref().map(|registration| registration.target)
     }
 
     /// Set a process (group) as owner of the file descriptor.
@@ -296,20 +300,31 @@ impl FileTableEntry {
     /// Such that this process (group) will receive `SIGIO` and `SIGURG` signals
     /// for I/O events on the file descriptor, if `O_ASYNC` status flag is set
     /// on this file.
-    pub fn set_owner(&mut self, owner: Option<&Arc<Process>>) -> Result<()> {
-        let Some(process) = owner else {
+    pub fn set_owner(&mut self, owner: Option<FileAsyncOwner>) -> Result<()> {
+        let Some(target) = owner else {
             self.owner = None;
             return Ok(());
         };
 
-        let mut poller = PollAdaptor::with_observer(OwnerObserver::new(
+        self.owner = Some(OwnerRegistration::new(
             self.file.clone(),
-            Arc::downgrade(process),
-        ));
-        self.file
-            .poll(IoEvents::IN | IoEvents::OUT, Some(poller.as_handle_mut()));
+            target,
+            self.signal,
+        )?);
 
-        self.owner = Some((process.pid(), poller));
+        Ok(())
+    }
+
+    pub fn signal(&self) -> Option<SigNum> {
+        self.signal
+    }
+
+    pub fn set_signal(&mut self, signal: Option<SigNum>) -> Result<()> {
+        self.signal = signal;
+
+        if let Some(target) = self.owner.as_ref().map(|registration| registration.target) {
+            self.owner = Some(OwnerRegistration::new(self.file.clone(), target, signal)?);
+        }
 
         Ok(())
     }
@@ -329,6 +344,7 @@ impl Clone for FileTableEntry {
             file: self.file.clone(),
             flags: AtomicU8::new(self.flags.load(Ordering::Relaxed)),
             owner: None,
+            signal: self.signal,
         }
     }
 }
@@ -340,23 +356,82 @@ bitflags! {
     }
 }
 
-type Owner = (Pid, PollAdaptor<OwnerObserver>);
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum FileAsyncOwner {
+    Thread(Tid),
+    Process(Pid),
+    ProcessGroup(Pgid),
+}
+
+struct OwnerRegistration {
+    target: FileAsyncOwner,
+    _poller: PollAdaptor<OwnerObserver>,
+}
+
+impl OwnerRegistration {
+    fn new(
+        file: Arc<dyn FileLike>,
+        target: FileAsyncOwner,
+        signal: Option<SigNum>,
+    ) -> Result<Self> {
+        let mut poller =
+            PollAdaptor::with_observer(OwnerObserver::new(file.clone(), target, signal));
+        file.poll(IoEvents::IN | IoEvents::OUT, Some(poller.as_handle_mut()));
+        Ok(Self {
+            target,
+            _poller: poller,
+        })
+    }
+}
 
 struct OwnerObserver {
     file: Arc<dyn FileLike>,
-    owner: Weak<Process>,
+    target: FileAsyncOwner,
+    signal: Option<SigNum>,
 }
 
 impl OwnerObserver {
-    pub fn new(file: Arc<dyn FileLike>, owner: Weak<Process>) -> Self {
-        Self { file, owner }
+    pub fn new(file: Arc<dyn FileLike>, target: FileAsyncOwner, signal: Option<SigNum>) -> Self {
+        Self {
+            file,
+            target,
+            signal,
+        }
     }
 }
 
 impl Observer<IoEvents> for OwnerObserver {
     fn on_events(&self, _events: &IoEvents) {
         if self.file.status_flags().contains(StatusFlags::O_ASYNC) {
-            crate::process::enqueue_signal_async(self.owner.clone(), SIGIO);
+            let signal = self.signal.unwrap_or(SIGIO);
+            enqueue_signal_to_owner_async(self.target, signal);
         }
     }
+}
+
+fn enqueue_signal_to_owner_async(target: FileAsyncOwner, signal: SigNum) {
+    use crate::{process::posix_thread::AsPosixThread, thread::work_queue};
+
+    work_queue::submit_work_func(
+        move || match target {
+            FileAsyncOwner::Thread(tid) => {
+                if let Some(thread) = crate::process::posix_thread::thread_table::get_thread(tid)
+                    && let Some(posix_thread) = thread.as_posix_thread()
+                {
+                    posix_thread.enqueue_signal(Box::new(KernelSignal::new(signal)));
+                }
+            }
+            FileAsyncOwner::Process(pid) => {
+                if let Some(process) = process_table::get_process(pid) {
+                    process.enqueue_signal(Box::new(KernelSignal::new(signal)));
+                }
+            }
+            FileAsyncOwner::ProcessGroup(pgid) => {
+                if let Some(process_group) = process_table::get_process_group(&pgid) {
+                    process_group.broadcast_signal(KernelSignal::new(signal));
+                }
+            }
+        },
+        work_queue::WorkPriority::High,
+    );
 }
