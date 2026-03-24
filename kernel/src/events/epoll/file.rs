@@ -3,7 +3,7 @@
 use alloc::{collections::btree_set::BTreeSet, sync::Arc};
 use core::{borrow::Borrow, fmt::Display, time::Duration};
 
-use keyable_arc::KeyableWeak;
+use keyable_arc::{KeyableArc, KeyableWeak};
 use ostd::sync::Mutex;
 
 use super::{
@@ -51,6 +51,8 @@ pub struct EpollFile {
     /// The pseudo path associated with this epoll file.
     pseudo_path: Path,
 }
+
+const MAX_NESTED_EPOLL_DEPTH: usize = 5;
 
 impl EpollFile {
     /// Creates a new epoll file.
@@ -103,6 +105,8 @@ impl EpollFile {
             );
         }
 
+        self.check_nested_epoll(file.as_ref())?;
+
         // Add the new entry to the interest list and start monitoring its events
         let ready_entry = {
             let mut interest = self.interest.lock();
@@ -135,6 +139,54 @@ impl EpollFile {
         }
 
         Ok(())
+    }
+
+    fn check_nested_epoll(&self, file: &dyn FileLike) -> Result<()> {
+        let Some(target_epoll) = file.downcast_ref::<EpollFile>() else {
+            return Ok(());
+        };
+
+        let mut visited_epolls = BTreeSet::from([self as *const Self as usize]);
+        let nested_depth = target_epoll.nested_epoll_depth(&mut visited_epolls)?;
+        if nested_depth >= MAX_NESTED_EPOLL_DEPTH {
+            return_errno_with_message!(Errno::ELOOP, "the epoll nesting depth is too large");
+        }
+
+        Ok(())
+    }
+
+    fn nested_epoll_depth(&self, visited_epolls: &mut BTreeSet<usize>) -> Result<usize> {
+        let self_addr = self as *const Self as usize;
+        if !visited_epolls.insert(self_addr) {
+            return_errno_with_message!(Errno::ELOOP, "epoll loops are not allowed");
+        }
+
+        let result = (|| {
+            let nested_epolls = self.nested_epoll_files();
+            let mut max_depth = 1;
+            for nested_epoll_file in nested_epolls {
+                let Some(nested_epoll) = nested_epoll_file.downcast_ref::<Self>() else {
+                    continue;
+                };
+                let nested_depth = nested_epoll.nested_epoll_depth(visited_epolls)?;
+                max_depth = max_depth.max(nested_depth.saturating_add(1));
+            }
+
+            Ok(max_depth)
+        })();
+
+        visited_epolls.remove(&self_addr);
+        result
+    }
+
+    fn nested_epoll_files(&self) -> Vec<Arc<dyn FileLike>> {
+        self.interest
+            .lock()
+            .iter()
+            .filter_map(|entry| entry.0.file_weak().upgrade())
+            .map(KeyableArc::into)
+            .filter(|file: &Arc<dyn FileLike>| file.downcast_ref::<Self>().is_some())
+            .collect()
     }
 
     fn del_interest(&self, fd: FileDesc, file: KeyableWeak<dyn FileLike>) -> Result<()> {
