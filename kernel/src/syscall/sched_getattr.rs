@@ -17,7 +17,7 @@ use crate::{
 pub(super) const SCHED_NORMAL: u32 = 0;
 pub(super) const SCHED_FIFO: u32 = 1;
 pub(super) const SCHED_RR: u32 = 2;
-// pub(super) const SCHED_BATCH: u32 = 3; // Not supported.
+pub(super) const SCHED_BATCH: u32 = 3;
 // SCHED_ISO: Reserved but not implemented yet on Linux.
 pub(super) const SCHED_IDLE: u32 = 5;
 // pub(super) const SCHED_DEADLINE: u32 = 6; // Not supported.
@@ -119,7 +119,7 @@ impl TryFrom<LinuxSchedAttr> for SchedPolicy {
                 return_errno_with_message!(Errno::EINVAL, "invalid scheduling priority")
             }
 
-            SCHED_NORMAL => SchedPolicy::Fair(Nice::new(
+            SCHED_NORMAL | SCHED_BATCH => SchedPolicy::Fair(Nice::new(
                 i8::try_from(value.sched_nice)
                     .ok()
                     .and_then(|n| n.try_into().ok())
