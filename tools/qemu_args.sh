@@ -167,8 +167,7 @@ if [ "$OVMF" = "on" ]; then
     else
         OVMF_PATH="/root/ovmf/release"
         QEMU_ARGS="${QEMU_ARGS} \
-            -drive if=pflash,format=raw,unit=0,readonly=on,file=$OVMF_PATH/OVMF_CODE.fd \
-            -drive if=pflash,format=raw,unit=1,file=$OVMF_PATH/OVMF_VARS.fd \
+            -bios $OVMF_PATH/OVMF.fd \
         "
     fi
 fi
