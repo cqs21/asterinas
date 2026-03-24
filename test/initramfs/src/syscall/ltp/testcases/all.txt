@@ -325,8 +325,8 @@ fcntl15
 fcntl15_64
 fcntl16
 fcntl16_64
-# fcntl17
-# fcntl17_64
+fcntl17
+fcntl17_64
 fcntl18
 fcntl18_64
 fcntl19

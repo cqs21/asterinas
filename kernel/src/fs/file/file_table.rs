@@ -192,6 +192,15 @@ impl Default for FileTable {
     }
 }
 
+impl Drop for FileTable {
+    fn drop(&mut self) {
+        // Exit paths may drop the whole file table directly instead of closing file
+        // descriptors one by one. Reuse the normal close path so process-associated
+        // record locks are released before the table disappears.
+        self.close_files(|_| true);
+    }
+}
+
 /// A helper trait that provides methods to operate the file table.
 pub trait WithFileTable {
     /// Calls `f` with the file table.

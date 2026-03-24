@@ -1,5 +1,6 @@
 // SPDX-License-Identifier: MPL-2.0
 
+use alloc::collections::{BTreeMap, BTreeSet};
 use core::fmt;
 
 use ostd::sync::{RwMutexWriteGuard, WaitQueue, Waiter, Waker};
@@ -186,12 +187,14 @@ impl Clone for RangeLockItem {
 /// if they have same owner.
 pub struct RangeLockList {
     inner: RwMutex<Vec<RangeLockItem>>,
+    waiting_owners: Mutex<BTreeMap<Pid, Vec<Pid>>>,
 }
 
 impl RangeLockList {
     pub fn new() -> Self {
         Self {
             inner: RwMutex::new(Vec::new()),
+            waiting_owners: Mutex::new(BTreeMap::new()),
         }
     }
 
@@ -223,15 +226,40 @@ impl RangeLockList {
     /// - If waker is `None`, the function returns `EAGAIN`.
     fn try_set_lock(&self, req_lock: &RangeLockItem, waker: Option<&Arc<Waker>>) -> Result<()> {
         let mut list = self.inner.write();
-        if let Some(conflict_lock) = list.iter().find(|l| req_lock.conflict_with(l)) {
-            if let Some(waker) = waker {
-                conflict_lock.waitqueue.enqueue(waker.clone());
+        let requester = req_lock.owner();
+        let mut conflicting_waitqueues = Vec::new();
+        let mut conflicting_owners = BTreeSet::new();
+        for lock in list.iter() {
+            if !req_lock.conflict_with(lock) {
+                continue;
             }
-            return_errno_with_message!(Errno::EAGAIN, "the file is locked");
-        } else {
-            Self::insert_lock_into_list(&mut list, req_lock);
-            Ok(())
+            conflicting_owners.insert(lock.owner());
+            conflicting_waitqueues.push(lock.waitqueue.clone());
         }
+
+        if conflicting_owners.is_empty() {
+            Self::insert_lock_into_list(&mut list, req_lock);
+            self.waiting_owners.lock().remove(&requester);
+            return Ok(());
+        }
+
+        if let Some(waker) = waker {
+            let mut waiting_owners = self.waiting_owners.lock();
+            if Self::would_deadlock(&waiting_owners, requester, &conflicting_owners) {
+                waiting_owners.remove(&requester);
+                return_errno_with_message!(Errno::EDEADLK, "the requested lock would deadlock");
+            }
+            waiting_owners.insert(requester, conflicting_owners.into_iter().collect());
+            drop(waiting_owners);
+
+            for waitqueue in conflicting_waitqueues {
+                waitqueue.enqueue(waker.clone());
+            }
+        } else {
+            self.waiting_owners.lock().remove(&requester);
+        }
+
+        return_errno_with_message!(Errno::EAGAIN, "the file is locked");
     }
 
     /// Sets a lock on the file.
@@ -243,7 +271,8 @@ impl RangeLockList {
             "set_lock with RangeLock: {:?}, is_nonblocking: {}",
             req_lock, is_nonblocking
         );
-        if is_nonblocking {
+        let requester = req_lock.owner();
+        let result = if is_nonblocking {
             self.try_set_lock(req_lock, None)
         } else {
             let (waiter, waker) = Waiter::new_pair();
@@ -255,7 +284,37 @@ impl RangeLockList {
                     Some(result)
                 }
             })?
+        };
+        self.waiting_owners.lock().remove(&requester);
+        result
+    }
+
+    /// Returns `true` if adding wait edges `requester -> conflicting_owners` creates a cycle.
+    fn would_deadlock(
+        waiting_owners: &BTreeMap<Pid, Vec<Pid>>,
+        requester: Pid,
+        conflicting_owners: &BTreeSet<Pid>,
+    ) -> bool {
+        conflicting_owners.iter().copied().any(|owner| {
+            owner == requester || Self::has_wait_path(waiting_owners, owner, requester)
+        })
+    }
+
+    fn has_wait_path(waiting_owners: &BTreeMap<Pid, Vec<Pid>>, start: Pid, target: Pid) -> bool {
+        let mut stack = vec![start];
+        let mut visited = BTreeSet::new();
+        while let Some(owner) = stack.pop() {
+            if owner == target {
+                return true;
+            }
+            if !visited.insert(owner) {
+                continue;
+            }
+            if let Some(next_owners) = waiting_owners.get(&owner) {
+                stack.extend(next_owners.iter().copied());
+            }
         }
+        false
     }
 
     /// Insert a lock into the list.
