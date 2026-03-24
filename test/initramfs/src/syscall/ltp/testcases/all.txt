@@ -343,8 +343,8 @@ fcntl24
 fcntl24_64
 fcntl25
 fcntl25_64
-# fcntl26
-# fcntl26_64
+fcntl26
+fcntl26_64
 # fcntl27
 # fcntl27_64
 fcntl29
