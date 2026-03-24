@@ -4,7 +4,7 @@ use alloc::{boxed::ThinBox, collections::BTreeSet};
 
 use crate::{
     fs::{
-        file::flock::FlockList,
+        file::{AccessMode, flock::FlockList},
         vfs::{
             inode::Inode,
             notify::FsEventPublisher,
@@ -12,11 +12,18 @@ use crate::{
         },
     },
     prelude::*,
+    process::{
+        Pid, process_table,
+        signal::{constants::SIGIO, signals::kernel::KernelSignal},
+    },
 };
 
+#[derive(Debug, Clone, Copy)]
 struct FileLease {
     owner_id: u64,
+    owner_pid: Pid,
     type_: RangeLockType,
+    has_pending_write_break: bool,
 }
 
 pub type LeaseType = RangeLockType;
@@ -65,7 +72,7 @@ impl FsLockContext {
         self.open_file_description_ids.lock().remove(&owner_id);
     }
 
-    pub fn set_lease(&self, owner_id: u64, lease_type: LeaseType) -> Result<()> {
+    pub fn set_lease(&self, owner_id: u64, owner_pid: Pid, lease_type: LeaseType) -> Result<()> {
         debug_assert_ne!(lease_type, LeaseType::Unlock);
 
         if self
@@ -86,12 +93,73 @@ impl FsLockContext {
         {
             return_errno_with_message!(Errno::EBUSY, "the file already has a lease");
         }
+        if let Some(existing_lease) = lease.as_ref()
+            && existing_lease.owner_id == owner_id
+            && existing_lease.type_ == LeaseType::WriteLock
+            && lease_type == LeaseType::ReadLock
+            && existing_lease.has_pending_write_break
+        {
+            return_errno_with_message!(
+                Errno::EAGAIN,
+                "cannot downgrade a write lease while a write break is pending"
+            );
+        }
 
         *lease = Some(FileLease {
             owner_id,
+            owner_pid,
             type_: lease_type,
+            has_pending_write_break: false,
         });
         Ok(())
+    }
+
+    pub fn notify_lease_break_for_open(&self, access_mode: AccessMode, requester_pid: Option<Pid>) {
+        let mut lease_guard = self.lease.lock();
+        let Some(lease) = lease_guard.as_mut() else {
+            return;
+        };
+
+        let has_conflict = match lease.type_ {
+            LeaseType::ReadLock => access_mode.is_writable(),
+            LeaseType::WriteLock => true,
+            LeaseType::Unlock => false,
+        };
+        if !has_conflict {
+            return;
+        }
+
+        if lease.type_ == LeaseType::WriteLock {
+            lease.has_pending_write_break = access_mode.is_writable();
+        }
+
+        let lease = *lease;
+        drop(lease_guard);
+        self.enqueue_lease_break_signal(lease, requester_pid);
+    }
+
+    pub fn notify_lease_break_for_truncate(&self, requester_pid: Option<Pid>) {
+        let mut lease_guard = self.lease.lock();
+        let Some(lease) = lease_guard.as_mut() else {
+            return;
+        };
+
+        if lease.type_ == LeaseType::WriteLock {
+            lease.has_pending_write_break = true;
+        }
+        let lease = *lease;
+        drop(lease_guard);
+        self.enqueue_lease_break_signal(lease, requester_pid);
+    }
+
+    fn enqueue_lease_break_signal(&self, lease: FileLease, requester_pid: Option<Pid>) {
+        if requester_pid.is_some_and(|pid| pid == lease.owner_pid) {
+            return;
+        }
+
+        if let Some(lease_holder) = process_table::get_process(lease.owner_pid) {
+            lease_holder.enqueue_signal(Box::new(KernelSignal::new(SIGIO)));
+        }
     }
 
     pub fn release_lease(&self, owner_id: u64) {

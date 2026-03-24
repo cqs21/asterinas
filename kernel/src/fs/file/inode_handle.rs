@@ -26,7 +26,10 @@ use crate::{
         },
     },
     prelude::*,
-    process::signal::{PollHandle, Pollable},
+    process::{
+        Process,
+        signal::{PollHandle, Pollable},
+    },
     util::ioctl::RawIoctl,
 };
 
@@ -81,7 +84,8 @@ impl InodeHandle {
             status_flags: AtomicStatusFlags::new(status_flags),
             rights,
         }
-        .register_open_file_description())
+        .register_open_file_description()
+        .notify_lease_break_if_conflicted_open(access_mode))
     }
 
     pub fn path(&self) -> &Path {
@@ -96,6 +100,15 @@ impl InodeHandle {
         self
     }
 
+    fn notify_lease_break_if_conflicted_open(self, access_mode: AccessMode) -> Self {
+        if let Some(lock_context) = self.path.inode().fs_lock_context() {
+            let requester_pid = Process::current().map(|process| process.pid());
+            lock_context.notify_lease_break_for_open(access_mode, requester_pid);
+        }
+
+        self
+    }
+
     pub fn get_lease(&self) -> crate::fs::vfs::inode_ext::LeaseType {
         self.path
             .inode()
@@ -104,7 +117,11 @@ impl InodeHandle {
             .unwrap_or(crate::fs::vfs::inode_ext::LeaseType::Unlock)
     }
 
-    pub fn set_lease(&self, lease_type: crate::fs::vfs::inode_ext::LeaseType) -> Result<()> {
+    pub fn set_lease(
+        &self,
+        lease_type: crate::fs::vfs::inode_ext::LeaseType,
+        owner_pid: crate::process::Pid,
+    ) -> Result<()> {
         if self.rights.is_empty() {
             return_errno_with_message!(Errno::EBADF, "the file is opened as a path");
         }
@@ -131,7 +148,7 @@ impl InodeHandle {
         self.path
             .inode()
             .fs_lock_context_or_init()
-            .set_lease(self.owner_id, lease_type)
+            .set_lease(self.owner_id, owner_pid, lease_type)
     }
 
     pub fn release_lease(&self) {
@@ -460,6 +477,12 @@ impl FileLike for InodeHandle {
             // FIXME: It's allowed to `ftruncate` an append-only file on Linux.
             return_errno_with_message!(Errno::EPERM, "can not resize append-only file");
         }
+
+        if let Some(lock_context) = self.path.inode().fs_lock_context() {
+            let requester_pid = Process::current().map(|process| process.pid());
+            lock_context.notify_lease_break_for_truncate(requester_pid);
+        }
+
         self.path.inode().resize(new_size)
     }
 

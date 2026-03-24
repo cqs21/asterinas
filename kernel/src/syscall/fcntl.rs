@@ -234,7 +234,8 @@ fn handle_setlease(fd: FileDesc, arg: u64, ctx: &Context) -> Result<SyscallRetur
 
     let mut file_table = ctx.thread_local.borrow_file_table_mut();
     let file = get_file_fast!(&mut file_table, fd);
-    file.as_inode_handle_or_err()?.set_lease(lease_type)?;
+    file.as_inode_handle_or_err()?
+        .set_lease(lease_type, ctx.process.pid())?;
 
     Ok(SyscallReturn::Return(0))
 }

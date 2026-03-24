@@ -6,10 +6,13 @@ use crate::{
     fs::{
         file::file_table::{FileDesc, get_file_fast},
         utils::PATH_MAX,
-        vfs::path::{AT_FDCWD, FsPath},
+        vfs::{
+            inode_ext::InodeExt,
+            path::{AT_FDCWD, FsPath},
+        },
     },
     prelude::*,
-    process::ResourceType,
+    process::{Process, ResourceType},
 };
 
 pub fn sys_ftruncate(fd: FileDesc, len: isize, ctx: &Context) -> Result<SyscallReturn> {
@@ -39,6 +42,12 @@ pub fn sys_truncate(path_ptr: Vaddr, len: isize, ctx: &Context) -> Result<Syscal
             .read()
             .lookup(&fs_path)?
     };
+
+    if let Some(lock_context) = dir_path.inode().fs_lock_context() {
+        let requester_pid = Process::current().map(|process| process.pid());
+        lock_context.notify_lease_break_for_truncate(requester_pid);
+    }
+
     dir_path.resize(len as usize)?;
     fs::vfs::notify::on_change(&dir_path);
     Ok(SyscallReturn::Return(0))

@@ -3,7 +3,7 @@
 use aster_util::slot_vec::SlotVec;
 use ostd::sync::RwMutexUpgradeableGuard;
 
-use self::pipe_max_size::PipeMaxSizeFileOps;
+use self::{lease_break_time::LeaseBreakTimeFileOps, pipe_max_size::PipeMaxSizeFileOps};
 use crate::{
     fs::{
         file::mkmod,
@@ -15,6 +15,7 @@ use crate::{
     prelude::*,
 };
 
+mod lease_break_time;
 mod pipe_max_size;
 
 /// Represents the inode at `/proc/sys/fs`.
@@ -29,8 +30,10 @@ impl FsDirOps {
     }
 
     #[expect(clippy::type_complexity)]
-    const STATIC_ENTRIES: &'static [(&'static str, fn(Weak<dyn Inode>) -> Arc<dyn Inode>)] =
-        &[("pipe-max-size", PipeMaxSizeFileOps::new_inode)];
+    const STATIC_ENTRIES: &'static [(&'static str, fn(Weak<dyn Inode>) -> Arc<dyn Inode>)] = &[
+        ("pipe-max-size", PipeMaxSizeFileOps::new_inode),
+        ("lease-break-time", LeaseBreakTimeFileOps::new_inode),
+    ];
 }
 
 impl DirOps for FsDirOps {
