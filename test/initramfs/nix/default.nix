@@ -32,7 +32,9 @@ in rec {
     testSuite = syscallTestSuite;
     workDir = syscallTestWorkDir;
     inherit ltpCases extraBlocklistsDirs;
-    ltpCaseFile = if ltpCaseFile == "" then "" else
+    ltpCaseFile = if ltpCaseFile == "" then
+      ""
+    else
       toString (builtins.path {
         name = "ltp-case-file";
         path = ltpCaseFile;

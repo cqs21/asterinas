@@ -3,8 +3,7 @@
 use core::time::Duration;
 
 use int_to_c_enum::TryFromInt;
-use ostd::mm::VmIo;
-use ostd::timer::TIMER_FREQ;
+use ostd::{mm::VmIo, timer::TIMER_FREQ};
 
 use super::SyscallReturn;
 use crate::{

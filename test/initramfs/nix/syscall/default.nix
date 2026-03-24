@@ -1,6 +1,5 @@
 { lib, stdenvNoCC, callPackage, testSuite ? "ltp", workDir ? "/tmp"
-, ltpCases ? "", ltpCaseFile ? "", extraBlocklistsDirs ? "", smp ? 1,
-}: rec {
+, ltpCases ? "", ltpCaseFile ? "", extraBlocklistsDirs ? "", smp ? 1, }: rec {
   inherit testSuite;
   ltp = callPackage ./ltp.nix { };
   # FIXME: Build gvisor syscall test with nix.

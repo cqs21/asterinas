@@ -84,7 +84,10 @@ impl FileTable {
         };
 
         let min_free_fd = get_min_free_fd().ok_or_else(|| {
-            Error::with_message(Errno::EMFILE, "no file descriptor available under the limit")
+            Error::with_message(
+                Errno::EMFILE,
+                "no file descriptor available under the limit",
+            )
         })?;
         self.table.put_at(min_free_fd, entry);
         Ok(min_free_fd as FileDesc)
