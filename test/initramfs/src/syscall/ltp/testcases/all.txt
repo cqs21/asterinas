@@ -333,8 +333,8 @@ fcntl19
 fcntl19_64
 fcntl20
 fcntl20_64
-# fcntl21
-# fcntl21_64
+fcntl21
+fcntl21_64
 fcntl22
 fcntl22_64
 # fcntl23
