@@ -80,11 +80,20 @@ impl InodeHandle {
             offset: Mutex::new(0),
             status_flags: AtomicStatusFlags::new(status_flags),
             rights,
-        })
+        }
+        .register_open_file_description())
     }
 
     pub fn path(&self) -> &Path {
         &self.path
+    }
+
+    fn register_open_file_description(self) -> Self {
+        self.path
+            .inode()
+            .fs_lock_context_or_init()
+            .register_open_file_description(self.owner_id);
+        self
     }
 
     pub fn get_lease(&self) -> crate::fs::vfs::inode_ext::LeaseType {
@@ -576,6 +585,10 @@ impl Drop for InodeHandle {
         self.release_lease();
         self.release_range_locks();
         let _ = self.unlock_flock();
+        self.path
+            .inode()
+            .fs_lock_context_or_init()
+            .release_open_file_description(self.owner_id);
     }
 }
 

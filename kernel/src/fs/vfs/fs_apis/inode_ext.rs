@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: MPL-2.0
 
-use alloc::boxed::ThinBox;
+use alloc::{boxed::ThinBox, collections::BTreeSet};
 
 use crate::{
     fs::{
@@ -25,6 +25,7 @@ pub type LeaseType = RangeLockType;
 pub struct FsLockContext {
     range_lock_list: RangeLockList,
     flock_list: FlockList,
+    open_file_description_ids: Mutex<BTreeSet<u64>>,
     lease: Mutex<Option<FileLease>>,
 }
 
@@ -33,6 +34,7 @@ impl FsLockContext {
         Self {
             range_lock_list: RangeLockList::new(),
             flock_list: FlockList::new(),
+            open_file_description_ids: Mutex::new(BTreeSet::new()),
             lease: Mutex::new(None),
         }
     }
@@ -55,8 +57,28 @@ impl FsLockContext {
             .unwrap_or(LeaseType::Unlock)
     }
 
+    pub fn register_open_file_description(&self, owner_id: u64) {
+        self.open_file_description_ids.lock().insert(owner_id);
+    }
+
+    pub fn release_open_file_description(&self, owner_id: u64) {
+        self.open_file_description_ids.lock().remove(&owner_id);
+    }
+
     pub fn set_lease(&self, owner_id: u64, lease_type: LeaseType) -> Result<()> {
         debug_assert_ne!(lease_type, LeaseType::Unlock);
+
+        if self
+            .open_file_description_ids
+            .lock()
+            .iter()
+            .any(|open_id| *open_id != owner_id)
+        {
+            return_errno_with_message!(
+                Errno::EBUSY,
+                "cannot set a lease while another file description is open"
+            );
+        }
 
         let mut lease = self.lease.lock();
         if let Some(existing_lease) = lease.as_ref()
