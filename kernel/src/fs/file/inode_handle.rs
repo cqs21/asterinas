@@ -157,6 +157,17 @@ impl InodeHandle {
         pipe_handle.set_capacity(requested)
     }
 
+    pub(crate) fn pipe_capacity(&self) -> Result<usize> {
+        let pipe_handle = self.pipe_handle().ok_or_else(|| {
+            Error::with_message(
+                Errno::EINVAL,
+                "F_GETPIPE_SZ is only supported on pipe file handles",
+            )
+        })?;
+
+        Ok(pipe_handle.capacity())
+    }
+
     fn inode_io_and_is_offset_aware(&self) -> (&dyn InodeIo, bool) {
         if let Some(ref file_io) = self.file_io {
             let is_offset_aware = file_io.is_offset_aware();

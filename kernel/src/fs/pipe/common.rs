@@ -57,6 +57,10 @@ impl PipeHandle {
     pub(crate) fn set_capacity(&self, requested: usize) -> Result<usize> {
         self.inner.set_capacity(requested)
     }
+
+    pub(crate) fn capacity(&self) -> usize {
+        self.inner.capacity()
+    }
 }
 
 impl Pollable for PipeHandle {
@@ -329,6 +333,10 @@ impl PipeObj {
         self.writer.state.this_end().cloned_pollee().invalidate();
 
         Ok(capacity)
+    }
+
+    fn capacity(&self) -> usize {
+        self.writer.producer.lock().capacity()
     }
 }
 

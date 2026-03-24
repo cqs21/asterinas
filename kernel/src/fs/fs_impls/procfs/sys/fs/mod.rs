@@ -3,28 +3,25 @@
 use aster_util::slot_vec::SlotVec;
 use ostd::sync::RwMutexUpgradeableGuard;
 
-use self::{fs::FsDirOps, kernel::KernelDirOps};
-use super::template::populate_children_from_table;
+use self::pipe_max_size::PipeMaxSizeFileOps;
 use crate::{
     fs::{
         file::mkmod,
-        procfs::template::{DirOps, ProcDir, ProcDirBuilder, lookup_child_from_table},
+        procfs::template::{
+            DirOps, ProcDir, ProcDirBuilder, lookup_child_from_table, populate_children_from_table,
+        },
         vfs::inode::Inode,
     },
     prelude::*,
 };
 
-mod fs;
-mod kernel;
+mod pipe_max_size;
 
-/// Represents the inode at `/proc/sys`.
-pub struct SysDirOps;
+/// Represents the inode at `/proc/sys/fs`.
+pub struct FsDirOps;
 
-impl SysDirOps {
+impl FsDirOps {
     pub fn new_inode(parent: Weak<dyn Inode>) -> Arc<dyn Inode> {
-        // Reference:
-        // <https://elixir.bootlin.com/linux/v6.16.5/source/fs/proc/proc_sysctl.c#L1566>
-        // <https://elixir.bootlin.com/linux/v6.16.5/source/fs/proc/generic.c#L488-L489>
         ProcDirBuilder::new(Self, mkmod!(a+rx))
             .parent(parent)
             .build()
@@ -32,13 +29,11 @@ impl SysDirOps {
     }
 
     #[expect(clippy::type_complexity)]
-    const STATIC_ENTRIES: &'static [(&'static str, fn(Weak<dyn Inode>) -> Arc<dyn Inode>)] = &[
-        ("fs", FsDirOps::new_inode),
-        ("kernel", KernelDirOps::new_inode),
-    ];
+    const STATIC_ENTRIES: &'static [(&'static str, fn(Weak<dyn Inode>) -> Arc<dyn Inode>)] =
+        &[("pipe-max-size", PipeMaxSizeFileOps::new_inode)];
 }
 
-impl DirOps for SysDirOps {
+impl DirOps for FsDirOps {
     fn lookup_child(&self, dir: &ProcDir<Self>, name: &str) -> Result<Arc<dyn Inode>> {
         let mut cached_children = dir.cached_children().write();
 

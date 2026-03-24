@@ -37,6 +37,7 @@ pub fn sys_fcntl(fd: FileDesc, cmd: i32, arg: u64, ctx: &Context) -> Result<Sysc
         FcntlCmd::F_GETOWN => handle_getown(fd, ctx),
         FcntlCmd::F_SETOWN => handle_setown(fd, arg, ctx),
         FcntlCmd::F_SETPIPE_SZ => handle_setpipe_sz(fd, arg, ctx),
+        FcntlCmd::F_GETPIPE_SZ => handle_getpipe_sz(fd, ctx),
         FcntlCmd::F_ADD_SEALS => handle_addseal(fd, arg, ctx),
         FcntlCmd::F_GET_SEALS => handle_getseal(fd, ctx),
     }
@@ -211,6 +212,14 @@ fn handle_setpipe_sz(fd: FileDesc, arg: u64, ctx: &Context) -> Result<SyscallRet
     Ok(SyscallReturn::Return(actual_size as _))
 }
 
+fn handle_getpipe_sz(fd: FileDesc, ctx: &Context) -> Result<SyscallReturn> {
+    let mut file_table = ctx.thread_local.borrow_file_table_mut();
+    let file = get_file_fast!(&mut file_table, fd);
+    let inode_handle = file.as_inode_handle_or_err()?;
+    let pipe_size = inode_handle.pipe_capacity()?;
+    Ok(SyscallReturn::Return(pipe_size as _))
+}
+
 fn handle_addseal(fd: FileDesc, arg: u64, ctx: &Context) -> Result<SyscallReturn> {
     let new_seals = FileSeals::from_bits(arg as u32)
         .ok_or_else(|| Error::with_message(Errno::EINVAL, "invalid seals"))?;
@@ -250,6 +259,7 @@ enum FcntlCmd {
     F_GETLEASE = 1025,
     F_DUPFD_CLOEXEC = 1030,
     F_SETPIPE_SZ = 1031,
+    F_GETPIPE_SZ = 1032,
     F_ADD_SEALS = 1033,
     F_GET_SEALS = 1034,
 }
