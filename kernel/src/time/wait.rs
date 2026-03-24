@@ -4,7 +4,11 @@ use core::time::Duration;
 
 use ostd::sync::{WaitQueue, Waiter};
 
-use super::{Timer, TimerManager, clocks::JIFFIES_TIMER_MANAGER, timer::Timeout};
+use super::{
+    Timer, TimerManager,
+    clocks::MonotonicClock,
+    timer::Timeout,
+};
 use crate::{prelude::*, time::timer::TimerGuard};
 
 /// A trait that provide the timeout related function for [`Waiter`] and [`WaitQueue`]`.
@@ -127,10 +131,10 @@ pub struct ManagedTimeout<'a> {
 }
 
 impl<'a> ManagedTimeout<'a> {
-    /// Creates a new `ManagedTimeout` with the JIFFIES timer manager.
+    /// Creates a new `ManagedTimeout` with the monotonic timer manager.
     pub fn new(timeout: Duration) -> Self {
         let timeout = Timeout::After(timeout);
-        let manager = JIFFIES_TIMER_MANAGER.get().unwrap();
+        let manager = MonotonicClock::timer_manager();
         Self::new_with_manager(timeout, manager)
     }
 
