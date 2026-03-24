@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: MPL-2.0
 
 use aster_util::printer::VmPrinter;
+use device_id::decode_device_numbers;
 
 use super::TidDirOps;
 use crate::{
@@ -128,9 +129,12 @@ impl MountInfoFileOps {
             let source = mount.source().unwrap_or("none");
             let fs_flags = mount.fs().flags();
 
-            // The following fields are dummy for now.
-            let major = 0;
-            let minor = 0;
+            let (major, minor) = decode_device_numbers(
+                Path::new_fs_root(mount.clone())
+                    .metadata()
+                    .container_dev_id
+                    .as_encoded_u64(),
+            );
 
             let entry = MountInfoEntry {
                 mount_id,
