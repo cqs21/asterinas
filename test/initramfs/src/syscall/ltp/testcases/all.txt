@@ -305,8 +305,8 @@ fcntl04
 fcntl04_64
 fcntl05
 fcntl05_64
-# fcntl07
-# fcntl07_64
+fcntl07
+fcntl07_64
 fcntl08
 fcntl08_64
 fcntl09
@@ -321,8 +321,8 @@ fcntl13
 fcntl13_64
 fcntl14
 fcntl14_64
-# fcntl15
-# fcntl15_64
+fcntl15
+fcntl15_64
 fcntl16
 fcntl16_64
 # fcntl17

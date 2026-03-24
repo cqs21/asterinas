@@ -9,6 +9,9 @@ dup05
 dup203
 dup205
 fallocate03
+# Requires FIFO creation in the test workdir; exfat `mkfifo()` returns `EINVAL`.
+fcntl07
+fcntl07_64
 fchmod01
 fchmodat01
 fchown05
