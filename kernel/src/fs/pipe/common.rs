@@ -53,6 +53,10 @@ impl PipeHandle {
 
         self.inner.writer.try_write(reader)
     }
+
+    pub(crate) fn set_capacity(&self, requested: usize) -> Result<usize> {
+        self.inner.set_capacity(requested)
+    }
 }
 
 impl Pollable for PipeHandle {
@@ -306,6 +310,26 @@ impl PipeObj {
             num_writer: AtomicUsize::new(0),
         })
     }
+
+    fn set_capacity(&self, requested: usize) -> Result<usize> {
+        let capacity = normalize_pipe_capacity(requested);
+
+        let mut producer = self.writer.producer.lock();
+        let mut consumer = self.reader.consumer.lock();
+
+        if !producer.is_empty() || !consumer.is_empty() {
+            return_errno_with_message!(Errno::EBUSY, "resizing a non-empty pipe is not supported");
+        }
+
+        let (new_producer, new_consumer) = RingBuffer::new(capacity).split();
+        *producer = new_producer;
+        *consumer = new_consumer;
+
+        self.reader.state.this_end().cloned_pollee().invalidate();
+        self.writer.state.this_end().cloned_pollee().invalidate();
+
+        Ok(capacity)
+    }
 }
 
 #[derive(Default)]
@@ -354,6 +378,7 @@ fn new_pair() -> (PipeReader, PipeWriter) {
 }
 
 fn new_pair_with_capacity(capacity: usize) -> (PipeReader, PipeWriter) {
+    let capacity = normalize_pipe_capacity(capacity);
     let (producer, consumer) = RingBuffer::new(capacity).split();
     let (producer_state, consumer_state) =
         Endpoint::new_pair(EndpointState::default(), EndpointState::default());
@@ -362,6 +387,10 @@ fn new_pair_with_capacity(capacity: usize) -> (PipeReader, PipeWriter) {
         PipeReader::new(consumer, consumer_state),
         PipeWriter::new(producer, producer_state),
     )
+}
+
+fn normalize_pipe_capacity(requested: usize) -> usize {
+    requested.max(PIPE_BUF).next_power_of_two()
 }
 
 struct PipeReader {

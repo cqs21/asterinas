@@ -89,6 +89,23 @@ impl InodeHandle {
         self.rights
     }
 
+    fn pipe_handle(&self) -> Option<&PipeHandle> {
+        self.file_io
+            .as_ref()
+            .and_then(|file_io| (file_io.as_ref() as &dyn Any).downcast_ref::<PipeHandle>())
+    }
+
+    pub(crate) fn set_pipe_capacity(&self, requested: usize) -> Result<usize> {
+        let pipe_handle = self.pipe_handle().ok_or_else(|| {
+            Error::with_message(
+                Errno::EINVAL,
+                "F_SETPIPE_SZ is only supported on pipe file handles",
+            )
+        })?;
+
+        pipe_handle.set_capacity(requested)
+    }
+
     fn inode_io_and_is_offset_aware(&self) -> (&dyn InodeIo, bool) {
         if let Some(ref file_io) = self.file_io {
             let is_offset_aware = file_io.is_offset_aware();
@@ -383,12 +400,7 @@ impl FileLike for InodeHandle {
         // TODO: Pipes currently require a special status flag check because
         // "packet" mode is not yet supported. Remove this check once "packet"
         // mode is implemented.
-        if self
-            .file_io
-            .as_ref()
-            .and_then(|file_io| (file_io.as_ref() as &dyn Any).downcast_ref::<PipeHandle>())
-            .is_some()
-        {
+        if self.pipe_handle().is_some() {
             crate::fs::pipe::check_status_flags(new_status_flags)?;
         }
 
