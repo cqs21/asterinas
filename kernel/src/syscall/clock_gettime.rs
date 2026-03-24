@@ -4,6 +4,7 @@ use core::time::Duration;
 
 use int_to_c_enum::TryFromInt;
 use ostd::mm::VmIo;
+use ostd::timer::TIMER_FREQ;
 
 use super::SyscallReturn;
 use crate::{
@@ -37,6 +38,23 @@ pub fn sys_clock_gettime(
     Ok(SyscallReturn::Return(0))
 }
 
+pub fn sys_clock_getres(
+    clockid: clockid_t,
+    timespec_addr: Vaddr,
+    _ctx: &Context,
+) -> Result<SyscallReturn> {
+    debug!("clockid = {:?}", clockid);
+
+    let resolution = read_clock_resolution(clockid)?;
+
+    if timespec_addr != 0 {
+        let timespec = timespec_t::from(resolution);
+        _ctx.user_space().write_val(timespec_addr, &timespec)?;
+    }
+
+    Ok(SyscallReturn::Return(0))
+}
+
 // The hard-coded clock IDs.
 #[derive(Debug, Copy, Clone, TryFromInt, PartialEq)]
 #[repr(i32)]
@@ -50,6 +68,8 @@ pub enum ClockId {
     CLOCK_REALTIME_COARSE = 5,
     CLOCK_MONOTONIC_COARSE = 6,
     CLOCK_BOOTTIME = 7,
+    CLOCK_REALTIME_ALARM = 8,
+    CLOCK_BOOTTIME_ALARM = 9,
 }
 
 /// The information decoded from a dynamic clock ID.
@@ -122,6 +142,8 @@ pub fn read_clock(clockid: clockid_t, ctx: &Context) -> Result<Duration> {
             ClockId::CLOCK_REALTIME_COARSE => Ok(RealTimeCoarseClock::get().read_time()),
             ClockId::CLOCK_MONOTONIC_COARSE => Ok(MonotonicCoarseClock::get().read_time()),
             ClockId::CLOCK_BOOTTIME => Ok(BootTimeClock::get().read_time()),
+            ClockId::CLOCK_REALTIME_ALARM => Ok(RealTimeClock::get().read_time()),
+            ClockId::CLOCK_BOOTTIME_ALARM => Ok(BootTimeClock::get().read_time()),
             ClockId::CLOCK_PROCESS_CPUTIME_ID => Ok(ctx.process.prof_clock().read_time()),
             ClockId::CLOCK_THREAD_CPUTIME_ID => Ok(ctx.posix_thread.prof_clock().read_time()),
         }
@@ -153,4 +175,25 @@ pub fn read_clock(clockid: clockid_t, ctx: &Context) -> Result<Duration> {
             DynamicClockIdInfo::Fd(_) => unimplemented!(),
         }
     }
+}
+
+pub fn read_clock_resolution(clockid: clockid_t) -> Result<Duration> {
+    const NANOS_PER_SEC: u64 = 1_000_000_000;
+    let jiffy_resolution = Duration::from_nanos(NANOS_PER_SEC / TIMER_FREQ);
+
+    let clock_id = ClockId::try_from(clockid)?;
+    let resolution = match clock_id {
+        ClockId::CLOCK_REALTIME
+        | ClockId::CLOCK_MONOTONIC
+        | ClockId::CLOCK_MONOTONIC_RAW
+        | ClockId::CLOCK_BOOTTIME
+        | ClockId::CLOCK_REALTIME_ALARM
+        | ClockId::CLOCK_BOOTTIME_ALARM
+        | ClockId::CLOCK_REALTIME_COARSE
+        | ClockId::CLOCK_MONOTONIC_COARSE
+        | ClockId::CLOCK_PROCESS_CPUTIME_ID
+        | ClockId::CLOCK_THREAD_CPUTIME_ID => jiffy_resolution,
+    };
+
+    Ok(resolution)
 }

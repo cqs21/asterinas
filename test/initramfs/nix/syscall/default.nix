@@ -1,4 +1,5 @@
-{ lib, stdenvNoCC, callPackage, testSuite ? "ltp", workDir ? "/tmp", smp ? 1,
+{ lib, stdenvNoCC, callPackage, testSuite ? "ltp", workDir ? "/tmp"
+, ltpCases ? "", ltpCaseFile ? "", extraBlocklistsDirs ? "", smp ? 1,
 }: rec {
   inherit testSuite;
   ltp = callPackage ./ltp.nix { };
@@ -23,6 +24,9 @@
       export GVISOR_PREBUILT_DIR=${gvisor}
       export SYSCALL_TEST_SUITE=${testSuite}
       export SYSCALL_TEST_WORKDIR=${workDir}
+      export LTP_CASES='${ltpCases}'
+      export LTP_CASE_FILE='${ltpCaseFile}'
+      export EXTRA_BLOCKLISTS_DIRS='${extraBlocklistsDirs}'
       export SMP=${toString smp}
       make
     '';

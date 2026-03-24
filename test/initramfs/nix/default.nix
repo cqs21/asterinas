@@ -1,6 +1,7 @@
 { target ? "x86_64", enableBasicTest ? false, basicTestPlatform ? "asterinas"
 , enableBenchmark ? false, enableSyscallTest ? false, syscallTestSuite ? "ltp"
-, syscallTestWorkDir ? "/tmp", dnsServer ? "none", smp ? 1
+, syscallTestWorkDir ? "/tmp", ltpCases ? "", ltpCaseFile ? ""
+, extraBlocklistsDirs ? "", dnsServer ? "none", smp ? 1
 , initramfsCompressed ? true, }:
 let
   crossSystem.config = if target == "x86_64" then
@@ -30,6 +31,12 @@ in rec {
     inherit smp;
     testSuite = syscallTestSuite;
     workDir = syscallTestWorkDir;
+    inherit ltpCases extraBlocklistsDirs;
+    ltpCaseFile = if ltpCaseFile == "" then "" else
+      toString (builtins.path {
+        name = "ltp-case-file";
+        path = ltpCaseFile;
+      });
   };
   initramfs = pkgs.callPackage ./initramfs.nix {
     inherit busybox;

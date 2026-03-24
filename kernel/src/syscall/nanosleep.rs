@@ -100,6 +100,12 @@ fn do_clock_nanosleep(
             ClockId::CLOCK_PROCESS_CPUTIME_ID => {
                 ctx.process.timer_manager().prof_timer().timer_manager()
             }
+            ClockId::CLOCK_THREAD_CPUTIME_ID => {
+                return_errno_with_message!(
+                    Errno::EOPNOTSUPP,
+                    "clock_nanosleep does not support thread CPU clocks"
+                );
+            }
             // FIXME: From the manual,
             // the CPU clock IDs returned by clock_getcpuclockid(3)
             // and pthread_getcpuclockid(3) can also be passed in clockid.

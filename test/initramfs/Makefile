@@ -5,6 +5,9 @@ SMP ?= 1
 VERBOSE ?= 1
 SYSCALL_TEST_SUITE ?= ltp
 SYSCALL_TEST_WORKDIR ?= /tmp
+LTP_CASES ?=
+LTP_CASE_FILE ?=
+EXTRA_BLOCKLISTS_DIRS ?=
 ENABLE_BASIC_TEST ?= false
 # Specify platform macros when building regression tests (supported: asterinas, linux).
 # - asterinas: Define both `__asterinas__` and `__linux__`. Tests may fail in Linux.
@@ -71,6 +74,9 @@ $(INITRAMFS_IMAGE): $(INITRAMFS)
 		--arg enableSyscallTest $(ENABLE_SYSCALL_TEST) \
 		--argstr syscallTestSuite $(SYSCALL_TEST_SUITE) \
 		--argstr syscallTestWorkDir $(SYSCALL_TEST_WORKDIR) \
+		--argstr ltpCases "$(LTP_CASES)" \
+		--argstr ltpCaseFile "$(LTP_CASE_FILE)" \
+		--argstr extraBlocklistsDirs "$(EXTRA_BLOCKLISTS_DIRS)" \
 		--argstr dnsServer ${DNS_SERVER} \
 		--arg initramfsCompressed $(INITRAMFS_COMPRESSED) \
 		--arg smp $(SMP) \
@@ -88,6 +94,9 @@ $(INITRAMFS):
 		--arg enableSyscallTest $(ENABLE_SYSCALL_TEST) \
 		--argstr syscallTestSuite $(SYSCALL_TEST_SUITE) \
 		--argstr syscallTestWorkDir $(SYSCALL_TEST_WORKDIR) \
+		--argstr ltpCases "$(LTP_CASES)" \
+		--argstr ltpCaseFile "$(LTP_CASE_FILE)" \
+		--argstr extraBlocklistsDirs "$(EXTRA_BLOCKLISTS_DIRS)" \
 		--argstr dnsServer ${DNS_SERVER} \
 		--arg smp $(SMP) \
 		--out-link $@ \
