@@ -4,16 +4,26 @@
 
 LTP_DIR=$(dirname "$0")
 TEST_TMP_DIR=${SYSCALL_TEST_WORKDIR:-/tmp}
-LOG_FILE="$TEST_TMP_DIR/result.log"
-SUMMARY_FILE="$TEST_TMP_DIR/ltp_summary.json"
-CASE_STATUS_FILE="$TEST_TMP_DIR/ltp_case_status.tsv"
-FAILED_CASES_FILE="$TEST_TMP_DIR/ltp_failed_cases.txt"
-BROKEN_CASES_FILE="$TEST_TMP_DIR/ltp_broken_cases.txt"
-SKIPPED_CASES_FILE="$TEST_TMP_DIR/ltp_skipped_cases.txt"
-REPORTED_CASES_FILE="$TEST_TMP_DIR/ltp_reported_cases.txt"
-CASE_LOG_DIR="$TEST_TMP_DIR/ltp_case_logs"
+ARTIFACTS_ROOT="$TEST_TMP_DIR/.ltp_logs"
+RUN_ID=$(date +%Y%m%d-%H%M%S)-$$
+RUN_ARTIFACT_DIR="$ARTIFACTS_ROOT/run-$RUN_ID"
+LATEST_ARTIFACT_DIR="$ARTIFACTS_ROOT/latest"
+LOG_FILE="$RUN_ARTIFACT_DIR/result.log"
+SUMMARY_FILE="$RUN_ARTIFACT_DIR/ltp_summary.json"
+CASE_STATUS_FILE="$RUN_ARTIFACT_DIR/ltp_case_status.tsv"
+FAILED_CASES_FILE="$RUN_ARTIFACT_DIR/ltp_failed_cases.txt"
+BROKEN_CASES_FILE="$RUN_ARTIFACT_DIR/ltp_broken_cases.txt"
+SKIPPED_CASES_FILE="$RUN_ARTIFACT_DIR/ltp_skipped_cases.txt"
+REPORTED_CASES_FILE="$RUN_ARTIFACT_DIR/ltp_reported_cases.txt"
+CASE_LOG_DIR="$RUN_ARTIFACT_DIR/ltp_case_logs"
 RESULT=0
 RUNLTP_EXIT_CODE=0
+
+cleanup_workdir() {
+    mkdir -p "$TEST_TMP_DIR"
+    # Keep artifacts under `.ltp_logs` and clear everything else for isolation.
+    find "$TEST_TMP_DIR" -mindepth 1 -maxdepth 1 ! -name ".ltp_logs" -exec rm -rf {} + 2>/dev/null
+}
 
 count_non_empty_lines() {
     file_path="$1"
@@ -52,6 +62,9 @@ print_case_bucket() {
     case_list=$(tr '\n' ' ' < "$case_file" | sed 's/[[:space:]]*$//')
     echo "$bucket_name ($case_count): $case_list"
 }
+
+cleanup_workdir
+mkdir -p "$RUN_ARTIFACT_DIR"
 
 rm -f \
     "$LOG_FILE" \
@@ -248,6 +261,23 @@ echo "LTP per-case logs dir: $CASE_LOG_DIR"
 print_case_bucket "Failed cases" "$FAILED_CASES_FILE"
 print_case_bucket "Broken cases" "$BROKEN_CASES_FILE"
 print_case_bucket "Skipped cases" "$SKIPPED_CASES_FILE"
+
+rm -rf "$LATEST_ARTIFACT_DIR"
+mkdir -p "$LATEST_ARTIFACT_DIR"
+cp -f "$SUMMARY_FILE" "$LATEST_ARTIFACT_DIR/" 2>/dev/null || true
+cp -f "$LOG_FILE" "$LATEST_ARTIFACT_DIR/" 2>/dev/null || true
+cp -f "$CASE_STATUS_FILE" "$LATEST_ARTIFACT_DIR/" 2>/dev/null || true
+cp -f "$FAILED_CASES_FILE" "$LATEST_ARTIFACT_DIR/" 2>/dev/null || true
+cp -f "$BROKEN_CASES_FILE" "$LATEST_ARTIFACT_DIR/" 2>/dev/null || true
+cp -f "$SKIPPED_CASES_FILE" "$LATEST_ARTIFACT_DIR/" 2>/dev/null || true
+cp -f "$REPORTED_CASES_FILE" "$LATEST_ARTIFACT_DIR/" 2>/dev/null || true
+cp -rf "$CASE_LOG_DIR" "$LATEST_ARTIFACT_DIR/" 2>/dev/null || true
+
+cleanup_workdir
+echo "LTP artifact root: $ARTIFACTS_ROOT"
+echo "LTP latest summary: $LATEST_ARTIFACT_DIR/ltp_summary.json"
+echo "LTP latest raw log: $LATEST_ARTIFACT_DIR/result.log"
+echo "LTP run artifacts: $RUN_ARTIFACT_DIR"
 
 if [ "$FAILED_COUNT" -gt 0 ] || [ "$BROKEN_COUNT" -gt 0 ]; then
     RESULT=1
