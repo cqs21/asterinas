@@ -4,6 +4,7 @@
 
 LTP_DIR=$(dirname "$0")
 TEST_TMP_DIR=${SYSCALL_TEST_WORKDIR:-/tmp}
+LTP_KCONFIG_PATH="$LTP_DIR/kernel.config"
 ARTIFACTS_ROOT="$TEST_TMP_DIR/.ltp_logs"
 RUN_ID=$(date +%Y%m%d-%H%M%S)-$$
 RUN_ARTIFACT_DIR="$ARTIFACTS_ROOT/run-$RUN_ID"
@@ -65,6 +66,10 @@ print_case_bucket() {
 
 cleanup_workdir
 mkdir -p "$RUN_ARTIFACT_DIR"
+
+if [ -z "${KCONFIG_PATH:-}" ] && [ -f "$LTP_KCONFIG_PATH" ]; then
+    export KCONFIG_PATH="$LTP_KCONFIG_PATH"
+fi
 
 rm -f \
     "$LOG_FILE" \

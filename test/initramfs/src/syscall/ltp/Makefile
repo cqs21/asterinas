@@ -6,6 +6,7 @@ CUR_DIR := $(patsubst %/,%,$(dir $(MKFILE_PATH)))
 INITRAMFS ?= $(CUR_DIR)/../../../build/initramfs
 TARGET_DIR := $(INITRAMFS)/opt/ltp
 RUN_BASH := $(CUR_DIR)/run_ltp_test.sh
+KCONFIG_TEMPLATE := $(CUR_DIR)/kernel.config
 ALL_TESTS := $(CUR_DIR)/testcases/all.txt
 EXT2_BLOCKLIST := $(CUR_DIR)/testcases/blocked/ext2.txt
 EXFAT_BLOCKLIST := $(CUR_DIR)/testcases/blocked/exfat.txt
@@ -13,7 +14,7 @@ EXFAT_BLOCKLIST := $(CUR_DIR)/testcases/blocked/exfat.txt
 .PHONY: all
 all: $(TARGET_DIR)
 
-$(TARGET_DIR): $(RUN_BASH) $(ALL_TESTS) $(EXT2_BLOCKLIST) $(EXFAT_BLOCKLIST)
+$(TARGET_DIR): $(RUN_BASH) $(KCONFIG_TEMPLATE) $(ALL_TESTS) $(EXT2_BLOCKLIST) $(EXFAT_BLOCKLIST)
 	@rm -rf $@ && mkdir -p $@
 	@# Prepare tests dir for test binaries
 	@mkdir -p $@/testcases/bin
@@ -122,6 +123,7 @@ $(TARGET_DIR): $(RUN_BASH) $(ALL_TESTS) $(EXT2_BLOCKLIST) $(EXFAT_BLOCKLIST)
 	@cp -f $(LTP_PREBUILT_DIR)/ver_linux $@
 	@cp -f $(LTP_PREBUILT_DIR)/IDcheck.sh $@
 	@cp -f $(RUN_BASH) $@
+	@cp -f $(KCONFIG_TEMPLATE) $@/kernel.config
 
 .PHONY: clean
 clean:
