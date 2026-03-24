@@ -3,7 +3,7 @@
 use aster_bigtcp::{
     errors::BindError,
     iface::BindPortConfig,
-    wire::{IpAddress, IpEndpoint},
+    wire::{IpAddress, IpEndpoint, Ipv4Address},
 };
 
 use crate::{
@@ -13,6 +13,14 @@ use crate::{
 
 pub(super) fn get_iface_to_bind(ip_addr: &IpAddress) -> Option<Arc<Iface>> {
     let IpAddress::Ipv4(ipv4_addr) = ip_addr;
+    if *ipv4_addr == Ipv4Address::UNSPECIFIED {
+        // `INADDR_ANY` should accept local binds instead of failing with
+        // `EADDRNOTAVAIL`. We currently bind sockets to one iface, so use
+        // loopback to preserve localhost listeners until wildcard binds can
+        // span multiple ifaces.
+        return Some(loopback_iface().clone());
+    }
+
     iter_all_ifaces()
         .find(|iface| {
             if let Some(iface_ipv4_addr) = iface.ipv4_addr() {
