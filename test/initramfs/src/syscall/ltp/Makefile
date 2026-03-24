@@ -26,6 +26,44 @@ $(TARGET_DIR): $(RUN_BASH) $(ALL_TESTS) $(EXT2_BLOCKLIST) $(EXFAT_BLOCKLIST)
 	else \
 		cp -f $@/all.txt $@/fs_filtered.txt; \
 	fi;
+	@cp -f $@/fs_filtered.txt $@/extra_filtered.txt
+	@if [ -n "$(EXTRA_BLOCKLISTS_DIRS)" ] && [ "$(EXTRA_BLOCKLISTS_DIRS)" != "\"\"" ] && [ "$(EXTRA_BLOCKLISTS_DIRS)" != "''" ]; then \
+		for extra_dir in $(EXTRA_BLOCKLISTS_DIRS); do \
+			if [ -z "$$extra_dir" ] || [ "$$extra_dir" = "\"\"" ] || [ "$$extra_dir" = "''" ]; then \
+				continue; \
+			fi; \
+			case "$$extra_dir" in \
+				/*) extra_dir_path="$$extra_dir" ;; \
+				*) extra_dir_path="$(CUR_DIR)/$$extra_dir" ;; \
+			esac; \
+			if [ ! -d "$$extra_dir_path" ]; then \
+				echo "Error: EXTRA_BLOCKLISTS_DIRS entry is not a directory: $$extra_dir" >&2; \
+				exit 1; \
+			fi; \
+			for blocklist_file in "$$extra_dir_path/all.txt"; do \
+				if [ -f "$$blocklist_file" ]; then \
+					awk '!/^#/ && NF { print $$1 }' "$$blocklist_file" > $@/extra_blocklist.txt; \
+					if [ -s $@/extra_blocklist.txt ]; then \
+						grep -vxF -f $@/extra_blocklist.txt $@/extra_filtered.txt > $@/extra_filtered.next || true; \
+						mv $@/extra_filtered.next $@/extra_filtered.txt; \
+					fi; \
+				fi; \
+			done; \
+			if [ "$(SYSCALL_TEST_WORKDIR)" = "/ext2" ] && [ -f "$$extra_dir_path/ext2.txt" ]; then \
+				awk '!/^#/ && NF { print $$1 }' "$$extra_dir_path/ext2.txt" > $@/extra_blocklist.txt; \
+				if [ -s $@/extra_blocklist.txt ]; then \
+					grep -vxF -f $@/extra_blocklist.txt $@/extra_filtered.txt > $@/extra_filtered.next || true; \
+					mv $@/extra_filtered.next $@/extra_filtered.txt; \
+				fi; \
+			elif [ "$(SYSCALL_TEST_WORKDIR)" = "/exfat" ] && [ -f "$$extra_dir_path/exfat.txt" ]; then \
+				awk '!/^#/ && NF { print $$1 }' "$$extra_dir_path/exfat.txt" > $@/extra_blocklist.txt; \
+				if [ -s $@/extra_blocklist.txt ]; then \
+					grep -vxF -f $@/extra_blocklist.txt $@/extra_filtered.txt > $@/extra_filtered.next || true; \
+					mv $@/extra_filtered.next $@/extra_filtered.txt; \
+				fi; \
+			fi; \
+		done; \
+	fi;
 	@if [ -n "$(LTP_CASES)" ] || [ -n "$(LTP_CASE_FILE)" ]; then \
 		: > $@/selected.txt; \
 		if [ -n "$(LTP_CASES)" ]; then \
@@ -43,13 +81,13 @@ $(TARGET_DIR): $(RUN_BASH) $(ALL_TESTS) $(EXT2_BLOCKLIST) $(EXFAT_BLOCKLIST)
 			echo "Error: no testcases selected from LTP_CASES/LTP_CASE_FILE." >&2; \
 			exit 1; \
 		fi; \
-		grep -xF -f $@/selected.txt $@/fs_filtered.txt > $@/filtered.txt || true; \
+		grep -xF -f $@/selected.txt $@/extra_filtered.txt > $@/filtered.txt || true; \
 		if [ ! -s $@/filtered.txt ]; then \
 			echo "Error: selected LTP cases are not enabled after blocklist filtering." >&2; \
 			exit 1; \
 		fi; \
 	else \
-		cp -f $@/fs_filtered.txt $@/filtered.txt; \
+		cp -f $@/extra_filtered.txt $@/filtered.txt; \
 	fi;
 	@# Process syscall testcases and copy binaries
 	@while read -r syscall binary params; do \
@@ -63,7 +101,8 @@ $(TARGET_DIR): $(RUN_BASH) $(ALL_TESTS) $(EXT2_BLOCKLIST) $(EXFAT_BLOCKLIST)
 		fi; \
 	done < $(LTP_PREBUILT_DIR)/runtest/syscalls
 	@# Remove intermediate files
-	@rm -f $@/all.txt $@/fs_filtered.txt $@/filtered.txt $@/selected.txt
+	@rm -f $@/all.txt $@/fs_filtered.txt $@/extra_filtered.txt $@/extra_filtered.next \
+		$@/filtered.txt $@/selected.txt $@/extra_blocklist.txt
 	@# Copy bash scripts
 	@cp -r $(LTP_PREBUILT_DIR)/bin $@
 	@cp -f $(LTP_PREBUILT_DIR)/runltp $@
