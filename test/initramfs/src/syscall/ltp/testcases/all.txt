@@ -1228,7 +1228,7 @@ removexattr01
 # removexattr02
 
 rename01
-# rename03
+rename03
 # rename04
 # rename05
 # rename06
