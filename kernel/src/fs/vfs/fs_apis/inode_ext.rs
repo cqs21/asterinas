@@ -2,15 +2,30 @@
 
 use alloc::boxed::ThinBox;
 
-use crate::fs::{
-    file::flock::FlockList,
-    vfs::{inode::Inode, notify::FsEventPublisher, range_lock::RangeLockList},
+use crate::{
+    fs::{
+        file::flock::FlockList,
+        vfs::{
+            inode::Inode,
+            notify::FsEventPublisher,
+            range_lock::{RangeLockList, RangeLockType},
+        },
+    },
+    prelude::*,
 };
+
+struct FileLease {
+    owner_id: u64,
+    type_: RangeLockType,
+}
+
+pub type LeaseType = RangeLockType;
 
 /// Context for FS locks.
 pub struct FsLockContext {
     range_lock_list: RangeLockList,
     flock_list: FlockList,
+    lease: Mutex<Option<FileLease>>,
 }
 
 impl FsLockContext {
@@ -18,6 +33,7 @@ impl FsLockContext {
         Self {
             range_lock_list: RangeLockList::new(),
             flock_list: FlockList::new(),
+            lease: Mutex::new(None),
         }
     }
 
@@ -29,6 +45,41 @@ impl FsLockContext {
     /// Returns a reference to the flock list.
     pub fn flock_list(&self) -> &FlockList {
         &self.flock_list
+    }
+
+    pub fn get_lease(&self) -> LeaseType {
+        self.lease
+            .lock()
+            .as_ref()
+            .map(|lease| lease.type_)
+            .unwrap_or(LeaseType::Unlock)
+    }
+
+    pub fn set_lease(&self, owner_id: u64, lease_type: LeaseType) -> Result<()> {
+        debug_assert_ne!(lease_type, LeaseType::Unlock);
+
+        let mut lease = self.lease.lock();
+        if let Some(existing_lease) = lease.as_ref()
+            && existing_lease.owner_id != owner_id
+        {
+            return_errno_with_message!(Errno::EBUSY, "the file already has a lease");
+        }
+
+        *lease = Some(FileLease {
+            owner_id,
+            type_: lease_type,
+        });
+        Ok(())
+    }
+
+    pub fn release_lease(&self, owner_id: u64) {
+        let mut lease = self.lease.lock();
+        if lease
+            .as_ref()
+            .is_some_and(|existing_lease| existing_lease.owner_id == owner_id)
+        {
+            *lease = None;
+        }
     }
 }
 

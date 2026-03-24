@@ -2,7 +2,10 @@
 
 //! Opened Inode-backed File Handle
 
-use core::{fmt::Display, sync::atomic::Ordering};
+use core::{
+    fmt::Display,
+    sync::atomic::{AtomicU64, Ordering},
+};
 
 use aster_rights::Rights;
 
@@ -27,7 +30,10 @@ use crate::{
     util::ioctl::RawIoctl,
 };
 
+static NEXT_INODE_HANDLE_ID: AtomicU64 = AtomicU64::new(1);
+
 pub struct InodeHandle {
+    owner_id: u64,
     path: Path,
     /// `file_io` is similar to the `file_private` field in Linux's `file` structure. If `file_io`
     /// is `Some(_)`, typical file operations including `read`, `write`, `poll`, and `ioctl` will
@@ -68,6 +74,7 @@ impl InodeHandle {
         };
 
         Ok(Self {
+            owner_id: NEXT_INODE_HANDLE_ID.fetch_add(1, Ordering::Relaxed),
             path,
             file_io,
             offset: Mutex::new(0),
@@ -78,6 +85,50 @@ impl InodeHandle {
 
     pub fn path(&self) -> &Path {
         &self.path
+    }
+
+    pub fn get_lease(&self) -> crate::fs::vfs::inode_ext::LeaseType {
+        self.path
+            .inode()
+            .fs_lock_context()
+            .map(|lock_context| lock_context.get_lease())
+            .unwrap_or(crate::fs::vfs::inode_ext::LeaseType::Unlock)
+    }
+
+    pub fn set_lease(&self, lease_type: crate::fs::vfs::inode_ext::LeaseType) -> Result<()> {
+        if self.rights.is_empty() {
+            return_errno_with_message!(Errno::EBADF, "the file is opened as a path");
+        }
+        if self.path.inode().type_() != InodeType::File {
+            return_errno_with_message!(
+                Errno::EINVAL,
+                "file leases are only supported on regular files"
+            );
+        }
+        if lease_type == crate::fs::vfs::inode_ext::LeaseType::ReadLock
+            && self.access_mode() != AccessMode::O_RDONLY
+        {
+            return_errno_with_message!(
+                Errno::EAGAIN,
+                "read leases require a read-only file descriptor"
+            );
+        }
+
+        if lease_type == crate::fs::vfs::inode_ext::LeaseType::Unlock {
+            self.release_lease();
+            return Ok(());
+        }
+
+        self.path
+            .inode()
+            .fs_lock_context_or_init()
+            .set_lease(self.owner_id, lease_type)
+    }
+
+    pub fn release_lease(&self) {
+        if let Some(lock_context) = self.path.inode().fs_lock_context() {
+            lock_context.release_lease(self.owner_id);
+        }
     }
 
     pub fn offset(&self) -> usize {
@@ -511,6 +562,7 @@ impl FileLike for InodeHandle {
 
 impl Drop for InodeHandle {
     fn drop(&mut self) {
+        self.release_lease();
         self.release_range_locks();
         let _ = self.unlock_flock();
     }

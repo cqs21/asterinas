@@ -337,10 +337,10 @@ fcntl21
 fcntl21_64
 fcntl22
 fcntl22_64
-# fcntl23
-# fcntl23_64
-# fcntl24
-# fcntl24_64
+fcntl23
+fcntl23_64
+fcntl24
+fcntl24_64
 # fcntl25
 # fcntl25_64
 # fcntl26

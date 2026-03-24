@@ -32,6 +32,8 @@ pub fn sys_fcntl(fd: FileDesc, cmd: i32, arg: u64, ctx: &Context) -> Result<Sysc
             Errno::EINTR => Error::new(Errno::ERESTARTSYS),
             _ => err,
         }),
+        FcntlCmd::F_SETLEASE => handle_setlease(fd, arg, ctx),
+        FcntlCmd::F_GETLEASE => handle_getlease(fd, ctx),
         FcntlCmd::F_GETOWN => handle_getown(fd, ctx),
         FcntlCmd::F_SETOWN => handle_setown(fd, arg, ctx),
         FcntlCmd::F_SETPIPE_SZ => handle_setpipe_sz(fd, arg, ctx),
@@ -177,6 +179,24 @@ fn handle_setown(fd: FileDesc, arg: u64, ctx: &Context) -> Result<SyscallReturn>
     Ok(SyscallReturn::Return(0))
 }
 
+fn handle_setlease(fd: FileDesc, arg: u64, ctx: &Context) -> Result<SyscallReturn> {
+    let lease_type = lease_type_from_arg(arg)?;
+
+    let mut file_table = ctx.thread_local.borrow_file_table_mut();
+    let file = get_file_fast!(&mut file_table, fd);
+    file.as_inode_handle_or_err()?.set_lease(lease_type)?;
+
+    Ok(SyscallReturn::Return(0))
+}
+
+fn handle_getlease(fd: FileDesc, ctx: &Context) -> Result<SyscallReturn> {
+    let mut file_table = ctx.thread_local.borrow_file_table_mut();
+    let file = get_file_fast!(&mut file_table, fd);
+    let lease_type = file.as_inode_handle_or_err()?.get_lease();
+
+    Ok(SyscallReturn::Return(lease_type as _))
+}
+
 fn handle_setpipe_sz(fd: FileDesc, arg: u64, ctx: &Context) -> Result<SyscallReturn> {
     let requested_size = usize::try_from(arg)
         .map_err(|_| Error::with_message(Errno::EINVAL, "invalid pipe size"))?;
@@ -226,6 +246,8 @@ enum FcntlCmd {
     F_SETLKW = 7,
     F_SETOWN = 8,
     F_GETOWN = 9,
+    F_SETLEASE = 1024,
+    F_GETLEASE = 1025,
     F_DUPFD_CLOEXEC = 1030,
     F_SETPIPE_SZ = 1031,
     F_ADD_SEALS = 1033,
@@ -318,4 +340,10 @@ fn from_c_flock_and_file(lock: &c_flock, file: &dyn FileLike) -> Result<FileRang
     };
 
     FileRange::new(start, end)
+}
+
+fn lease_type_from_arg(arg: u64) -> Result<RangeLockType> {
+    let lease_type =
+        u16::try_from(arg).map_err(|_| Error::with_message(Errno::EINVAL, "invalid lease type"))?;
+    Ok(RangeLockType::try_from(lease_type)?)
 }
