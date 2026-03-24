@@ -41,24 +41,51 @@ impl FileTable {
         ceil_fd: FileDesc,
         flags: FdFlags,
     ) -> Result<FileDesc> {
+        self.dup_ceil_with_limit(fd, ceil_fd, usize::MAX, flags)
+    }
+
+    /// Duplicates `fd` onto the lowest-numbered available descriptor equal to
+    /// or greater than `ceil_fd` and strictly less than `max_fd_exclusive`.
+    pub fn dup_ceil_with_limit(
+        &mut self,
+        fd: FileDesc,
+        ceil_fd: FileDesc,
+        max_fd_exclusive: usize,
+        flags: FdFlags,
+    ) -> Result<FileDesc> {
+        if ceil_fd < 0 {
+            return_errno_with_message!(Errno::EINVAL, "the minimum fd must be non-negative");
+        }
+
         let entry = self.duplicate_entry(fd, flags)?;
 
         // Get the lowest-numbered available fd equal to or greater than `ceil_fd`.
-        let get_min_free_fd = || -> usize {
+        let get_min_free_fd = || -> Option<usize> {
             let ceil_fd = ceil_fd as usize;
-            if self.table.get(ceil_fd).is_none() {
-                return ceil_fd;
+            if ceil_fd >= max_fd_exclusive {
+                return None;
             }
 
-            for idx in ceil_fd + 1..self.len() {
+            if self.table.get(ceil_fd).is_none() {
+                return Some(ceil_fd);
+            }
+
+            for idx in ceil_fd + 1..self.len().min(max_fd_exclusive) {
                 if self.table.get(idx).is_none() {
-                    return idx;
+                    return Some(idx);
                 }
             }
-            self.len()
+
+            if self.len() < max_fd_exclusive {
+                return Some(self.len());
+            }
+
+            None
         };
 
-        let min_free_fd = get_min_free_fd();
+        let min_free_fd = get_min_free_fd().ok_or_else(|| {
+            Error::with_message(Errno::EMFILE, "no file descriptor available under the limit")
+        })?;
         self.table.put_at(min_free_fd, entry);
         Ok(min_free_fd as FileDesc)
     }

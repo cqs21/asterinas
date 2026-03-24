@@ -315,8 +315,8 @@ fcntl10
 fcntl10_64
 # fcntl11
 # fcntl11_64
-# fcntl12
-# fcntl12_64
+fcntl12
+fcntl12_64
 fcntl13
 fcntl13_64
 fcntl14

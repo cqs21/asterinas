@@ -13,7 +13,7 @@ use crate::{
         vfs::range_lock::{FileRange, OFFSET_MAX, RangeLockItem, RangeLockType},
     },
     prelude::*,
-    process::{Pid, process_table},
+    process::{Pid, ResourceType, process_table},
 };
 
 pub fn sys_fcntl(fd: FileDesc, cmd: i32, arg: u64, ctx: &Context) -> Result<SyscallReturn> {
@@ -40,11 +40,24 @@ pub fn sys_fcntl(fd: FileDesc, cmd: i32, arg: u64, ctx: &Context) -> Result<Sysc
 }
 
 fn handle_dupfd(fd: FileDesc, arg: u64, flags: FdFlags, ctx: &Context) -> Result<SyscallReturn> {
+    let minimum_fd = i32::try_from(arg)
+        .map_err(|_| Error::with_message(Errno::EINVAL, "invalid minimum fd value"))?;
+    let max_fd_exclusive = ctx
+        .process
+        .resource_limits()
+        .get_rlimit(ResourceType::RLIMIT_NOFILE)
+        .get_cur()
+        .min(i32::MAX as u64 + 1) as usize;
+
+    if minimum_fd as usize >= max_fd_exclusive {
+        return_errno_with_message!(Errno::EINVAL, "minimum fd exceeds RLIMIT_NOFILE");
+    }
+
     let file_table = ctx.thread_local.borrow_file_table();
     let new_fd = file_table
         .unwrap()
         .write()
-        .dup_ceil(fd, arg as FileDesc, flags)?;
+        .dup_ceil_with_limit(fd, minimum_fd as FileDesc, max_fd_exclusive, flags)?;
     Ok(SyscallReturn::Return(new_fd as _))
 }
 
