@@ -20,11 +20,36 @@ $(TARGET_DIR): $(RUN_BASH) $(ALL_TESTS) $(EXT2_BLOCKLIST) $(EXFAT_BLOCKLIST)
 	@mkdir -p $@/runtest
 	@awk '!/^#/ && NF' $(ALL_TESTS) > $@/all.txt
 	@if [ "$(SYSCALL_TEST_WORKDIR)" = "/ext2" ]; then \
-		grep -vxF -f $(EXT2_BLOCKLIST) $@/all.txt > $@/filtered.txt; \
+		grep -vxF -f $(EXT2_BLOCKLIST) $@/all.txt > $@/fs_filtered.txt; \
 	elif [ "$(SYSCALL_TEST_WORKDIR)" = "/exfat" ]; then \
-		grep -vxF -f $(EXFAT_BLOCKLIST) $@/all.txt > $@/filtered.txt; \
+		grep -vxF -f $(EXFAT_BLOCKLIST) $@/all.txt > $@/fs_filtered.txt; \
 	else \
-		cp -f $@/all.txt $@/filtered.txt; \
+		cp -f $@/all.txt $@/fs_filtered.txt; \
+	fi;
+	@if [ -n "$(LTP_CASES)" ] || [ -n "$(LTP_CASE_FILE)" ]; then \
+		: > $@/selected.txt; \
+		if [ -n "$(LTP_CASES)" ]; then \
+			printf '%s\n' "$(LTP_CASES)" | tr ',' '\n' | sed 's/^[[:space:]]*//;s/[[:space:]]*$$//' | awk 'NF' >> $@/selected.txt; \
+		fi; \
+		if [ -n "$(LTP_CASE_FILE)" ]; then \
+			if [ ! -f "$(LTP_CASE_FILE)" ]; then \
+				echo "Error: LTP_CASE_FILE does not exist: $(LTP_CASE_FILE)" >&2; \
+				exit 1; \
+			fi; \
+			awk '!/^#/ && NF { print $$1 }' "$(LTP_CASE_FILE)" >> $@/selected.txt; \
+		fi; \
+		sort -u -o $@/selected.txt $@/selected.txt; \
+		if [ ! -s $@/selected.txt ]; then \
+			echo "Error: no testcases selected from LTP_CASES/LTP_CASE_FILE." >&2; \
+			exit 1; \
+		fi; \
+		grep -xF -f $@/selected.txt $@/fs_filtered.txt > $@/filtered.txt || true; \
+		if [ ! -s $@/filtered.txt ]; then \
+			echo "Error: selected LTP cases are not enabled after blocklist filtering." >&2; \
+			exit 1; \
+		fi; \
+	else \
+		cp -f $@/fs_filtered.txt $@/filtered.txt; \
 	fi;
 	@# Process syscall testcases and copy binaries
 	@while read -r syscall binary params; do \
@@ -38,7 +63,7 @@ $(TARGET_DIR): $(RUN_BASH) $(ALL_TESTS) $(EXT2_BLOCKLIST) $(EXFAT_BLOCKLIST)
 		fi; \
 	done < $(LTP_PREBUILT_DIR)/runtest/syscalls
 	@# Remove intermediate files
-	@rm -f $@/all.txt $@/filtered.txt
+	@rm -f $@/all.txt $@/fs_filtered.txt $@/filtered.txt $@/selected.txt
 	@# Copy bash scripts
 	@cp -r $(LTP_PREBUILT_DIR)/bin $@
 	@cp -f $(LTP_PREBUILT_DIR)/runltp $@
