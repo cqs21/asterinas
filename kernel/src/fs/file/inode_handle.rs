@@ -22,7 +22,7 @@ use crate::{
             inode::{FallocMode, InodeIo},
             inode_ext::InodeExt,
             path::Path,
-            range_lock::{FileRange, OFFSET_MAX, RangeLockItem, RangeLockType},
+            range_lock::{FileRange, OFFSET_MAX, RangeLockItem, RangeLockOwner, RangeLockType},
         },
     },
     prelude::*,
@@ -90,6 +90,10 @@ impl InodeHandle {
 
     pub fn path(&self) -> &Path {
         &self.path
+    }
+
+    pub fn owner_id(&self) -> u64 {
+        self.owner_id
     }
 
     fn register_open_file_description(self) -> Self {
@@ -285,11 +289,10 @@ impl InodeHandle {
     }
 
     pub fn release_range_locks(&self) {
-        let range_lock = RangeLockItem::new(
-            RangeLockType::Unlock,
-            FileRange::new(0, OFFSET_MAX).unwrap(),
-        );
-        self.unlock_range_lock(&range_lock);
+        if let Some(process) = Process::current() {
+            self.unlock_range_lock_with_owner(RangeLockOwner::Process(process.pid()));
+        }
+        self.unlock_range_lock_with_owner(RangeLockOwner::OpenFileDescription(self.owner_id));
     }
 
     fn unlock_range_lock(&self, lock: &RangeLockItem) {
@@ -301,6 +304,15 @@ impl InodeHandle {
         {
             range_lock_list.unlock(lock);
         }
+    }
+
+    fn unlock_range_lock_with_owner(&self, owner: RangeLockOwner) {
+        let range_lock = RangeLockItem::new_with_owner(
+            RangeLockType::Unlock,
+            FileRange::new(0, OFFSET_MAX).unwrap(),
+            owner,
+        );
+        self.unlock_range_lock(&range_lock);
     }
 
     pub fn set_flock(&self, lock: FlockItem, is_nonblocking: bool) -> Result<()> {

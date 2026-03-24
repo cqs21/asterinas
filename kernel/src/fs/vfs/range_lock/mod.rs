@@ -9,13 +9,28 @@ use range::{FileRangeChange, OverlapWith};
 
 use crate::{prelude::*, process::Pid};
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
+pub enum RangeLockOwner {
+    Process(Pid),
+    OpenFileDescription(u64),
+}
+
+impl RangeLockOwner {
+    pub fn as_process(self) -> Option<Pid> {
+        match self {
+            Self::Process(pid) => Some(pid),
+            Self::OpenFileDescription(_) => None,
+        }
+    }
+}
+
 mod range;
 
 /// The metadata of a POSIX advisory file range lock.
 #[derive(Debug, Clone)]
 struct RangeLock {
-    /// Owner of the lock, representing the process holding the lock
-    owner: Pid,
+    /// Owner of the lock, representing either the process or OFD holder.
+    owner: RangeLockOwner,
     /// Type of lock: can be F_RDLCK (read lock), F_WRLCK (write lock), or F_UNLCK (unlock)
     type_: RangeLockType,
     /// Range of the lock which specifies the portion of the file being locked
@@ -33,11 +48,9 @@ pub struct RangeLockItem {
 }
 
 impl RangeLockItem {
-    /// Creates a new instance with the given lock type and the file range.
-    /// The new instance will be associated with the current process.
-    pub fn new(type_: RangeLockType, range: FileRange) -> Self {
+    pub fn new_with_owner(type_: RangeLockType, range: FileRange, owner: RangeLockOwner) -> Self {
         let lock = RangeLock {
-            owner: current!().pid(),
+            owner,
             type_,
             range,
         };
@@ -58,12 +71,12 @@ impl RangeLockItem {
     }
 
     /// Returns the owner (process ID) of the lock
-    pub fn owner(&self) -> Pid {
+    pub fn owner(&self) -> RangeLockOwner {
         self.lock.owner
     }
 
-    /// Sets the owner of the lock to the specified process ID
-    pub fn set_owner(&mut self, owner: Pid) {
+    /// Sets the owner of the lock to the specified owner.
+    pub fn set_owner(&mut self, owner: RangeLockOwner) {
         self.lock.owner = owner;
     }
 
@@ -227,36 +240,44 @@ impl RangeLockList {
     fn try_set_lock(&self, req_lock: &RangeLockItem, waker: Option<&Arc<Waker>>) -> Result<()> {
         let mut list = self.inner.write();
         let requester = req_lock.owner();
+        let requester_pid = requester.as_process();
         let mut conflicting_waitqueues = Vec::new();
         let mut conflicting_owners = BTreeSet::new();
+        let mut has_conflict = false;
         for lock in list.iter() {
             if !req_lock.conflict_with(lock) {
                 continue;
             }
-            conflicting_owners.insert(lock.owner());
+            has_conflict = true;
+            if let Some(owner_pid) = lock.owner().as_process() {
+                conflicting_owners.insert(owner_pid);
+            }
             conflicting_waitqueues.push(lock.waitqueue.clone());
         }
 
-        if conflicting_owners.is_empty() {
+        if !has_conflict {
             Self::insert_lock_into_list(&mut list, req_lock);
-            self.waiting_owners.lock().remove(&requester);
+            if let Some(requester_pid) = requester_pid {
+                self.waiting_owners.lock().remove(&requester_pid);
+            }
             return Ok(());
         }
 
         if let Some(waker) = waker {
-            let mut waiting_owners = self.waiting_owners.lock();
-            if Self::would_deadlock(&waiting_owners, requester, &conflicting_owners) {
-                waiting_owners.remove(&requester);
-                return_errno_with_message!(Errno::EDEADLK, "the requested lock would deadlock");
+            if let Some(requester_pid) = requester_pid {
+                let mut waiting_owners = self.waiting_owners.lock();
+                if Self::would_deadlock(&waiting_owners, requester_pid, &conflicting_owners) {
+                    waiting_owners.remove(&requester_pid);
+                    return_errno_with_message!(Errno::EDEADLK, "the requested lock would deadlock");
+                }
+                waiting_owners.insert(requester_pid, conflicting_owners.iter().copied().collect());
             }
-            waiting_owners.insert(requester, conflicting_owners.into_iter().collect());
-            drop(waiting_owners);
 
             for waitqueue in conflicting_waitqueues {
                 waitqueue.enqueue(waker.clone());
             }
-        } else {
-            self.waiting_owners.lock().remove(&requester);
+        } else if let Some(requester_pid) = requester_pid {
+            self.waiting_owners.lock().remove(&requester_pid);
         }
 
         return_errno_with_message!(Errno::EAGAIN, "the file is locked");
@@ -271,7 +292,7 @@ impl RangeLockList {
             "set_lock with RangeLock: {:?}, is_nonblocking: {}",
             req_lock, is_nonblocking
         );
-        let requester = req_lock.owner();
+        let requester_pid = req_lock.owner().as_process();
         let result = if is_nonblocking {
             self.try_set_lock(req_lock, None)
         } else {
@@ -285,7 +306,9 @@ impl RangeLockList {
                 }
             })?
         };
-        self.waiting_owners.lock().remove(&requester);
+        if let Some(requester_pid) = requester_pid {
+            self.waiting_owners.lock().remove(&requester_pid);
+        }
         result
     }
 

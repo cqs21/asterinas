@@ -10,7 +10,7 @@ use crate::{
             file_table::{FdFlags, FileAsyncOwner, FileDesc, WithFileTable, get_file_fast},
         },
         ramfs::memfd::{FileSeals, MemfdInodeHandle},
-        vfs::range_lock::{FileRange, OFFSET_MAX, RangeLockItem, RangeLockType},
+        vfs::range_lock::{FileRange, OFFSET_MAX, RangeLockItem, RangeLockOwner, RangeLockType},
     },
     prelude::*,
     process::{
@@ -35,12 +35,32 @@ pub fn sys_fcntl(fd: FileDesc, cmd: i32, arg: u64, ctx: &Context) -> Result<Sysc
         FcntlCmd::F_SETFD => handle_setfd(fd, arg, ctx),
         FcntlCmd::F_GETFL => handle_getfl(fd, ctx),
         FcntlCmd::F_SETFL => handle_setfl(fd, arg, ctx),
-        FcntlCmd::F_GETLK => handle_getlk(fd, arg, ctx),
-        FcntlCmd::F_SETLK => handle_setlk(fd, arg, true, ctx),
-        FcntlCmd::F_SETLKW => handle_setlk(fd, arg, false, ctx).map_err(|err| match err.error() {
+        FcntlCmd::F_GETLK => handle_getlk(fd, arg, RangeLockOwner::Process(ctx.process.pid()), ctx),
+        FcntlCmd::F_SETLK => handle_setlk(
+            fd,
+            arg,
+            true,
+            RangeLockOwner::Process(ctx.process.pid()),
+            ctx,
+        ),
+        FcntlCmd::F_SETLKW => handle_setlk(
+            fd,
+            arg,
+            false,
+            RangeLockOwner::Process(ctx.process.pid()),
+            ctx,
+        )
+        .map_err(|err| match err.error() {
             Errno::EINTR => Error::new(Errno::ERESTARTSYS),
             _ => err,
         }),
+        FcntlCmd::F_OFD_GETLK => handle_getlk(fd, arg, ofd_range_lock_owner(fd, ctx)?, ctx),
+        FcntlCmd::F_OFD_SETLK => handle_setlk(fd, arg, true, ofd_range_lock_owner(fd, ctx)?, ctx),
+        FcntlCmd::F_OFD_SETLKW => handle_setlk(fd, arg, false, ofd_range_lock_owner(fd, ctx)?, ctx)
+            .map_err(|err| match err.error() {
+                Errno::EINTR => Error::new(Errno::ERESTARTSYS),
+                _ => err,
+            }),
         FcntlCmd::F_SETLEASE => handle_setlease(fd, arg, ctx),
         FcntlCmd::F_GETLEASE => handle_getlease(fd, ctx),
         FcntlCmd::F_GETOWN => handle_getown(fd, ctx),
@@ -126,7 +146,12 @@ fn handle_setfl(fd: FileDesc, arg: u64, ctx: &Context) -> Result<SyscallReturn> 
     Ok(SyscallReturn::Return(0))
 }
 
-fn handle_getlk(fd: FileDesc, arg: u64, ctx: &Context) -> Result<SyscallReturn> {
+fn handle_getlk(
+    fd: FileDesc,
+    arg: u64,
+    owner: RangeLockOwner,
+    ctx: &Context,
+) -> Result<SyscallReturn> {
     let mut file_table = ctx.thread_local.borrow_file_table_mut();
     let file = get_file_fast!(&mut file_table, fd);
     let lock_mut_ptr = arg as Vaddr;
@@ -135,7 +160,11 @@ fn handle_getlk(fd: FileDesc, arg: u64, ctx: &Context) -> Result<SyscallReturn> 
     if lock_type == RangeLockType::Unlock {
         return_errno_with_message!(Errno::EINVAL, "invalid flock type for getlk");
     }
-    let mut lock = RangeLockItem::new(lock_type, from_c_flock_and_file(&lock_mut_c, &**file)?);
+    let mut lock = RangeLockItem::new_with_owner(
+        lock_type,
+        from_c_flock_and_file(&lock_mut_c, &**file)?,
+        owner,
+    );
     let inode_file = file.as_inode_handle_or_err()?;
     lock = inode_file.test_range_lock(lock)?;
     lock_mut_c.copy_from_range_lock(&lock);
@@ -147,6 +176,7 @@ fn handle_setlk(
     fd: FileDesc,
     arg: u64,
     is_nonblocking: bool,
+    owner: RangeLockOwner,
     ctx: &Context,
 ) -> Result<SyscallReturn> {
     let mut file_table = ctx.thread_local.borrow_file_table_mut();
@@ -154,7 +184,11 @@ fn handle_setlk(
     let lock_mut_ptr = arg as Vaddr;
     let lock_mut_c = ctx.user_space().read_val::<c_flock>(lock_mut_ptr)?;
     let lock_type = RangeLockType::try_from(lock_mut_c.l_type)?;
-    let lock = RangeLockItem::new(lock_type, from_c_flock_and_file(&lock_mut_c, &**file)?);
+    let lock = RangeLockItem::new_with_owner(
+        lock_type,
+        from_c_flock_and_file(&lock_mut_c, &**file)?,
+        owner,
+    );
     let inode_file = file.as_inode_handle_or_err()?;
     inode_file.set_range_lock(&lock, is_nonblocking)?;
     Ok(SyscallReturn::Return(0))
@@ -309,6 +343,9 @@ enum FcntlCmd {
     F_GETSIG = 11,
     F_SETOWN_EX = 15,
     F_GETOWN_EX = 16,
+    F_OFD_GETLK = 36,
+    F_OFD_SETLK = 37,
+    F_OFD_SETLKW = 38,
     F_SETLEASE = 1024,
     F_GETLEASE = 1025,
     F_DUPFD_CLOEXEC = 1030,
@@ -443,7 +480,7 @@ impl c_flock {
             } else {
                 lock.range().len() as off_t
             };
-            self.l_pid = lock.owner();
+            self.l_pid = lock.owner().as_process().unwrap_or(0);
         }
     }
 }
@@ -542,4 +579,11 @@ fn signal_from_setsig_arg(arg: u64) -> Result<Option<SigNum>> {
     }
 
     Ok(Some(signal))
+}
+
+fn ofd_range_lock_owner(fd: FileDesc, ctx: &Context) -> Result<RangeLockOwner> {
+    let mut file_table = ctx.thread_local.borrow_file_table_mut();
+    let file = get_file_fast!(&mut file_table, fd);
+    let inode_handle = file.as_inode_handle_or_err()?;
+    Ok(RangeLockOwner::OpenFileDescription(inode_handle.owner_id()))
 }
