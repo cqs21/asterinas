@@ -3,6 +3,7 @@
 //! Opened Inode-backed File Handle
 
 use core::{
+    ffi::c_long,
     fmt::Display,
     sync::atomic::{AtomicU64, Ordering},
 };
@@ -30,10 +31,20 @@ use crate::{
         Process,
         signal::{PollHandle, Pollable},
     },
-    util::ioctl::RawIoctl,
+    util::ioctl::{RawIoctl, dispatch_ioctl},
 };
 
 static NEXT_INODE_HANDLE_ID: AtomicU64 = AtomicU64::new(1);
+
+const FS_IOC_GETFLAGS_TMPFS_FLAGS: c_long = 0;
+
+mod ioctl_defs {
+    use core::ffi::c_long;
+
+    use crate::util::ioctl::{OutData, ioc};
+
+    pub(super) type GetFileFlags = ioc!(FS_IOC_GETFLAGS, b'f', 0x01, OutData<c_long>);
+}
 
 pub struct InodeHandle {
     owner_id: u64,
@@ -94,6 +105,20 @@ impl InodeHandle {
 
     pub fn owner_id(&self) -> u64 {
         self.owner_id
+    }
+
+    fn inode_file_flags(&self) -> Option<c_long> {
+        let fs_name = self.path.mount_node().fs().name();
+
+        match fs_name {
+            "tmpfs" => Some(FS_IOC_GETFLAGS_TMPFS_FLAGS),
+            "ext2" => self
+                .path
+                .inode()
+                .downcast_ref::<crate::fs::ext2::Inode>()
+                .map(|inode| inode.file_flags().bits() as c_long),
+            _ => None,
+        }
     }
 
     fn register_open_file_description(self) -> Self {
@@ -447,6 +472,8 @@ impl FileLike for InodeHandle {
     }
 
     fn ioctl(&self, raw_ioctl: RawIoctl) -> Result<i32> {
+        use ioctl_defs::*;
+
         if self.rights.is_empty() {
             return_errno_with_message!(Errno::EBADF, "the file is opened as a path");
         }
@@ -455,7 +482,18 @@ impl FileLike for InodeHandle {
             return file_io.ioctl(raw_ioctl);
         }
 
-        return_errno_with_message!(Errno::ENOTTY, "ioctl is not supported");
+        dispatch_ioctl!(match raw_ioctl {
+            cmd @ GetFileFlags => {
+                let flags = self.inode_file_flags().ok_or(Error::with_message(
+                    Errno::ENOTTY,
+                    "the inode does not support file flags",
+                ))?;
+                cmd.write(&flags)?;
+            }
+            _ => return_errno_with_message!(Errno::ENOTTY, "ioctl is not supported"),
+        });
+
+        Ok(0)
     }
 
     fn mappable(&self) -> Result<Mappable> {

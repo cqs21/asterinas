@@ -20,6 +20,18 @@ CASE_LOG_DIR="$RUN_ARTIFACT_DIR/ltp_case_logs"
 RESULT=0
 RUNLTP_EXIT_CODE=0
 
+find_unused_block_device() {
+    for candidate in /dev/vd[c-z] /dev/vd[a-z][a-z]; do
+        [ -b "$candidate" ] || continue
+        if ! awk -v dev="$candidate" '$1 == dev { found = 1; exit } END { exit found ? 0 : 1 }' /proc/mounts; then
+            echo "$candidate"
+            return 0
+        fi
+    done
+
+    return 1
+}
+
 cleanup_workdir() {
     mkdir -p "$TEST_TMP_DIR"
     # Keep artifacts under `.ltp_logs` and clear everything else for isolation.
@@ -69,6 +81,12 @@ mkdir -p "$RUN_ARTIFACT_DIR"
 
 if [ -z "${KCONFIG_PATH:-}" ] && [ -f "$LTP_KCONFIG_PATH" ]; then
     export KCONFIG_PATH="$LTP_KCONFIG_PATH"
+fi
+
+if [ -z "${LTP_DEV:-}" ]; then
+    if LTP_DEV=$(find_unused_block_device); then
+        export LTP_DEV
+    fi
 fi
 
 rm -f \

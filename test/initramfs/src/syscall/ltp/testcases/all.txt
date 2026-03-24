@@ -1871,7 +1871,7 @@ futex_wait_bitset01
 statx01
 statx02
 statx03
-# statx04
+statx04
 # statx05
 # statx06
 # statx07

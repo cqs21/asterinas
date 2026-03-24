@@ -15,6 +15,15 @@ use crate::{
 };
 
 const STATX_ATTR_MOUNT_ROOT: u64 = 0x0000_2000;
+const STATX_ATTR_COMPRESSED: u64 = 0x0000_0004;
+const STATX_ATTR_IMMUTABLE: u64 = 0x0000_0010;
+const STATX_ATTR_APPEND: u64 = 0x0000_0020;
+const STATX_ATTR_NODUMP: u64 = 0x0000_0040;
+
+const FS_COMPR_FL: u32 = 0x0000_0004;
+const FS_IMMUTABLE_FL: u32 = 0x0000_0010;
+const FS_APPEND_FL: u32 = 0x0000_0020;
+const FS_NODUMP_FL: u32 = 0x0000_0040;
 
 pub fn sys_statx(
     dirfd: FileDesc,
@@ -133,13 +142,7 @@ impl Statx {
         let (stx_rdev_major, stx_rdev_minor) =
             device_id::decode_device_numbers(info.self_dev_id.map_or(0, |id| id.as_encoded_u64()));
 
-        // TODO: Support more `stx_attributes` flags.
-        let stx_attributes_mask = STATX_ATTR_MOUNT_ROOT;
-
-        let mut stx_attributes = 0;
-        if path.is_mount_root() {
-            stx_attributes |= STATX_ATTR_MOUNT_ROOT;
-        }
+        let (stx_attributes, stx_attributes_mask) = statx_attributes(path);
 
         let stx_mask = StatxMask::STATX_BASIC_STATS.bits()
             | StatxMask::STATX_BTIME.bits()
@@ -173,6 +176,46 @@ impl Statx {
             __spare3: [0; 12],
         }
     }
+}
+
+fn statx_attributes(path: &Path) -> (u64, u64) {
+    let mut attributes = 0;
+    let mut attributes_mask = STATX_ATTR_MOUNT_ROOT;
+
+    if path.is_mount_root() {
+        attributes |= STATX_ATTR_MOUNT_ROOT;
+    }
+
+    match path.fs().name() {
+        "tmpfs" | "ramfs" => {
+            attributes_mask |= STATX_ATTR_APPEND | STATX_ATTR_IMMUTABLE | STATX_ATTR_NODUMP;
+        }
+        "ext2" => {
+            attributes_mask |= STATX_ATTR_COMPRESSED
+                | STATX_ATTR_APPEND
+                | STATX_ATTR_IMMUTABLE
+                | STATX_ATTR_NODUMP;
+
+            if let Some(inode) = path.inode().downcast_ref::<crate::fs::ext2::Inode>() {
+                let flags = inode.file_flags().bits();
+                if flags & FS_COMPR_FL != 0 {
+                    attributes |= STATX_ATTR_COMPRESSED;
+                }
+                if flags & FS_IMMUTABLE_FL != 0 {
+                    attributes |= STATX_ATTR_IMMUTABLE;
+                }
+                if flags & FS_APPEND_FL != 0 {
+                    attributes |= STATX_ATTR_APPEND;
+                }
+                if flags & FS_NODUMP_FL != 0 {
+                    attributes |= STATX_ATTR_NODUMP;
+                }
+            }
+        }
+        _ => {}
+    }
+
+    (attributes, attributes_mask)
 }
 
 /// Statx Timestamp (seconds and nanoseconds)
