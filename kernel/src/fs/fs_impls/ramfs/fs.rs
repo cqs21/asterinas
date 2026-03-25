@@ -34,7 +34,7 @@ use crate::{
         },
     },
     prelude::*,
-    process::{Gid, Uid, posix_thread::AsPosixThread},
+    process::{Gid, Uid, credentials::capabilities::CapSet, posix_thread::AsPosixThread},
     time::clocks::RealTimeCoarseClock,
     vm::vmo::Vmo,
 };
@@ -469,6 +469,14 @@ impl RamInode {
             if inode_type == InodeType::Dir {
                 mode |= InodeMode::S_ISGID;
             }
+        }
+        if inode_type != InodeType::Dir
+            && mode.has_set_gid()
+            && !credentials.effective_capset().contains(CapSet::FSETID)
+            && gid != credentials.fsgid()
+            && !credentials.groups().contains(&gid)
+        {
+            mode -= InodeMode::S_ISGID;
         }
 
         (mode, credentials.fsuid(), gid)

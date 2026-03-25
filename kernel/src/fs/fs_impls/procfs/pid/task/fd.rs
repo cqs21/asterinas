@@ -28,7 +28,7 @@ pub(super) struct FdDirOps<T> {
 
 impl<T: FdOps> FdDirOps<T> {
     pub fn new_inode(dir: &TidDirOps, parent: Weak<dyn Inode>) -> Arc<dyn Inode> {
-        ProcDirBuilder::new(
+        let inode = ProcDirBuilder::new(
             Self {
                 dir: dir.clone(),
                 marker: PhantomData,
@@ -38,7 +38,9 @@ impl<T: FdOps> FdDirOps<T> {
         )
         .parent(parent)
         .build()
-        .unwrap()
+        .unwrap();
+        set_inode_owner_from_tid_dir(inode.as_ref(), dir);
+        inode
     }
 }
 
@@ -189,7 +191,7 @@ impl FdOps for FileSymOps {
             mode = chmod!(mode, u+wx);
         }
 
-        ProcSymBuilder::new(
+        let inode = ProcSymBuilder::new(
             Self {
                 tid_dir_ops,
                 file_desc,
@@ -199,7 +201,10 @@ impl FdOps for FileSymOps {
         )
         .parent(parent)
         .build()
-        .unwrap()
+        .unwrap();
+        let tid_dir_ops = inode.inner().tid_dir_ops.clone();
+        set_inode_owner_from_tid_dir(inode.as_ref(), &tid_dir_ops);
+        inode
     }
 
     fn file_desc(&self) -> FileDesc {
@@ -250,7 +255,7 @@ impl FdOps for FileInfoOps {
         _access_mode: AccessMode,
         parent: Weak<dyn Inode>,
     ) -> Arc<dyn Inode> {
-        ProcFileBuilder::new(
+        let inode = ProcFileBuilder::new(
             Self {
                 tid_dir_ops,
                 file_desc,
@@ -260,7 +265,10 @@ impl FdOps for FileInfoOps {
         )
         .parent(parent)
         .build()
-        .unwrap()
+        .unwrap();
+        let tid_dir_ops = inode.inner().tid_dir_ops.clone();
+        set_inode_owner_from_tid_dir(inode.as_ref(), &tid_dir_ops);
+        inode
     }
 
     fn file_desc(&self) -> FileDesc {
@@ -294,4 +302,14 @@ impl FileOps for FileInfoOps {
 
         Ok(printer.bytes_written())
     }
+}
+
+fn set_inode_owner_from_tid_dir(inode: &dyn Inode, tid_dir_ops: &TidDirOps) {
+    let credentials = tid_dir_ops
+        .thread()
+        .as_posix_thread()
+        .unwrap()
+        .credentials();
+    inode.set_owner(credentials.fsuid()).unwrap();
+    inode.set_group(credentials.fsgid()).unwrap();
 }
