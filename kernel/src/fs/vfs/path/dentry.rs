@@ -6,7 +6,7 @@ use core::{
 };
 
 use hashbrown::HashMap;
-use ostd::sync::RwMutexWriteGuard;
+use ostd::{sync::RwMutexWriteGuard, task::Task};
 
 use super::{is_dot, is_dot_or_dotdot, is_dotdot};
 use crate::{
@@ -19,6 +19,7 @@ use crate::{
         },
     },
     prelude::*,
+    process::{credentials::capabilities::CapSet, posix_thread::AsPosixThread},
 };
 
 /// A `Dentry` represents a cached filesystem node in the VFS tree.
@@ -356,24 +357,17 @@ impl DirDentry<'_> {
 
         let children = self.children.upread();
         children.check_mountpoint(name)?;
+        let dir_inode = &self.inode;
+        let child_inode = lookup_existing_child_inode(&children, dir_inode, name)?;
+        check_sticky_directory_permission(dir_inode, &child_inode)?;
 
         let mut children = children.upgrade();
-        let dir_inode = &self.inode;
-
-        let child_inode = if let Some(cached_dentry) = children.entry(name)? {
-            let child_inode = cached_dentry.inode().clone();
-
+        if children.entry(name)?.is_some() {
             dir_inode.unlink(name)?;
             children.delete(name);
-
-            child_inode
         } else {
-            // Cache miss: need to lookup from the underlying filesystem
-            let child_inode = dir_inode.lookup(name)?;
             dir_inode.unlink(name)?;
-
-            child_inode
-        };
+        }
 
         drop(children);
 
@@ -409,24 +403,17 @@ impl DirDentry<'_> {
 
         let children = self.children.upread();
         children.check_mountpoint(name)?;
+        let dir_inode = &self.inode;
+        let child_inode = lookup_existing_child_inode(&children, dir_inode, name)?;
+        check_sticky_directory_permission(dir_inode, &child_inode)?;
 
         let mut children = children.upgrade();
-        let dir_inode = &self.inode;
-
-        let child_inode = if let Some(cached_dentry) = children.entry(name)? {
-            let child_inode = cached_dentry.inode().clone();
-
+        if children.entry(name)?.is_some() {
             dir_inode.rmdir(name)?;
             children.delete(name);
-
-            child_inode
         } else {
-            // Cache miss: need to lookup from the underlying filesystem
-            let child_inode = dir_inode.lookup(name)?;
             dir_inode.rmdir(name)?;
-
-            child_inode
-        };
+        }
 
         drop(children);
 
@@ -480,7 +467,15 @@ impl DirDentry<'_> {
 
             let children = old_dir.children.upread();
             let old_dentry = children.check_mountpoint_then_find(old_name)?;
+            let old_inode =
+                child_inode_from_optional_dentry(old_dentry.as_ref(), old_dir_inode, old_name)?;
+            check_sticky_directory_permission(old_dir_inode, &old_inode)?;
             children.check_mountpoint(new_name)?;
+            if let Some(replaced_inode) =
+                lookup_optional_child_inode(&children, old_dir_inode, new_name)?
+            {
+                check_sticky_directory_permission(old_dir_inode, &replaced_inode)?;
+            }
 
             old_dir_inode.rename(old_name, old_dir_inode, new_name)?;
 
@@ -505,7 +500,15 @@ impl DirDentry<'_> {
             let (mut self_children, mut new_dir_children) =
                 write_lock_children_on_two_dentries(&old_dir, &new_dir);
             let old_dentry = self_children.check_mountpoint_then_find(old_name)?;
+            let old_inode =
+                child_inode_from_optional_dentry(old_dentry.as_ref(), old_dir_inode, old_name)?;
+            check_sticky_directory_permission(old_dir_inode, &old_inode)?;
             new_dir_children.check_mountpoint(new_name)?;
+            if let Some(replaced_inode) =
+                lookup_optional_child_inode(&new_dir_children, new_dir_inode, new_name)?
+            {
+                check_sticky_directory_permission(new_dir_inode, &replaced_inode)?;
+            }
 
             old_dir_inode.rename(old_name, new_dir_inode, new_name)?;
             match old_dentry.as_ref() {
@@ -525,6 +528,76 @@ impl DirDentry<'_> {
             }
         }
         Ok(())
+    }
+}
+
+fn check_sticky_directory_permission(
+    dir_inode: &Arc<dyn Inode>,
+    child_inode: &Arc<dyn Inode>,
+) -> Result<()> {
+    if !dir_inode.metadata().mode.has_sticky_bit() {
+        return Ok(());
+    }
+
+    let Some(task) = Task::current() else {
+        return Ok(());
+    };
+    let Some(thread) = task.as_posix_thread() else {
+        return Ok(());
+    };
+
+    let credentials = thread.credentials();
+    if credentials.effective_capset().contains(CapSet::FOWNER) {
+        return Ok(());
+    }
+
+    let fsuid = credentials.fsuid();
+    let dir_uid = dir_inode.metadata().uid;
+    let child_uid = child_inode.metadata().uid;
+    if fsuid == dir_uid || fsuid == child_uid {
+        return Ok(());
+    }
+
+    return_errno_with_message!(Errno::EPERM, "sticky directory rename/delete denied");
+}
+
+fn lookup_existing_child_inode(
+    children: &DentryChildren,
+    dir_inode: &Arc<dyn Inode>,
+    name: &str,
+) -> Result<Arc<dyn Inode>> {
+    child_inode_from_optional_dentry(
+        children.check_mountpoint_then_find(name)?.as_ref(),
+        dir_inode,
+        name,
+    )
+}
+
+fn lookup_optional_child_inode(
+    children: &DentryChildren,
+    dir_inode: &Arc<dyn Inode>,
+    name: &str,
+) -> Result<Option<Arc<dyn Inode>>> {
+    match children.entry(name) {
+        Ok(Some(dentry)) => Ok(Some(dentry.inode().clone())),
+        Ok(None) => match dir_inode.lookup(name) {
+            Ok(inode) => Ok(Some(inode)),
+            Err(err) if err.error() == Errno::ENOENT => Ok(None),
+            Err(err) => Err(err),
+        },
+        Err(err) if err.error() == Errno::ENOENT => Ok(None),
+        Err(err) => Err(err),
+    }
+}
+
+fn child_inode_from_optional_dentry(
+    dentry: Option<&Arc<Dentry>>,
+    dir_inode: &Arc<dyn Inode>,
+    name: &str,
+) -> Result<Arc<dyn Inode>> {
+    match dentry {
+        Some(dentry) => Ok(dentry.inode().clone()),
+        None => dir_inode.lookup(name),
     }
 }
 
