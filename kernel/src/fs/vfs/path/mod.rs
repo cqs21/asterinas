@@ -9,6 +9,7 @@ use dentry::DirDentry;
 use inherit_methods_macro::inherit_methods;
 pub use mount::{Mount, MountPropType, PerMountFlags};
 pub use mount_namespace::MountNamespace;
+use ostd::task::Task;
 pub use resolver::{AT_FDCWD, AbsPathResult, FsPath, LookupResult, PathResolver, SplitPath};
 
 use crate::{
@@ -23,7 +24,7 @@ use crate::{
         },
     },
     prelude::*,
-    process::{Gid, Uid},
+    process::{Gid, Uid, credentials::capabilities::CapSet, posix_thread::AsPosixThread},
 };
 
 mod dentry;
@@ -128,6 +129,7 @@ impl Path {
                 "O_DIRECTORY is specified but the file is not a directory"
             );
         }
+        self.check_noatime_permission(*status_flags)?;
 
         if inode_type.is_regular_file()
             && creation_flags.contains(CreationFlags::O_TRUNC)
@@ -137,6 +139,33 @@ impl Path {
         }
 
         InodeHandle::new(self.clone(), open_args.access_mode, *status_flags)
+    }
+
+    fn check_noatime_permission(&self, status_flags: StatusFlags) -> Result<()> {
+        if !status_flags.contains(StatusFlags::O_NOATIME)
+            || status_flags.contains(StatusFlags::O_PATH)
+        {
+            return Ok(());
+        }
+
+        let Some(task) = Task::current() else {
+            return Ok(());
+        };
+        let Some(thread) = task.as_posix_thread() else {
+            return Ok(());
+        };
+
+        let credentials = thread.credentials();
+        if credentials.effective_capset().contains(CapSet::FOWNER)
+            || credentials.euid() == self.inode().metadata().uid
+        {
+            return Ok(());
+        }
+
+        return_errno_with_message!(
+            Errno::EPERM,
+            "O_NOATIME requires file ownership or CAP_FOWNER"
+        );
     }
 
     /// Gets the real name of the `Path` from its dentry.
