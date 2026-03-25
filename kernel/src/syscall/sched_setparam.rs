@@ -2,7 +2,10 @@
 
 use ostd::mm::VmIo;
 
-use super::{SyscallReturn, sched_getattr::access_sched_attr_with};
+use super::{
+    SyscallReturn,
+    sched_setscheduler::{check_sched_change_perm, get_sched_target_info},
+};
 use crate::{prelude::*, sched::SchedPolicy, thread::Tid};
 
 pub fn sys_sched_setparam(tid: Tid, addr: Vaddr, ctx: &Context) -> Result<SyscallReturn> {
@@ -11,25 +14,28 @@ pub fn sys_sched_setparam(tid: Tid, addr: Vaddr, ctx: &Context) -> Result<Syscal
     }
 
     let prio: i32 = ctx.user_space().read_val(addr)?;
-
-    let update = |policy: &mut SchedPolicy| {
-        match policy {
-            SchedPolicy::RealTime { rt_prio, .. } => {
-                *rt_prio = u8::try_from(prio)
-                    .ok()
-                    .and_then(|p| p.try_into().ok())
-                    .ok_or_else(|| {
-                        Error::with_message(Errno::EINVAL, "invalid scheduling priority")
-                    })?;
-            }
-            _ if prio != 0 => {
-                return_errno_with_message!(Errno::EINVAL, "invalid scheduling priority")
-            }
-            _ => {}
+    let target_info = get_sched_target_info(tid, ctx)?;
+    let new_policy = match target_info.old_policy {
+        SchedPolicy::RealTime { rt_policy, .. } => SchedPolicy::RealTime {
+            rt_prio: u8::try_from(prio)
+                .ok()
+                .and_then(|p| p.try_into().ok())
+                .ok_or_else(|| Error::with_message(Errno::EINVAL, "invalid scheduling priority"))?,
+            rt_policy,
+        },
+        _ if prio != 0 => {
+            return_errno_with_message!(Errno::EINVAL, "invalid scheduling priority")
         }
-        Ok(())
+        policy => policy,
     };
-    access_sched_attr_with(tid, ctx, |attr| attr.update_policy(update))?;
+    check_sched_change_perm(target_info, new_policy)?;
+    if tid == 0 {
+        ctx.thread.sched_attr().set_policy(new_policy);
+    } else {
+        let thread = crate::process::posix_thread::thread_table::get_thread(tid)
+            .ok_or_else(|| Error::with_message(Errno::ESRCH, "the target thread does not exist"))?;
+        thread.sched_attr().set_policy(new_policy);
+    }
 
     Ok(SyscallReturn::Return(0))
 }

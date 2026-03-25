@@ -19,8 +19,8 @@ use crate::{
 };
 
 #[derive(Clone, Copy)]
-struct SchedTargetInfo {
-    old_policy: SchedPolicy,
+pub(super) struct SchedTargetInfo {
+    pub(super) old_policy: SchedPolicy,
     rtprio_limit: u64,
     same_owner: bool,
     has_sys_nice: bool,
@@ -46,7 +46,7 @@ pub fn sys_sched_setscheduler(
     };
 
     let policy = attr.try_into()?;
-    check_sched_setscheduler_perm(target_info, policy)?;
+    check_sched_change_perm(target_info, policy)?;
     access_sched_attr_with(tid, ctx, |attr| {
         attr.set_policy(policy);
         Ok(())
@@ -55,7 +55,7 @@ pub fn sys_sched_setscheduler(
     Ok(SyscallReturn::Return(0))
 }
 
-fn get_sched_target_info(tid: Tid, ctx: &Context) -> Result<SchedTargetInfo> {
+pub(super) fn get_sched_target_info(tid: Tid, ctx: &Context) -> Result<SchedTargetInfo> {
     if tid.cast_signed() < 0 {
         return_errno_with_message!(Errno::EINVAL, "all negative TIDs are not valid");
     }
@@ -94,9 +94,7 @@ fn get_sched_target_info(tid: Tid, ctx: &Context) -> Result<SchedTargetInfo> {
             .get_rlimit(ResourceType::RLIMIT_RTPRIO)
             .get_cur(),
         same_owner: current_cred.euid() == target_cred.ruid()
-            || current_cred.euid() == target_cred.euid()
-            || current_cred.ruid() == target_cred.ruid()
-            || current_cred.ruid() == target_cred.euid(),
+            || current_cred.euid() == target_cred.euid(),
         has_sys_nice: target_process
             .user_ns()
             .lock()
@@ -105,7 +103,7 @@ fn get_sched_target_info(tid: Tid, ctx: &Context) -> Result<SchedTargetInfo> {
     })
 }
 
-fn check_sched_setscheduler_perm(
+pub(super) fn check_sched_change_perm(
     target_info: SchedTargetInfo,
     new_policy: SchedPolicy,
 ) -> Result<()> {

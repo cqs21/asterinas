@@ -1291,7 +1291,7 @@ sched_setparam01
 sched_setparam02
 sched_setparam03
 sched_setparam04
-# sched_setparam05
+sched_setparam05
 
 sched_getscheduler01
 sched_getscheduler02
