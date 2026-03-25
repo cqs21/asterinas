@@ -1549,7 +1549,7 @@ sigaction02
 sigaltstack01
 sigaltstack02
 
-# sighold02
+sighold02
 
 signal01
 signal02
