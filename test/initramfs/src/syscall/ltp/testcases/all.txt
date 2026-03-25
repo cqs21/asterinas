@@ -1245,7 +1245,7 @@ rename15
 #renameat test cases
 # renameat01
 
-# renameat201
+renameat201
 # renameat202
 
 # request_key01

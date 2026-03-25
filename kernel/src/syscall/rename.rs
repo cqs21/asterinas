@@ -1,10 +1,12 @@
 // SPDX-License-Identifier: MPL-2.0
 
+use alloc::format;
+
 use super::SyscallReturn;
 use crate::{
     fs::{
         file::{InodeType, file_table::FileDesc},
-        vfs::path::{AT_FDCWD, FsPath, SplitPath},
+        vfs::path::{AT_FDCWD, FsPath, Path, PathResolver, SplitPath},
     },
     prelude::*,
     syscall::constants::MAX_FILENAME_LEN,
@@ -28,10 +30,8 @@ pub fn sys_renameat2(
     let Some(flags) = Flags::from_bits(flags) else {
         return_errno_with_message!(Errno::EINVAL, "invalid flags");
     };
-    // TODO: Add support for handling the `NOREPLACE`, `EXCHANGE`, and `WHITEOUT` flags.
-    if !flags.is_empty() {
-        warn!("unsupported flags: {:?}", flags);
-        return_errno_with_message!(Errno::EINVAL, "unsupported flags");
+    if flags.intersects(Flags::WHITEOUT) || flags.contains(Flags::NOREPLACE | Flags::EXCHANGE) {
+        return_errno_with_message!(Errno::EINVAL, "invalid renameat2 flag combination");
     }
 
     let fs_ref = ctx.thread_local.borrow_fs();
@@ -68,7 +68,33 @@ pub fn sys_renameat2(
         );
     }
 
-    old_parent_path.rename(old_name, &new_parent_path, &new_name)?;
+    if flags.contains(Flags::EXCHANGE) {
+        let new_path = path_resolver.lookup_at_path(&new_parent_path, &new_name)?;
+        if new_path.type_() == InodeType::Dir
+            && old_parent_path.is_equal_or_descendant_of(&new_path)
+        {
+            return_errno_with_message!(
+                Errno::EINVAL,
+                "the old path is inside the new directory or its subtree"
+            );
+        }
+        exchange_paths(
+            &path_resolver,
+            &old_parent_path,
+            old_name,
+            &new_parent_path,
+            &new_name,
+        )?;
+    } else {
+        if flags.contains(Flags::NOREPLACE) {
+            match path_resolver.lookup_at_path(&new_parent_path, &new_name) {
+                Ok(_) => return_errno_with_message!(Errno::EEXIST, "the new path already exists"),
+                Err(err) if err.error() == Errno::ENOENT => {}
+                Err(err) => return Err(err),
+            }
+        }
+        old_parent_path.rename(old_name, &new_parent_path, &new_name)?;
+    }
 
     Ok(SyscallReturn::Return(0))
 }
@@ -100,4 +126,45 @@ bitflags! {
         const EXCHANGE  = 1 << 1;
         const WHITEOUT  = 1 << 2;
     }
+}
+
+fn exchange_paths(
+    path_resolver: &PathResolver,
+    old_parent_path: &Path,
+    old_name: &str,
+    new_parent_path: &Path,
+    new_name: &str,
+) -> Result<()> {
+    if old_parent_path == new_parent_path && old_name == new_name {
+        return Ok(());
+    }
+
+    let temp_name = create_exchange_temp_name(path_resolver, old_parent_path)?;
+    old_parent_path.rename(old_name, old_parent_path, &temp_name)?;
+
+    let exchange_result = (|| {
+        new_parent_path.rename(new_name, old_parent_path, old_name)?;
+        old_parent_path.rename(&temp_name, new_parent_path, new_name)
+    })();
+    if exchange_result.is_err() {
+        let _ = old_parent_path.rename(&temp_name, old_parent_path, old_name);
+    }
+
+    exchange_result
+}
+
+fn create_exchange_temp_name(path_resolver: &PathResolver, parent_path: &Path) -> Result<String> {
+    for suffix in 0..1024 {
+        let candidate = format!(".renameat2-{}", suffix);
+        match path_resolver.lookup_at_path(parent_path, &candidate) {
+            Ok(_) => continue,
+            Err(err) if err.error() == Errno::ENOENT => return Ok(candidate),
+            Err(err) => return Err(err),
+        }
+    }
+
+    return_errno_with_message!(
+        Errno::EEXIST,
+        "failed to allocate a temporary exchange name"
+    );
 }
