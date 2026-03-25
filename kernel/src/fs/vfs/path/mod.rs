@@ -116,6 +116,9 @@ impl Path {
         {
             return_errno_with_message!(Errno::EEXIST, "the file already exists");
         }
+        if creation_flags.contains(CreationFlags::O_CREAT) && inode_type == InodeType::Dir {
+            return_errno_with_message!(Errno::EISDIR, "O_CREAT cannot open an existing directory");
+        }
 
         if inode_type == InodeType::SymLink
             && creation_flags.contains(CreationFlags::O_NOFOLLOW)
