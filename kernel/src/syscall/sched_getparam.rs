@@ -12,6 +12,7 @@ pub fn sys_sched_getparam(tid: Tid, addr: Vaddr, ctx: &Context) -> Result<Syscal
 
     let policy = access_sched_attr_with(tid, ctx, |attr| Ok(attr.policy()))?;
     let rt_prio = match policy {
+        SchedPolicy::Deadline { .. } => 0,
         SchedPolicy::RealTime { rt_prio, .. } => rt_prio.get().into(),
         _ => 0,
     };

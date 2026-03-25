@@ -20,7 +20,7 @@ pub(super) const SCHED_RR: u32 = 2;
 pub(super) const SCHED_BATCH: u32 = 3;
 // SCHED_ISO: Reserved but not implemented yet on Linux.
 pub(super) const SCHED_IDLE: u32 = 5;
-// pub(super) const SCHED_DEADLINE: u32 = 6; // Not supported.
+pub(super) const SCHED_DEADLINE: u32 = 6;
 // pub(super) const SCHED_EXT: u32 = 7; // Not supported.
 
 #[derive(Default, Debug, Pod, Clone, Copy)]
@@ -68,6 +68,18 @@ impl TryFrom<SchedPolicy> for LinuxSchedAttr {
                 ..Default::default()
             },
 
+            SchedPolicy::Deadline {
+                runtime,
+                deadline,
+                period,
+            } => LinuxSchedAttr {
+                sched_policy: SCHED_DEADLINE,
+                sched_runtime: runtime,
+                sched_deadline: deadline,
+                sched_period: period,
+                ..Default::default()
+            },
+
             SchedPolicy::RealTime { rt_prio, rt_policy } => LinuxSchedAttr {
                 sched_policy: match rt_policy {
                     RealTimePolicy::Fifo => SCHED_FIFO,
@@ -104,6 +116,28 @@ impl TryFrom<LinuxSchedAttr> for SchedPolicy {
 
     fn try_from(value: LinuxSchedAttr) -> Result<Self> {
         Ok(match value.sched_policy {
+            SCHED_DEADLINE => {
+                if value.sched_priority != 0 {
+                    return_errno_with_message!(Errno::EINVAL, "invalid scheduling priority");
+                }
+                if value.sched_runtime == 0
+                    || value.sched_deadline == 0
+                    || value.sched_period == 0
+                    || value.sched_runtime > value.sched_deadline
+                    || value.sched_deadline > value.sched_period
+                {
+                    return_errno_with_message!(
+                        Errno::EINVAL,
+                        "invalid deadline scheduling parameters"
+                    );
+                }
+                SchedPolicy::Deadline {
+                    runtime: value.sched_runtime,
+                    deadline: value.sched_deadline,
+                    period: value.sched_period,
+                }
+            }
+
             SCHED_FIFO | SCHED_RR => SchedPolicy::RealTime {
                 rt_prio: static_to_rt(value.sched_priority)?,
                 rt_policy: match value.sched_policy {

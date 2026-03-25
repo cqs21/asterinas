@@ -16,6 +16,11 @@ use crate::sched::nice::Nice;
 pub enum SchedPolicy {
     #[expect(dead_code)]
     Stop,
+    Deadline {
+        runtime: u64,
+        deadline: u64,
+        period: u64,
+    },
     RealTime {
         rt_prio: RealTimePriority,
         rt_policy: RealTimePolicy,
@@ -43,6 +48,7 @@ impl SchedPolicy {
     pub(super) fn kind(&self) -> SchedPolicyKind {
         match self {
             SchedPolicy::Stop => SchedPolicyKind::Stop,
+            SchedPolicy::Deadline { .. } => SchedPolicyKind::RealTime,
             SchedPolicy::RealTime { .. } => SchedPolicyKind::RealTime,
             SchedPolicy::Fair(_) => SchedPolicyKind::Fair,
             SchedPolicy::Idle => SchedPolicyKind::Idle,

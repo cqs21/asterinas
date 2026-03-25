@@ -159,6 +159,10 @@ impl SchedAttr {
             last_cpu: AtomicCpuId::default(),
             real_time: {
                 let (prio, policy) = match policy {
+                    SchedPolicy::Deadline { .. } => (
+                        real_time::RealTimePriority::MIN.get(),
+                        real_time::RealTimePolicy::Fifo,
+                    ),
                     SchedPolicy::RealTime { rt_prio, rt_policy } => (rt_prio.get(), rt_policy),
                     _ => (real_time::RealTimePriority::MAX.get(), Default::default()),
                 };
@@ -186,6 +190,10 @@ impl SchedAttr {
     /// specify a base slice factor for RR, the old one will be kept.
     pub fn set_policy(&self, policy: SchedPolicy) {
         self.policy.set(policy, |policy| match policy {
+            SchedPolicy::Deadline { .. } => self.real_time.update(
+                real_time::RealTimePriority::MIN.get(),
+                real_time::RealTimePolicy::Fifo,
+            ),
             SchedPolicy::RealTime { rt_prio, rt_policy } => {
                 self.real_time.update(rt_prio.get(), rt_policy);
             }
@@ -198,6 +206,10 @@ impl SchedAttr {
         self.policy.update(|policy| {
             let ret = f(policy);
             match *policy {
+                SchedPolicy::Deadline { .. } => self.real_time.update(
+                    real_time::RealTimePriority::MIN.get(),
+                    real_time::RealTimePolicy::Fifo,
+                ),
                 SchedPolicy::RealTime { rt_prio, rt_policy } => {
                     self.real_time.update(rt_prio.get(), rt_policy);
                 }

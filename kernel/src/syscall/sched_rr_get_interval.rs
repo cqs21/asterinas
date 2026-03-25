@@ -26,6 +26,7 @@ pub fn sys_sched_rr_get_interval(
 
 fn rr_interval_ns(policy: SchedPolicy) -> u64 {
     match policy {
+        SchedPolicy::Deadline { .. } => 0,
         SchedPolicy::RealTime { rt_policy, .. } => rt_policy.rr_interval_ns(),
         SchedPolicy::Fair(_) | SchedPolicy::Idle => MIN_PERIOD_NS,
         SchedPolicy::Stop => 0,
