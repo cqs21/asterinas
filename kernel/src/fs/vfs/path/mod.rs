@@ -527,8 +527,14 @@ impl Path {
     pub fn inode(&self) -> &Arc<dyn Inode>;
     pub fn type_(&self) -> InodeType;
 
+    fn check_dir_modification_permission(&self) -> Result<()> {
+        self.inode()
+            .check_permission(Permission::MAY_WRITE | Permission::MAY_EXEC)
+    }
+
     /// Creates a `Path` by making an inode of the `type_` with the `mode`.
     pub fn mknod(&self, name: &str, mode: InodeMode, type_: MknodType) -> Result<Self> {
+        self.check_dir_modification_permission()?;
         let inner = self
             .dentry
             .as_dir_dentry_or_err()?
@@ -541,17 +547,20 @@ impl Path {
         if !Arc::ptr_eq(&old.mount, &self.mount) {
             return_errno_with_message!(Errno::EXDEV, "the operation cannot cross mounts");
         }
+        self.check_dir_modification_permission()?;
 
         self.dentry.as_dir_dentry_or_err()?.link(old.inode(), name)
     }
 
     /// Unlinks a name from the `Path`.
     pub fn unlink(&self, name: &str) -> Result<()> {
+        self.check_dir_modification_permission()?;
         self.dentry.as_dir_dentry_or_err()?.unlink(name)
     }
 
     /// Removes a directory by `rmdir()` the inner inode.
     pub fn rmdir(&self, name: &str) -> Result<()> {
+        self.check_dir_modification_permission()?;
         self.dentry.as_dir_dentry_or_err()?.rmdir(name)
     }
 
@@ -560,6 +569,8 @@ impl Path {
         if !Arc::ptr_eq(&self.mount, &new_dir.mount) {
             return_errno_with_message!(Errno::EXDEV, "the operation cannot cross mounts");
         }
+        self.check_dir_modification_permission()?;
+        new_dir.check_dir_modification_permission()?;
 
         DirDentry::rename(&self.dentry, old_name, &new_dir.dentry, new_name)
     }
