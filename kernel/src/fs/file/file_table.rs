@@ -35,6 +35,25 @@ impl FileTable {
         self.table.slots_len()
     }
 
+    fn min_free_fd_from(&self, min_fd: usize, max_fd_exclusive: usize) -> Option<usize> {
+        if min_fd >= max_fd_exclusive {
+            return None;
+        }
+
+        let slots_len = self.table.slots_len();
+        if min_fd >= slots_len {
+            return Some(min_fd);
+        }
+
+        for fd in min_fd..slots_len.min(max_fd_exclusive) {
+            if self.table.get(fd).is_none() {
+                return Some(fd);
+            }
+        }
+
+        (slots_len < max_fd_exclusive).then_some(slots_len)
+    }
+
     /// Duplicates `fd` onto the lowest-numbered available descriptor equal to
     /// or greater than `ceil_fd`.
     pub fn dup_ceil(
@@ -62,35 +81,14 @@ impl FileTable {
         let entry = self.duplicate_entry(fd, flags)?;
 
         // Get the lowest-numbered available fd equal to or greater than `ceil_fd`.
-        let get_min_free_fd = || -> Option<usize> {
-            let ceil_fd = ceil_fd as usize;
-            if ceil_fd >= max_fd_exclusive {
-                return None;
-            }
-
-            if self.table.get(ceil_fd).is_none() {
-                return Some(ceil_fd);
-            }
-
-            for idx in ceil_fd + 1..self.len().min(max_fd_exclusive) {
-                if self.table.get(idx).is_none() {
-                    return Some(idx);
-                }
-            }
-
-            if self.len() < max_fd_exclusive {
-                return Some(self.len());
-            }
-
-            None
-        };
-
-        let min_free_fd = get_min_free_fd().ok_or_else(|| {
-            Error::with_message(
-                Errno::EMFILE,
-                "no file descriptor available under the limit",
-            )
-        })?;
+        let min_free_fd = self
+            .min_free_fd_from(ceil_fd as usize, max_fd_exclusive)
+            .ok_or_else(|| {
+                Error::with_message(
+                    Errno::EMFILE,
+                    "no file descriptor available under the limit",
+                )
+            })?;
         self.table.put_at(min_free_fd, entry);
         Ok(min_free_fd as FileDesc)
     }
@@ -120,6 +118,25 @@ impl FileTable {
     pub fn insert(&mut self, item: Arc<dyn FileLike>, flags: FdFlags) -> FileDesc {
         let entry = FileTableEntry::new(item, flags);
         self.table.put(entry) as FileDesc
+    }
+
+    pub fn insert_with_limit(
+        &mut self,
+        item: Arc<dyn FileLike>,
+        flags: FdFlags,
+        max_fd_exclusive: usize,
+    ) -> Result<FileDesc> {
+        let entry = FileTableEntry::new(item, flags);
+
+        let min_free_fd = self.min_free_fd_from(0, max_fd_exclusive).ok_or_else(|| {
+            Error::with_message(
+                Errno::EMFILE,
+                "no file descriptor available under the limit",
+            )
+        })?;
+
+        self.table.put_at(min_free_fd, entry);
+        Ok(min_free_fd as FileDesc)
     }
 
     pub fn close_file(&mut self, fd: FileDesc) -> Option<Arc<dyn FileLike>> {

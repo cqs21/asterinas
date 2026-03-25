@@ -12,6 +12,7 @@ use crate::{
         vfs::path::{AT_FDCWD, FsPath, LookupResult, PathResolver},
     },
     prelude::*,
+    process::ResourceType,
     syscall::constants::MAX_FILENAME_LEN,
 };
 
@@ -57,7 +58,15 @@ pub fn sys_openat(
             } else {
                 FdFlags::empty()
             };
-        file_table_locked.insert(file_handle.clone(), fd_flags)
+        let max_fd_exclusive = ctx
+            .process
+            .resource_limits()
+            .get_rlimit(ResourceType::RLIMIT_NOFILE)
+            .get_cur()
+            .min(i32::MAX as u64 + 1) as usize;
+        let fd =
+            file_table_locked.insert_with_limit(file_handle.clone(), fd_flags, max_fd_exclusive)?;
+        fd
     };
     let file_like: Arc<dyn FileLike> = file_handle;
     fs::vfs::notify::on_open(&file_like);
