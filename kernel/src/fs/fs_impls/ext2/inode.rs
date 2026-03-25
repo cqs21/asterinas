@@ -156,7 +156,7 @@ impl Inode {
         &self,
         name: &str,
         inode_type: InodeType,
-        file_perm: FilePerm,
+        mut file_perm: FilePerm,
     ) -> Result<Arc<Self>> {
         if name.len() > MAX_FNAME_LEN {
             return_errno!(Errno::ENAMETOOLONG);
@@ -170,9 +170,18 @@ impl Inode {
             return_errno_with_message!(Errno::ENOENT, "dir removed");
         }
 
+        let inherit_parent_gid = inner.file_perm().contains(FilePerm::S_ISGID);
+        let inherited_gid = inherit_parent_gid.then(|| inner.gid());
+        if inherit_parent_gid && inode_type == InodeType::Dir {
+            file_perm |= FilePerm::S_ISGID;
+        }
+
         let inode = self
             .fs()
             .create_inode(self.block_group_idx, inode_type, file_perm)?;
+        if let Some(gid) = inherited_gid {
+            inode.set_gid(gid);
+        }
         let is_dir = inode_type == InodeType::Dir;
         if let Err(e) = inode.init(self.ino) {
             self.fs().free_inode(inode.ino, is_dir).unwrap();

@@ -13,6 +13,7 @@ use hashbrown::HashMap;
 use ostd::{
     mm::{HasSize, io::util::HasVmReaderWriter},
     sync::{PreemptDisabled, RwLockWriteGuard},
+    task::Task,
 };
 
 use super::{memfd::MemfdInode, xattr::RamXattr, *};
@@ -33,7 +34,7 @@ use crate::{
         },
     },
     prelude::*,
-    process::{Gid, Uid},
+    process::{Gid, Uid, posix_thread::AsPosixThread},
     time::clocks::RealTimeCoarseClock,
     vm::vmo::Vmo,
 };
@@ -451,6 +452,28 @@ impl DirEntry {
 }
 
 impl RamInode {
+    fn creation_attributes(&self, inode_type: InodeType, mode: InodeMode) -> (InodeMode, Uid, Gid) {
+        let Some(task) = Task::current() else {
+            return (mode, Uid::new_root(), Gid::new_root());
+        };
+        let Some(thread) = task.as_posix_thread() else {
+            return (mode, Uid::new_root(), Gid::new_root());
+        };
+
+        let credentials = thread.credentials();
+        let mut gid = credentials.fsgid();
+        let mut mode = mode;
+        let parent_meta = self.metadata.lock();
+        if parent_meta.mode.has_set_gid() {
+            gid = parent_meta.gid;
+            if inode_type == InodeType::Dir {
+                mode |= InodeMode::S_ISGID;
+            }
+        }
+
+        (mode, credentials.fsuid(), gid)
+    }
+
     fn new_dir(
         fs: &Arc<RamFs>,
         mode: InodeMode,
@@ -783,24 +806,27 @@ impl Inode for RamInode {
             return_errno_with_message!(Errno::EEXIST, "entry exists");
         }
 
+        let inode_type = match type_ {
+            MknodType::NamedPipe => InodeType::NamedPipe,
+            MknodType::CharDevice(_) => InodeType::CharDevice,
+            MknodType::BlockDevice(_) => InodeType::BlockDevice,
+        };
+        let (mode, uid, gid) = self.creation_attributes(inode_type, mode);
         let new_inode = match type_ {
             MknodType::CharDevice(dev_id) | MknodType::BlockDevice(dev_id) => {
                 let dev_type = type_.device_type().unwrap();
                 RamInode::new_device(
                     &self.fs.upgrade().unwrap(),
                     mode,
-                    Uid::new_root(),
-                    Gid::new_root(),
+                    uid,
+                    gid,
                     dev_type,
                     dev_id,
                 )
             }
-            MknodType::NamedPipe => RamInode::new_named_pipe(
-                &self.fs.upgrade().unwrap(),
-                mode,
-                Uid::new_root(),
-                Gid::new_root(),
-            ),
+            MknodType::NamedPipe => {
+                RamInode::new_named_pipe(&self.fs.upgrade().unwrap(), mode, uid, gid)
+            }
         };
 
         let mut self_dir = self_dir.upgrade();
@@ -833,15 +859,12 @@ impl Inode for RamInode {
         }
 
         let fs = self.fs.upgrade().unwrap();
+        let (mode, uid, gid) = self.creation_attributes(type_, mode);
         let new_inode = match type_ {
-            InodeType::File => RamInode::new_file(&fs, mode, Uid::new_root(), Gid::new_root()),
-            InodeType::SymLink => {
-                RamInode::new_symlink(&fs, mode, Uid::new_root(), Gid::new_root())
-            }
-            InodeType::Socket => RamInode::new_socket(&fs, mode, Uid::new_root(), Gid::new_root()),
-            InodeType::Dir => {
-                RamInode::new_dir(&fs, mode, Uid::new_root(), Gid::new_root(), &self.this)
-            }
+            InodeType::File => RamInode::new_file(&fs, mode, uid, gid),
+            InodeType::SymLink => RamInode::new_symlink(&fs, mode, uid, gid),
+            InodeType::Socket => RamInode::new_socket(&fs, mode, uid, gid),
+            InodeType::Dir => RamInode::new_dir(&fs, mode, uid, gid, &self.this),
             _ => {
                 panic!("unsupported inode type");
             }
