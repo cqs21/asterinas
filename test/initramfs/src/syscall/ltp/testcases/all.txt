@@ -999,7 +999,7 @@ open14
 open15
 
 openat01
-# openat02
+openat02
 # openat03
 # openat04
 
