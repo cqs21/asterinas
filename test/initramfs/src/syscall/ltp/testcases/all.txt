@@ -1288,7 +1288,7 @@ sched_rr_get_interval02
 sched_rr_get_interval03
 
 sched_setparam01
-# sched_setparam02
+sched_setparam02
 sched_setparam03
 # sched_setparam04
 # sched_setparam05
