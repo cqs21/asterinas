@@ -1551,7 +1551,7 @@ sigaltstack02
 
 # sighold02
 
-# signal01
+signal01
 signal02
 signal03
 signal04
