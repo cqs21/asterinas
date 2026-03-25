@@ -17,7 +17,10 @@ use ostd::{
     },
 };
 
-use super::{CurrentRuntime, SchedAttr, SchedClassRq, time::base_slice_clocks};
+use super::{
+    CurrentRuntime, SchedAttr, SchedClassRq,
+    time::{BASE_SLICE_NS, base_slice_clocks},
+};
 use crate::thread::AsThread;
 
 pub type RealTimePriority = RangedU8<1, 99>;
@@ -39,6 +42,16 @@ impl Default for RealTimePolicy {
 }
 
 impl RealTimePolicy {
+    pub fn rr_interval_ns(self) -> u64 {
+        match self {
+            RealTimePolicy::RoundRobin { base_slice_factor } => BASE_SLICE_NS.saturating_mul(
+                base_slice_factor
+                    .map_or(DEFAULT_BASE_SLICE_FACTOR, |factor| u64::from(factor.get())),
+            ),
+            RealTimePolicy::Fifo => 0,
+        }
+    }
+
     fn to_time_slice(self) -> u64 {
         match self {
             RealTimePolicy::RoundRobin { base_slice_factor } => {

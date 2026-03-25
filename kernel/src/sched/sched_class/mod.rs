@@ -40,6 +40,7 @@ use self::policy::{SchedPolicyKind, SchedPolicyState};
 pub use self::{
     policy::SchedPolicy,
     real_time::{RealTimePolicy, RealTimePriority},
+    time::MIN_PERIOD_NS,
 };
 
 type SchedEntity = (Arc<Task>, Arc<Thread>);

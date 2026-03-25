@@ -117,6 +117,7 @@ use super::{
     sched_getattr::sys_sched_getattr,
     sched_getparam::sys_sched_getparam,
     sched_getscheduler::sys_sched_getscheduler,
+    sched_rr_get_interval::sys_sched_rr_get_interval,
     sched_setattr::sys_sched_setattr,
     sched_setparam::sys_sched_setparam,
     sched_setscheduler::sys_sched_setscheduler,
@@ -313,6 +314,7 @@ impl_syscall_nums_and_dispatch_fn! {
     SYS_SCHED_GETSCHEDULER = 145 => sys_sched_getscheduler(args[..1]);
     SYS_SCHED_GET_PRIORITY_MAX = 146 => sys_sched_get_priority_max(args[..1]);
     SYS_SCHED_GET_PRIORITY_MIN = 147 => sys_sched_get_priority_min(args[..1]);
+    SYS_SCHED_RR_GET_INTERVAL = 148 => sys_sched_rr_get_interval(args[..2]);
     SYS_PIVOT_ROOT = 155       => sys_pivot_root(args[..2]);
     SYS_PRCTL = 157            => sys_prctl(args[..5]);
     SYS_ARCH_PRCTL = 158       => sys_arch_prctl(args[..2], &mut user_ctx);
