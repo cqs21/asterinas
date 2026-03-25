@@ -7,7 +7,7 @@ use crate::{
     fs,
     fs::{
         file::{
-            FileLike,
+            FileLike, StatusFlags,
             file_table::{FileDesc, get_file_fast},
         },
         vfs::{
@@ -104,6 +104,8 @@ fn setxattr(
     user_space: &CurrentUserSpace,
     ctx: &Context,
 ) -> Result<()> {
+    ensure_xattr_file_ctx_is_accessible(&file_ctx)?;
+
     let flags = XattrSetFlags::from_bits(flags as _)
         .ok_or(Error::with_message(Errno::EINVAL, "invalid xattr flags"))?;
 
@@ -128,6 +130,16 @@ pub(super) enum XattrFileCtx<'a> {
     Path(CString),
     PathNoFollow(CString),
     FileHandle(Cow<'a, Arc<dyn FileLike>>),
+}
+
+pub(super) fn ensure_xattr_file_ctx_is_accessible(file_ctx: &XattrFileCtx<'_>) -> Result<()> {
+    if let XattrFileCtx::FileHandle(file) = file_ctx
+        && file.status_flags().contains(StatusFlags::O_PATH)
+    {
+        return_errno_with_message!(Errno::EBADF, "the file is opened as a path");
+    }
+
+    Ok(())
 }
 
 pub(super) fn lookup_path_for_xattr<'a>(

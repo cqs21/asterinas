@@ -5,7 +5,7 @@ use crate::{
     fs,
     fs::{
         file::{
-            InodeMode,
+            InodeMode, StatusFlags,
             file_table::{FileDesc, get_file_fast},
         },
         utils::PATH_MAX,
@@ -19,6 +19,9 @@ pub fn sys_fchmod(fd: FileDesc, mode: u16, ctx: &Context) -> Result<SyscallRetur
 
     let mut file_table = ctx.thread_local.borrow_file_table_mut();
     let file = get_file_fast!(&mut file_table, fd);
+    if file.status_flags().contains(StatusFlags::O_PATH) {
+        return_errno_with_message!(Errno::EBADF, "the file is opened as a path");
+    }
     file.path().set_mode(InodeMode::from_bits_truncate(mode))?;
     fs::vfs::notify::on_attr_change(file.path());
     Ok(SyscallReturn::Return(0))

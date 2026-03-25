@@ -3,8 +3,8 @@
 use super::{
     SyscallReturn,
     setxattr::{
-        XattrFileCtx, check_xattr_namespace, lookup_path_for_xattr, parse_xattr_name,
-        read_xattr_name_cstr_from_user,
+        XattrFileCtx, check_xattr_namespace, ensure_xattr_file_ctx_is_accessible,
+        lookup_path_for_xattr, parse_xattr_name, read_xattr_name_cstr_from_user,
     },
 };
 use crate::{
@@ -91,6 +91,8 @@ fn getxattr(
     user_space: &CurrentUserSpace,
     ctx: &Context,
 ) -> Result<usize> {
+    ensure_xattr_file_ctx_is_accessible(&file_ctx)?;
+
     let name_cstr = read_xattr_name_cstr_from_user(name_ptr, user_space)?;
     let name_str = name_cstr.to_string_lossy();
     let xattr_name = parse_xattr_name(name_str.as_ref())?;

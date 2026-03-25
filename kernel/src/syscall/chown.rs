@@ -3,7 +3,10 @@
 use super::SyscallReturn;
 use crate::{
     fs::{
-        file::file_table::{FileDesc, get_file_fast},
+        file::{
+            StatusFlags,
+            file_table::{FileDesc, get_file_fast},
+        },
         utils::PATH_MAX,
         vfs::path::{AT_FDCWD, FsPath},
     },
@@ -22,6 +25,9 @@ pub fn sys_fchown(fd: FileDesc, uid: i32, gid: i32, ctx: &Context) -> Result<Sys
 
     let mut file_table = ctx.thread_local.borrow_file_table_mut();
     let file = get_file_fast!(&mut file_table, fd);
+    if file.status_flags().contains(StatusFlags::O_PATH) {
+        return_errno_with_message!(Errno::EBADF, "the file is opened as a path");
+    }
     let path = file.path();
     if let Some(uid) = uid {
         path.set_owner(uid)?;
