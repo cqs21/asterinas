@@ -1308,7 +1308,7 @@ sched_getaffinity01
 
 sched_setattr01
 sched_getattr01
-# sched_getattr02
+sched_getattr02
 
 # seccomp01
 
