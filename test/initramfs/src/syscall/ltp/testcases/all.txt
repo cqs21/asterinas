@@ -740,7 +740,7 @@ lchown01
 link02
 link04
 link05
-# link08
+link08
 
 #linkat test cases
 linkat01

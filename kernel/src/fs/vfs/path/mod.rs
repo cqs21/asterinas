@@ -55,6 +55,16 @@ impl PartialEq for Path {
 impl Eq for Path {}
 
 impl Path {
+    fn check_writable_mount(&self) -> Result<()> {
+        if self.mount.flags().contains(PerMountFlags::RDONLY)
+            || self.mount.fs().flags().contains(FsFlags::RDONLY)
+        {
+            return_errno_with_message!(Errno::EROFS, "the mount is read-only");
+        }
+
+        Ok(())
+    }
+
     /// Creates a new `Path` to represent the root directory of a file system.
     pub fn new_fs_root(mount: Arc<Mount>) -> Self {
         let inner = mount.root_dentry().clone();
@@ -63,6 +73,7 @@ impl Path {
 
     /// Creates a new `Path` to represent the child directory of a file system.
     pub fn new_fs_child(&self, name: &str, type_: InodeType, mode: InodeMode) -> Result<Self> {
+        self.check_writable_mount()?;
         if self
             .inode()
             .check_permission(Permission::MAY_WRITE)
@@ -169,6 +180,7 @@ impl Path {
             return_errno_with_message!(Errno::EINVAL, "O_TMPFILE cannot be used with O_PATH");
         }
 
+        self.check_writable_mount()?;
         self.inode().check_permission(Permission::MAY_WRITE)?;
 
         let inode = self.inode().create_tmpfile(open_args.inode_mode)?;
@@ -528,6 +540,7 @@ impl Path {
     pub fn type_(&self) -> InodeType;
 
     fn check_dir_modification_permission(&self) -> Result<()> {
+        self.check_writable_mount()?;
         self.inode()
             .check_permission(Permission::MAY_WRITE | Permission::MAY_EXEC)
     }
