@@ -1575,7 +1575,7 @@ sigsuspend02
 
 # sigtimedwait01
 
-# sigwait01
+sigwait01
 # sigwaitinfo01
 
 # socket01
