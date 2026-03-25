@@ -11,7 +11,9 @@ use inherit_methods_macro::inherit_methods;
 pub use mount::{Mount, MountPropType, PerMountFlags};
 pub use mount_namespace::MountNamespace;
 use ostd::task::Task;
-pub use resolver::{AT_FDCWD, AbsPathResult, FsPath, LookupResult, PathResolver, SplitPath};
+pub use resolver::{
+    AT_FDCWD, AbsPathResult, FsPath, LookupResult, Openat2ResolveFlags, PathResolver, SplitPath,
+};
 
 use crate::{
     fs::{

@@ -21,6 +21,17 @@ use crate::{
 /// The file descriptor of the current working directory.
 pub const AT_FDCWD: FileDesc = -100;
 
+bitflags! {
+    /// Resolve flags used by `openat2(2)`.
+    pub struct Openat2ResolveFlags: u64 {
+        const NO_XDEV = 0x01;
+        const NO_MAGICLINKS = 0x02;
+        const NO_SYMLINKS = 0x04;
+        const BENEATH = 0x08;
+        const IN_ROOT = 0x10;
+    }
+}
+
 /// A resolver for [`Path`]s.
 ///
 /// `PathResolver` provides a context for resolving paths, defined by a root directory
@@ -412,6 +423,60 @@ impl PathResolver {
 
 // Path lookup implementations
 impl PathResolver {
+    /// Looks up the target path according to `openat2(2)` resolution rules.
+    pub fn lookup_openat2(
+        &self,
+        dirfd: FileDesc,
+        path: &str,
+        follow_tail_link: bool,
+        resolve_flags: Openat2ResolveFlags,
+    ) -> Result<LookupResult> {
+        if path.is_empty() {
+            return_errno_with_message!(Errno::ENOENT, "the path is empty");
+        }
+        if path.len() > PATH_MAX {
+            return_errno_with_message!(Errno::ENAMETOOLONG, "the path is too long");
+        }
+
+        let start_path = if path.starts_with('/') {
+            if resolve_flags.contains(Openat2ResolveFlags::BENEATH) {
+                return_errno_with_message!(Errno::EXDEV, "absolute paths escape the scoped root");
+            }
+            if resolve_flags.contains(Openat2ResolveFlags::IN_ROOT) {
+                self.lookup_dirfd_base(dirfd)?
+            } else {
+                self.root.clone()
+            }
+        } else {
+            self.lookup_dirfd_base(dirfd)?
+        };
+        let scoped_root = if resolve_flags
+            .intersects(Openat2ResolveFlags::BENEATH | Openat2ResolveFlags::IN_ROOT)
+        {
+            start_path.clone()
+        } else {
+            self.root.clone()
+        };
+        let relative_path = if path.starts_with('/') {
+            path.trim_start_matches('/')
+        } else {
+            path
+        };
+
+        self.lookup_from_parent_with_openat2(
+            &start_path,
+            relative_path,
+            follow_tail_link,
+            &scoped_root,
+            resolve_flags,
+        )
+    }
+
+    fn lookup_dirfd_base(&self, dirfd: FileDesc) -> Result<Path> {
+        let fs_path = FsPath::from_fd(dirfd)?;
+        self.lookup(&fs_path)
+    }
+
     /// Looks up a child entry with `name` within a directory `path`.
     pub fn lookup_at_path(&self, path: &Path, name: &str) -> Result<Path> {
         let dir_dentry = path.dentry.as_dir_dentry_or_err()?;
@@ -613,6 +678,187 @@ impl PathResolver {
                 }
             } else {
                 // If path ends with `/`, the inode must be a directory
+                if target_is_dir && next_type != InodeType::Dir {
+                    return_errno_with_message!(Errno::ENOTDIR, "the inode is not a directory");
+                }
+                current_path = next_path;
+                relative_path = path_remain;
+            }
+        }
+
+        Ok(LookupResult::Resolved(current_path))
+    }
+
+    #[expect(clippy::redundant_closure)]
+    fn lookup_from_parent_with_openat2(
+        &self,
+        parent: &Path,
+        relative_path: &str,
+        follow_tail_link: bool,
+        scoped_root: &Path,
+        resolve_flags: Openat2ResolveFlags,
+    ) -> Result<LookupResult> {
+        debug_assert!(!relative_path.starts_with('/'));
+
+        if relative_path.len() > PATH_MAX {
+            return_errno_with_message!(Errno::ENAMETOOLONG, "the path is too long");
+        }
+        if relative_path.is_empty() {
+            return Ok(LookupResult::Resolved(parent.clone()));
+        }
+
+        let mut link_path_opt = None;
+        let mut follows = 0;
+        let (mut current_path, mut relative_path) = (parent.clone(), relative_path);
+
+        while !relative_path.is_empty() {
+            let (next_name, path_remain, target_is_dir) =
+                if let Some((prefix, suffix)) = relative_path.split_once('/') {
+                    let suffix = suffix.trim_start_matches('/');
+                    (prefix, suffix, true)
+                } else {
+                    (relative_path, "", false)
+                };
+
+            let next_is_tail = path_remain.is_empty();
+
+            let next_path = if super::is_dot(next_name) {
+                current_path.this()
+            } else if super::is_dotdot(next_name) {
+                if current_path == *scoped_root {
+                    if resolve_flags.contains(Openat2ResolveFlags::BENEATH) {
+                        return_errno_with_message!(Errno::EXDEV, "`..` escapes the scoped root");
+                    }
+                    current_path.this()
+                } else {
+                    let parent_path = self
+                        .resolve_parent(&current_path)
+                        .unwrap_or_else(|| current_path.this());
+                    if resolve_flags
+                        .intersects(Openat2ResolveFlags::NO_XDEV | Openat2ResolveFlags::BENEATH)
+                        && parent_path.mount.id() != current_path.mount.id()
+                    {
+                        return_errno_with_message!(
+                            Errno::EXDEV,
+                            "mount traversal is blocked by resolve flags"
+                        );
+                    }
+                    if resolve_flags.contains(Openat2ResolveFlags::BENEATH)
+                        && !parent_path.is_equal_or_descendant_of(scoped_root)
+                    {
+                        return_errno_with_message!(Errno::EXDEV, "`..` escapes the scoped root");
+                    }
+                    if resolve_flags.contains(Openat2ResolveFlags::IN_ROOT)
+                        && !parent_path.is_equal_or_descendant_of(scoped_root)
+                    {
+                        scoped_root.clone()
+                    } else {
+                        parent_path
+                    }
+                }
+            } else {
+                match self.lookup_at_path(&current_path, next_name) {
+                    Ok(child) => {
+                        if resolve_flags
+                            .intersects(Openat2ResolveFlags::NO_XDEV | Openat2ResolveFlags::BENEATH)
+                            && child.mount.id() != current_path.mount.id()
+                        {
+                            return_errno_with_message!(
+                                Errno::EXDEV,
+                                "mount traversal is blocked by resolve flags"
+                            );
+                        }
+                        child
+                    }
+                    Err(e) => {
+                        if next_is_tail && e.error() == Errno::ENOENT {
+                            return Ok(LookupResult::AtParent(LookupParentResult::new(
+                                current_path,
+                                next_name.to_string(),
+                                target_is_dir,
+                            )));
+                        }
+                        return Err(e);
+                    }
+                }
+            };
+
+            let next_type = next_path.type_();
+            let should_follow_symlink = next_type == InodeType::SymLink
+                && (follow_tail_link || !next_is_tail || target_is_dir);
+            if should_follow_symlink {
+                if resolve_flags.contains(Openat2ResolveFlags::NO_SYMLINKS) {
+                    return_errno_with_message!(Errno::ELOOP, "symlink traversal is blocked");
+                }
+                if follows >= SYMLINKS_MAX {
+                    return_errno_with_message!(Errno::ELOOP, "there are too many symlinks");
+                }
+
+                match next_path.inode().read_link()? {
+                    SymbolicLink::Plain(mut tmp_link_path) => {
+                        if resolve_flags.contains(Openat2ResolveFlags::NO_MAGICLINKS) {
+                            // Plain symlinks are still allowed when only magic links are blocked.
+                        }
+                        if tmp_link_path.is_empty() {
+                            return_errno_with_message!(Errno::ENOENT, "the symlink path is empty");
+                        }
+                        if tmp_link_path.starts_with('/')
+                            && resolve_flags.contains(Openat2ResolveFlags::BENEATH)
+                        {
+                            return_errno_with_message!(
+                                Errno::EXDEV,
+                                "absolute symlink escapes the scoped root"
+                            );
+                        }
+                        if !next_is_tail {
+                            tmp_link_path += "/";
+                            tmp_link_path += path_remain;
+                        } else if target_is_dir {
+                            tmp_link_path += "/";
+                        }
+
+                        if tmp_link_path.starts_with('/') {
+                            current_path = if resolve_flags.contains(Openat2ResolveFlags::IN_ROOT) {
+                                scoped_root.clone()
+                            } else {
+                                self.root.clone()
+                            };
+                        }
+                        let link_path = link_path_opt.get_or_insert_with(String::new);
+                        link_path.clear();
+                        link_path.push_str(tmp_link_path.trim_start_matches('/'));
+                        relative_path = link_path;
+                        follows += 1;
+                    }
+                    SymbolicLink::Path(path) => {
+                        if resolve_flags.contains(Openat2ResolveFlags::NO_MAGICLINKS) {
+                            return_errno_with_message!(
+                                Errno::ELOOP,
+                                "magic-link traversal is blocked"
+                            );
+                        }
+                        if resolve_flags.contains(Openat2ResolveFlags::BENEATH)
+                            && !path.is_equal_or_descendant_of(scoped_root)
+                        {
+                            return_errno_with_message!(
+                                Errno::EXDEV,
+                                "magic-link traversal escapes the scoped root"
+                            );
+                        }
+                        if resolve_flags.contains(Openat2ResolveFlags::IN_ROOT)
+                            && !path.is_equal_or_descendant_of(scoped_root)
+                        {
+                            return_errno_with_message!(
+                                Errno::ENOENT,
+                                "magic-link target is outside the scoped root"
+                            );
+                        }
+                        current_path = path;
+                        relative_path = path_remain;
+                        follows += 1;
+                    }
+                }
+            } else {
                 if target_is_dir && next_type != InodeType::Dir {
                     return_errno_with_message!(Errno::ENOTDIR, "the inode is not a directory");
                 }

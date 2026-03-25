@@ -79,7 +79,7 @@ macro_rules! import_generic_syscall_entries {
             msync::sys_msync,
             munmap::sys_munmap,
             nanosleep::{sys_clock_nanosleep, sys_nanosleep},
-            open::sys_openat,
+            open::{sys_openat, sys_openat2},
             pidfd_getfd::sys_pidfd_getfd,
             pidfd_open::sys_pidfd_open,
             pidfd_send_signal::sys_pidfd_send_signal,
@@ -253,6 +253,7 @@ macro_rules! define_syscalls_with_generic_syscall_table {
             SYS_FCHOWNAT = 54                => sys_fchownat(args[..5]);
             SYS_FCHOWN = 55                  => sys_fchown(args[..3]);
             SYS_OPENAT = 56                  => sys_openat(args[..4]);
+            SYS_OPENAT2 = 437                => sys_openat2(args[..4]);
             SYS_CLOSE = 57                   => sys_close(args[..1]);
             SYS_PIPE2 = 59                   => sys_pipe2(args[..2]);
             SYS_GETDENTS64 = 61              => sys_getdents64(args[..3]);
