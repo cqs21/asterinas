@@ -9,7 +9,14 @@ use ostd::{
 };
 
 use super::SyscallReturn;
-use crate::{prelude::*, process::posix_thread::thread_table, thread::Tid};
+use crate::{
+    prelude::*,
+    process::{
+        credentials::capabilities::CapSet,
+        posix_thread::{AsPosixThread, thread_table},
+    },
+    thread::Tid,
+};
 
 pub fn sys_sched_getaffinity(
     tid: Tid,
@@ -49,6 +56,7 @@ pub fn sys_sched_setaffinity(
             .store(&user_cpu_set, Ordering::Relaxed),
         _ => match thread_table::get_thread(tid) {
             Some(thread) => {
+                check_setaffinity_perm(&thread, ctx)?;
                 thread
                     .atomic_cpu_affinity()
                     .store(&user_cpu_set, Ordering::Relaxed);
@@ -98,6 +106,35 @@ fn read_cpu_set_from(
     }
 
     Ok(ret_set)
+}
+
+fn check_setaffinity_perm(target_thread: &Arc<crate::thread::Thread>, ctx: &Context) -> Result<()> {
+    let target_posix_thread = target_thread.as_posix_thread().unwrap();
+    let target_process = target_posix_thread.process();
+
+    if Arc::ptr_eq(&target_process, &ctx.process) {
+        return Ok(());
+    }
+
+    let current_cred = ctx.posix_thread.credentials();
+    let target_cred = target_posix_thread.credentials();
+    if current_cred.euid() == target_cred.ruid() || current_cred.euid() == target_cred.euid() {
+        return Ok(());
+    }
+
+    if target_process
+        .user_ns()
+        .lock()
+        .check_cap(CapSet::SYS_NICE, ctx.posix_thread)
+        .is_ok()
+    {
+        return Ok(());
+    }
+
+    return_errno_with_message!(
+        Errno::EPERM,
+        "changing another thread's CPU affinity requires ownership or CAP_SYS_NICE"
+    );
 }
 
 // Returns the number of bytes written.
