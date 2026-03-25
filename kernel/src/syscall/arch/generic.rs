@@ -107,6 +107,7 @@ macro_rules! import_generic_syscall_entries {
             rt_sigreturn::sys_rt_sigreturn,
             rt_sigsuspend::sys_rt_sigsuspend,
             rt_sigtimedwait::sys_rt_sigtimedwait,
+            rt_tgsigqueueinfo::sys_rt_tgsigqueueinfo,
             sched_affinity::{sys_sched_getaffinity, sys_sched_setaffinity},
             sched_get_priority_max::sys_sched_get_priority_max,
             sched_get_priority_min::sys_sched_get_priority_min,
@@ -396,6 +397,7 @@ macro_rules! define_syscalls_with_generic_syscall_table {
             SYS_PREADV2 = 286                => sys_preadv2(args[..6]);
             SYS_PWRITEV2 = 287               => sys_pwritev2(args[..6]);
             SYS_STATX = 291                  => sys_statx(args[..5]);
+            SYS_RT_TGSIGQUEUEINFO = 240      => sys_rt_tgsigqueueinfo(args[..4]);
             SYS_PIDFD_SEND_SIGNAL = 424      => sys_pidfd_send_signal(args[..4]);
             SYS_PIDFD_OPEN = 434             => sys_pidfd_open(args[..2]);
             SYS_CLONE3 = 435                 => sys_clone3(args[..2], &user_ctx);
