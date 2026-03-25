@@ -1573,7 +1573,7 @@ sigrelse01
 sigsuspend01
 sigsuspend02
 
-# sigtimedwait01
+sigtimedwait01
 
 sigwait01
 sigwaitinfo01
