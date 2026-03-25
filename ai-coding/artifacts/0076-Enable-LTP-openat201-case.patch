@@ -1,0 +1,702 @@
+From 85b0a0172f75e2a85c493fe5af9a3f5429a044c4 Mon Sep 17 00:00:00 2001
+From: Qingsong Chen <changxian.cqs@antgroup.com>
+Date: Wed, 25 Mar 2026 05:28:21 +0000
+Subject: [PATCH 76/97] Enable LTP openat201 case
+
+---
+ kernel/src/fs/vfs/path/mod.rs                 |   4 +-
+ kernel/src/fs/vfs/path/resolver.rs            | 246 ++++++++++++++++
+ kernel/src/syscall/arch/generic.rs            |   3 +-
+ kernel/src/syscall/arch/x86.rs                |   3 +-
+ kernel/src/syscall/open.rs                    | 277 +++++++++++++++---
+ .../syscall/ltp/debug/family-openat-201.md    |  29 ++
+ .../src/syscall/ltp/testcases/all.txt         |   2 +-
+ 7 files changed, 519 insertions(+), 45 deletions(-)
+ create mode 100644 test/initramfs/src/syscall/ltp/debug/family-openat-201.md
+
+diff --git a/kernel/src/fs/vfs/path/mod.rs b/kernel/src/fs/vfs/path/mod.rs
+index 292d46cf..60fcdc52 100644
+--- a/kernel/src/fs/vfs/path/mod.rs
++++ b/kernel/src/fs/vfs/path/mod.rs
+@@ -11,7 +11,9 @@ use inherit_methods_macro::inherit_methods;
+ pub use mount::{Mount, MountPropType, PerMountFlags};
+ pub use mount_namespace::MountNamespace;
+ use ostd::task::Task;
+-pub use resolver::{AT_FDCWD, AbsPathResult, FsPath, LookupResult, PathResolver, SplitPath};
++pub use resolver::{
++    AT_FDCWD, AbsPathResult, FsPath, LookupResult, Openat2ResolveFlags, PathResolver, SplitPath,
++};
+ 
+ use crate::{
+     fs::{
+diff --git a/kernel/src/fs/vfs/path/resolver.rs b/kernel/src/fs/vfs/path/resolver.rs
+index 01441a17..94fd6539 100644
+--- a/kernel/src/fs/vfs/path/resolver.rs
++++ b/kernel/src/fs/vfs/path/resolver.rs
+@@ -21,6 +21,17 @@ use crate::{
+ /// The file descriptor of the current working directory.
+ pub const AT_FDCWD: FileDesc = -100;
+ 
++bitflags! {
++    /// Resolve flags used by `openat2(2)`.
++    pub struct Openat2ResolveFlags: u64 {
++        const NO_XDEV = 0x01;
++        const NO_MAGICLINKS = 0x02;
++        const NO_SYMLINKS = 0x04;
++        const BENEATH = 0x08;
++        const IN_ROOT = 0x10;
++    }
++}
++
+ /// A resolver for [`Path`]s.
+ ///
+ /// `PathResolver` provides a context for resolving paths, defined by a root directory
+@@ -412,6 +423,60 @@ impl PathResolver {
+ 
+ // Path lookup implementations
+ impl PathResolver {
++    /// Looks up the target path according to `openat2(2)` resolution rules.
++    pub fn lookup_openat2(
++        &self,
++        dirfd: FileDesc,
++        path: &str,
++        follow_tail_link: bool,
++        resolve_flags: Openat2ResolveFlags,
++    ) -> Result<LookupResult> {
++        if path.is_empty() {
++            return_errno_with_message!(Errno::ENOENT, "the path is empty");
++        }
++        if path.len() > PATH_MAX {
++            return_errno_with_message!(Errno::ENAMETOOLONG, "the path is too long");
++        }
++
++        let start_path = if path.starts_with('/') {
++            if resolve_flags.contains(Openat2ResolveFlags::BENEATH) {
++                return_errno_with_message!(Errno::EXDEV, "absolute paths escape the scoped root");
++            }
++            if resolve_flags.contains(Openat2ResolveFlags::IN_ROOT) {
++                self.lookup_dirfd_base(dirfd)?
++            } else {
++                self.root.clone()
++            }
++        } else {
++            self.lookup_dirfd_base(dirfd)?
++        };
++        let scoped_root = if resolve_flags
++            .intersects(Openat2ResolveFlags::BENEATH | Openat2ResolveFlags::IN_ROOT)
++        {
++            start_path.clone()
++        } else {
++            self.root.clone()
++        };
++        let relative_path = if path.starts_with('/') {
++            path.trim_start_matches('/')
++        } else {
++            path
++        };
++
++        self.lookup_from_parent_with_openat2(
++            &start_path,
++            relative_path,
++            follow_tail_link,
++            &scoped_root,
++            resolve_flags,
++        )
++    }
++
++    fn lookup_dirfd_base(&self, dirfd: FileDesc) -> Result<Path> {
++        let fs_path = FsPath::from_fd(dirfd)?;
++        self.lookup(&fs_path)
++    }
++
+     /// Looks up a child entry with `name` within a directory `path`.
+     pub fn lookup_at_path(&self, path: &Path, name: &str) -> Result<Path> {
+         let dir_dentry = path.dentry.as_dir_dentry_or_err()?;
+@@ -623,6 +688,187 @@ impl PathResolver {
+ 
+         Ok(LookupResult::Resolved(current_path))
+     }
++
++    #[expect(clippy::redundant_closure)]
++    fn lookup_from_parent_with_openat2(
++        &self,
++        parent: &Path,
++        relative_path: &str,
++        follow_tail_link: bool,
++        scoped_root: &Path,
++        resolve_flags: Openat2ResolveFlags,
++    ) -> Result<LookupResult> {
++        debug_assert!(!relative_path.starts_with('/'));
++
++        if relative_path.len() > PATH_MAX {
++            return_errno_with_message!(Errno::ENAMETOOLONG, "the path is too long");
++        }
++        if relative_path.is_empty() {
++            return Ok(LookupResult::Resolved(parent.clone()));
++        }
++
++        let mut link_path_opt = None;
++        let mut follows = 0;
++        let (mut current_path, mut relative_path) = (parent.clone(), relative_path);
++
++        while !relative_path.is_empty() {
++            let (next_name, path_remain, target_is_dir) =
++                if let Some((prefix, suffix)) = relative_path.split_once('/') {
++                    let suffix = suffix.trim_start_matches('/');
++                    (prefix, suffix, true)
++                } else {
++                    (relative_path, "", false)
++                };
++
++            let next_is_tail = path_remain.is_empty();
++
++            let next_path = if super::is_dot(next_name) {
++                current_path.this()
++            } else if super::is_dotdot(next_name) {
++                if current_path == *scoped_root {
++                    if resolve_flags.contains(Openat2ResolveFlags::BENEATH) {
++                        return_errno_with_message!(Errno::EXDEV, "`..` escapes the scoped root");
++                    }
++                    current_path.this()
++                } else {
++                    let parent_path = self
++                        .resolve_parent(&current_path)
++                        .unwrap_or_else(|| current_path.this());
++                    if resolve_flags
++                        .intersects(Openat2ResolveFlags::NO_XDEV | Openat2ResolveFlags::BENEATH)
++                        && parent_path.mount.id() != current_path.mount.id()
++                    {
++                        return_errno_with_message!(
++                            Errno::EXDEV,
++                            "mount traversal is blocked by resolve flags"
++                        );
++                    }
++                    if resolve_flags.contains(Openat2ResolveFlags::BENEATH)
++                        && !parent_path.is_equal_or_descendant_of(scoped_root)
++                    {
++                        return_errno_with_message!(Errno::EXDEV, "`..` escapes the scoped root");
++                    }
++                    if resolve_flags.contains(Openat2ResolveFlags::IN_ROOT)
++                        && !parent_path.is_equal_or_descendant_of(scoped_root)
++                    {
++                        scoped_root.clone()
++                    } else {
++                        parent_path
++                    }
++                }
++            } else {
++                match self.lookup_at_path(&current_path, next_name) {
++                    Ok(child) => {
++                        if resolve_flags
++                            .intersects(Openat2ResolveFlags::NO_XDEV | Openat2ResolveFlags::BENEATH)
++                            && child.mount.id() != current_path.mount.id()
++                        {
++                            return_errno_with_message!(
++                                Errno::EXDEV,
++                                "mount traversal is blocked by resolve flags"
++                            );
++                        }
++                        child
++                    }
++                    Err(e) => {
++                        if next_is_tail && e.error() == Errno::ENOENT {
++                            return Ok(LookupResult::AtParent(LookupParentResult::new(
++                                current_path,
++                                next_name.to_string(),
++                                target_is_dir,
++                            )));
++                        }
++                        return Err(e);
++                    }
++                }
++            };
++
++            let next_type = next_path.type_();
++            let should_follow_symlink = next_type == InodeType::SymLink
++                && (follow_tail_link || !next_is_tail || target_is_dir);
++            if should_follow_symlink {
++                if resolve_flags.contains(Openat2ResolveFlags::NO_SYMLINKS) {
++                    return_errno_with_message!(Errno::ELOOP, "symlink traversal is blocked");
++                }
++                if follows >= SYMLINKS_MAX {
++                    return_errno_with_message!(Errno::ELOOP, "there are too many symlinks");
++                }
++
++                match next_path.inode().read_link()? {
++                    SymbolicLink::Plain(mut tmp_link_path) => {
++                        if resolve_flags.contains(Openat2ResolveFlags::NO_MAGICLINKS) {
++                            // Plain symlinks are still allowed when only magic links are blocked.
++                        }
++                        if tmp_link_path.is_empty() {
++                            return_errno_with_message!(Errno::ENOENT, "the symlink path is empty");
++                        }
++                        if tmp_link_path.starts_with('/')
++                            && resolve_flags.contains(Openat2ResolveFlags::BENEATH)
++                        {
++                            return_errno_with_message!(
++                                Errno::EXDEV,
++                                "absolute symlink escapes the scoped root"
++                            );
++                        }
++                        if !next_is_tail {
++                            tmp_link_path += "/";
++                            tmp_link_path += path_remain;
++                        } else if target_is_dir {
++                            tmp_link_path += "/";
++                        }
++
++                        if tmp_link_path.starts_with('/') {
++                            current_path = if resolve_flags.contains(Openat2ResolveFlags::IN_ROOT) {
++                                scoped_root.clone()
++                            } else {
++                                self.root.clone()
++                            };
++                        }
++                        let link_path = link_path_opt.get_or_insert_with(String::new);
++                        link_path.clear();
++                        link_path.push_str(tmp_link_path.trim_start_matches('/'));
++                        relative_path = link_path;
++                        follows += 1;
++                    }
++                    SymbolicLink::Path(path) => {
++                        if resolve_flags.contains(Openat2ResolveFlags::NO_MAGICLINKS) {
++                            return_errno_with_message!(
++                                Errno::ELOOP,
++                                "magic-link traversal is blocked"
++                            );
++                        }
++                        if resolve_flags.contains(Openat2ResolveFlags::BENEATH)
++                            && !path.is_equal_or_descendant_of(scoped_root)
++                        {
++                            return_errno_with_message!(
++                                Errno::EXDEV,
++                                "magic-link traversal escapes the scoped root"
++                            );
++                        }
++                        if resolve_flags.contains(Openat2ResolveFlags::IN_ROOT)
++                            && !path.is_equal_or_descendant_of(scoped_root)
++                        {
++                            return_errno_with_message!(
++                                Errno::ENOENT,
++                                "magic-link target is outside the scoped root"
++                            );
++                        }
++                        current_path = path;
++                        relative_path = path_remain;
++                        follows += 1;
++                    }
++                }
++            } else {
++                if target_is_dir && next_type != InodeType::Dir {
++                    return_errno_with_message!(Errno::ENOTDIR, "the inode is not a directory");
++                }
++                current_path = next_path;
++                relative_path = path_remain;
++            }
++        }
++
++        Ok(LookupResult::Resolved(current_path))
++    }
+ }
+ 
+ // A result type for lookup operations.
+diff --git a/kernel/src/syscall/arch/generic.rs b/kernel/src/syscall/arch/generic.rs
+index ff2e8258..db4eeae6 100644
+--- a/kernel/src/syscall/arch/generic.rs
++++ b/kernel/src/syscall/arch/generic.rs
+@@ -79,7 +79,7 @@ macro_rules! import_generic_syscall_entries {
+             msync::sys_msync,
+             munmap::sys_munmap,
+             nanosleep::{sys_clock_nanosleep, sys_nanosleep},
+-            open::sys_openat,
++            open::{sys_openat, sys_openat2},
+             pidfd_getfd::sys_pidfd_getfd,
+             pidfd_open::sys_pidfd_open,
+             pidfd_send_signal::sys_pidfd_send_signal,
+@@ -253,6 +253,7 @@ macro_rules! define_syscalls_with_generic_syscall_table {
+             SYS_FCHOWNAT = 54                => sys_fchownat(args[..5]);
+             SYS_FCHOWN = 55                  => sys_fchown(args[..3]);
+             SYS_OPENAT = 56                  => sys_openat(args[..4]);
++            SYS_OPENAT2 = 437                => sys_openat2(args[..4]);
+             SYS_CLOSE = 57                   => sys_close(args[..1]);
+             SYS_PIPE2 = 59                   => sys_pipe2(args[..2]);
+             SYS_GETDENTS64 = 61              => sys_getdents64(args[..3]);
+diff --git a/kernel/src/syscall/arch/x86.rs b/kernel/src/syscall/arch/x86.rs
+index 033a975a..8302185d 100644
+--- a/kernel/src/syscall/arch/x86.rs
++++ b/kernel/src/syscall/arch/x86.rs
+@@ -79,7 +79,7 @@ use super::{
+     msync::sys_msync,
+     munmap::sys_munmap,
+     nanosleep::{sys_clock_nanosleep, sys_nanosleep},
+-    open::{sys_creat, sys_open, sys_openat},
++    open::{sys_creat, sys_open, sys_openat, sys_openat2},
+     pause::sys_pause,
+     pidfd_getfd::sys_pidfd_getfd,
+     pidfd_open::sys_pidfd_open,
+@@ -367,6 +367,7 @@ impl_syscall_nums_and_dispatch_fn! {
+     SYS_INOTIFY_ADD_WATCH = 254 => sys_inotify_add_watch(args[..3]);
+     SYS_INOTIFY_RM_WATCH = 255 => sys_inotify_rm_watch(args[..2]);
+     SYS_OPENAT = 257           => sys_openat(args[..4]);
++    SYS_OPENAT2 = 437          => sys_openat2(args[..4]);
+     SYS_MKDIRAT = 258          => sys_mkdirat(args[..3]);
+     SYS_MKNODAT = 259          => sys_mknodat(args[..4]);
+     SYS_FCHOWNAT = 260         => sys_fchownat(args[..5]);
+diff --git a/kernel/src/syscall/open.rs b/kernel/src/syscall/open.rs
+index d08e52ed..962df615 100644
+--- a/kernel/src/syscall/open.rs
++++ b/kernel/src/syscall/open.rs
+@@ -1,5 +1,9 @@
+ // SPDX-License-Identifier: MPL-2.0
+ 
++use core::mem::size_of;
++
++use ostd::mm::VmIo;
++
+ use super::SyscallReturn;
+ use crate::{
+     fs,
+@@ -9,7 +13,7 @@ use crate::{
+             StatusFlags,
+             file_table::{FdFlags, FileDesc},
+         },
+-        vfs::path::{AT_FDCWD, FsPath, LookupResult, PathResolver},
++        vfs::path::{AT_FDCWD, FsPath, LookupResult, Openat2ResolveFlags, PathResolver},
+     },
+     prelude::*,
+     process::ResourceType,
+@@ -29,48 +33,54 @@ pub fn sys_openat(
+         dirfd, path, flags, mode
+     );
+ 
+-    let file_handle = {
+-        let path = path.to_string_lossy();
+-        let fs_path = FsPath::from_fd_and_path(dirfd, path.as_ref())?;
+-
+-        let fs_ref = ctx.thread_local.borrow_fs();
+-        let mask_mode = mode & !fs_ref.umask().get();
++    let path = path.to_string_lossy();
++    let file_handle = open_with_flags(
++        dirfd,
++        path.as_ref(),
++        flags,
++        mode,
++        Openat2ResolveFlags::empty(),
++        ctx,
++    )
++    .map_err(|err| match err.error() {
++        Errno::EINTR => Error::new(Errno::ERESTARTSYS),
++        _ => err,
++    })?;
++    install_opened_file(file_handle, flags, ctx)
++}
+ 
+-        let path_resolver = fs_ref.resolver().read();
+-        do_open(
+-            &path_resolver,
+-            &fs_path,
+-            flags,
+-            InodeMode::from_bits_truncate(mask_mode),
+-        )
+-        .map_err(|err| match err.error() {
+-            Errno::EINTR => Error::new(Errno::ERESTARTSYS),
+-            _ => err,
+-        })?
+-    };
++pub fn sys_openat2(
++    dirfd: FileDesc,
++    path_addr: Vaddr,
++    how_addr: Vaddr,
++    size: usize,
++    ctx: &Context,
++) -> Result<SyscallReturn> {
++    let path = ctx.user_space().read_cstring(path_addr, MAX_FILENAME_LEN)?;
++    let how = read_open_how(how_addr, size, ctx)?;
++    debug!(
++        "dirfd = {}, path = {:?}, flags = {:#x}, mode = {:#o}, resolve = {:?}",
++        dirfd,
++        path,
++        how.flags,
++        how.mode.bits(),
++        how.resolve
++    );
+ 
+-    let fd = {
+-        let file_table = ctx.thread_local.borrow_file_table();
+-        let mut file_table_locked = file_table.unwrap().write();
+-        let fd_flags =
+-            if CreationFlags::from_bits_truncate(flags).contains(CreationFlags::O_CLOEXEC) {
+-                FdFlags::CLOEXEC
+-            } else {
+-                FdFlags::empty()
+-            };
+-        let max_fd_exclusive = ctx
+-            .process
+-            .resource_limits()
+-            .get_rlimit(ResourceType::RLIMIT_NOFILE)
+-            .get_cur()
+-            .min(i32::MAX as u64 + 1) as usize;
+-        let fd =
+-            file_table_locked.insert_with_limit(file_handle.clone(), fd_flags, max_fd_exclusive)?;
+-        fd
+-    };
+-    let file_like: Arc<dyn FileLike> = file_handle;
+-    fs::vfs::notify::on_open(&file_like);
+-    Ok(SyscallReturn::Return(fd as _))
++    let path = path.to_string_lossy();
++    let file_handle = open_with_flags(
++        dirfd,
++        path.as_ref(),
++        how.flags,
++        how.mode.bits(),
++        how.resolve,
++        ctx,
++    )
++    .map_err(|err| match err.error() {
++        Errno::EINTR => Error::new(Errno::ERESTARTSYS),
++        _ => err,
++    })?;
++    install_opened_file(file_handle, how.flags, ctx)
+ }
+ 
+ pub fn sys_open(path_addr: Vaddr, flags: u32, mode: u16, ctx: &Context) -> Result<SyscallReturn> {
+@@ -137,3 +147,188 @@ fn do_open(
+ 
+     Ok(file_handle)
+ }
++
++fn open_with_flags(
++    dirfd: FileDesc,
++    path: &str,
++    flags: u32,
++    mode: u16,
++    resolve_flags: Openat2ResolveFlags,
++    ctx: &Context,
++) -> Result<Arc<dyn FileLike>> {
++    let fs_ref = ctx.thread_local.borrow_fs();
++    let mask_mode = mode & !fs_ref.umask().get();
++    let path_resolver = fs_ref.resolver().read();
++
++    if resolve_flags.is_empty() {
++        let fs_path = FsPath::from_fd_and_path(dirfd, path)?;
++        do_open(
++            &path_resolver,
++            &fs_path,
++            flags,
++            InodeMode::from_bits_truncate(mask_mode),
++        )
++    } else {
++        do_openat2(
++            &path_resolver,
++            dirfd,
++            path,
++            flags,
++            InodeMode::from_bits_truncate(mask_mode),
++            resolve_flags,
++        )
++    }
++}
++
++fn do_openat2(
++    path_resolver: &PathResolver,
++    dirfd: FileDesc,
++    path: &str,
++    flags: u32,
++    mode: InodeMode,
++    resolve_flags: Openat2ResolveFlags,
++) -> Result<Arc<dyn FileLike>> {
++    let open_args = OpenArgs::from_flags_and_mode(flags, mode)?;
++    let lookup_res =
++        path_resolver.lookup_openat2(dirfd, path, open_args.follow_tail_link(), resolve_flags)?;
++    finish_open_from_lookup(lookup_res, open_args)
++}
++
++fn finish_open_from_lookup(
++    lookup_res: LookupResult,
++    open_args: OpenArgs,
++) -> Result<Arc<dyn FileLike>> {
++    let file_handle: Arc<dyn FileLike> = match lookup_res {
++        LookupResult::Resolved(path) => Arc::new(path.open(open_args)?),
++        LookupResult::AtParent(result) => {
++            if !open_args.creation_flags.contains(CreationFlags::O_CREAT)
++                || open_args.status_flags.contains(StatusFlags::O_PATH)
++            {
++                return_errno_with_message!(Errno::ENOENT, "the file does not exist");
++            }
++            if open_args
++                .creation_flags
++                .contains(CreationFlags::O_DIRECTORY)
++            {
++                return_errno_with_message!(
++                    Errno::EINVAL,
++                    "O_CREAT and O_DIRECTORY cannot be specified together"
++                );
++            }
++            if result.target_is_dir() {
++                return_errno_with_message!(
++                    Errno::EISDIR,
++                    "O_CREAT is specified but the file is a directory"
++                );
++            }
++
++            let (parent, tail_name) = result.into_parent_and_basename();
++            let new_path =
++                parent.new_fs_child(&tail_name, InodeType::File, open_args.inode_mode)?;
++            fs::vfs::notify::on_create(&parent, || tail_name.clone());
++
++            Arc::new(InodeHandle::new_unchecked_access(
++                new_path,
++                open_args.access_mode,
++                open_args.status_flags,
++            )?)
++        }
++    };
++
++    Ok(file_handle)
++}
++
++fn install_opened_file(
++    file_handle: Arc<dyn FileLike>,
++    flags: u32,
++    ctx: &Context,
++) -> Result<SyscallReturn> {
++    let fd = {
++        let file_table = ctx.thread_local.borrow_file_table();
++        let mut file_table_locked = file_table.unwrap().write();
++        let fd_flags =
++            if CreationFlags::from_bits_truncate(flags).contains(CreationFlags::O_CLOEXEC) {
++                FdFlags::CLOEXEC
++            } else {
++                FdFlags::empty()
++            };
++        let max_fd_exclusive = ctx
++            .process
++            .resource_limits()
++            .get_rlimit(ResourceType::RLIMIT_NOFILE)
++            .get_cur()
++            .min(i32::MAX as u64 + 1) as usize;
++        file_table_locked.insert_with_limit(file_handle.clone(), fd_flags, max_fd_exclusive)?
++    };
++    fs::vfs::notify::on_open(&file_handle);
++    Ok(SyscallReturn::Return(fd as _))
++}
++
++fn read_open_how(how_addr: Vaddr, size: usize, ctx: &Context) -> Result<OpenHowArgs> {
++    if size < size_of::<OpenHow>() {
++        return_errno_with_message!(Errno::EINVAL, "open_how is too small");
++    }
++
++    let user_space = ctx.user_space();
++    let how: OpenHow = user_space.read_val(how_addr)?;
++
++    if size > size_of::<OpenHow>() {
++        let extra_addr = how_addr
++            .checked_add(size_of::<OpenHow>())
++            .ok_or_else(|| Error::with_message(Errno::EFAULT, "open_how pointer overflow"))?;
++        let mut extra = vec![0u8; size - size_of::<OpenHow>()];
++        user_space.read_bytes(extra_addr, &mut extra)?;
++        if extra.iter().any(|byte| *byte != 0) {
++            return_errno_with_message!(Errno::E2BIG, "open_how contains non-zero extension data");
++        }
++    }
++
++    if how.flags > u32::MAX as u64 {
++        return_errno_with_message!(Errno::EINVAL, "invalid open flags");
++    }
++    let flags = how.flags as u32;
++    validate_openat2_flags(flags)?;
++
++    let creation_flags = CreationFlags::from_bits_truncate(flags);
++    if creation_flags.intersects(CreationFlags::O_CREAT | CreationFlags::O_TMPFILE) {
++        if how.mode & !(InodeMode::all().bits() as u64) != 0 {
++            return_errno_with_message!(Errno::EINVAL, "invalid file mode");
++        }
++    } else if how.mode != 0 {
++        return_errno_with_message!(Errno::EINVAL, "mode requires O_CREAT or O_TMPFILE");
++    }
++
++    let resolve = Openat2ResolveFlags::from_bits(how.resolve)
++        .ok_or_else(|| Error::with_message(Errno::EINVAL, "invalid resolve flags"))?;
++
++    Ok(OpenHowArgs {
++        flags,
++        mode: InodeMode::from_bits_truncate(how.mode as u16),
++        resolve,
++    })
++}
++
++fn validate_openat2_flags(flags: u32) -> Result<()> {
++    let supported_bits = 0b11 | CreationFlags::all().bits() | StatusFlags::all().bits();
++    if flags & !supported_bits != 0 {
++        return_errno_with_message!(Errno::EINVAL, "unsupported open flags");
++    }
++
++    let _ = AccessMode::from_u32(flags)?;
++    Ok(())
++}
++
++#[derive(Debug, Clone, Copy)]
++struct OpenHowArgs {
++    flags: u32,
++    mode: InodeMode,
++    resolve: Openat2ResolveFlags,
++}
++
++#[derive(Debug, Clone, Copy, Pod)]
++#[repr(C)]
++struct OpenHow {
++    flags: u64,
++    mode: u64,
++    resolve: u64,
++}
+diff --git a/test/initramfs/src/syscall/ltp/debug/family-openat-201.md b/test/initramfs/src/syscall/ltp/debug/family-openat-201.md
+new file mode 100644
+index 00000000..d520afd3
+--- /dev/null
++++ b/test/initramfs/src/syscall/ltp/debug/family-openat-201.md
+@@ -0,0 +1,29 @@
++# openat201
++
++## Goal
++
++Enable `openat201` on `/tmp` by implementing the baseline `openat2(2)` syscall path.
++
++## Failure
++
++Before the fix, the testcase was skipped with `TCONF` because `__NR_openat2` returned
++`ENOSYS`.
++
++## Root Cause
++
++The kernel did not implement `openat2(2)` at all, so LTP could not exercise either the
++`open_how` argument validation or the basic resolve-flag semantics.
++
++## Fix
++
++- Added `sys_openat2` and wired syscall number `437` into the x86 and generic syscall tables.
++- Parsed `struct open_how` from userspace, including Linux-compatible handling for oversized
++  zero-padded structures.
++- Enforced strict `openat2` flag, mode, and resolve validation instead of silently truncating
++  unknown bits.
++- Extended path lookup to honor `RESOLVE_NO_XDEV`, `RESOLVE_NO_MAGICLINKS`,
++  `RESOLVE_NO_SYMLINKS`, `RESOLVE_BENEATH`, and `RESOLVE_IN_ROOT`.
++
++## Validation
++
++- `make run_kernel AUTO_TEST=syscall SYSCALL_TEST_SUITE=ltp LTP_CASES=openat201`
+diff --git a/test/initramfs/src/syscall/ltp/testcases/all.txt b/test/initramfs/src/syscall/ltp/testcases/all.txt
+index 2753ad66..f87cc6b6 100644
+--- a/test/initramfs/src/syscall/ltp/testcases/all.txt
++++ b/test/initramfs/src/syscall/ltp/testcases/all.txt
+@@ -1003,7 +1003,7 @@ openat02
+ openat03
+ openat04
+ 
+-# openat201
++openat201
+ # openat202
+ # openat203
+ 
+-- 
+2.43.0
+

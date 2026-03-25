@@ -1,0 +1,166 @@
+From c177ee53247232c1454de2b20c4b0b050d73bacf Mon Sep 17 00:00:00 2001
+From: Qingsong Chen <changxian.cqs@antgroup.com>
+Date: Wed, 25 Mar 2026 03:16:03 +0000
+Subject: [PATCH 64/97] Enable LTP open02 case
+
+---
+ kernel/src/fs/vfs/path/mod.rs                 | 31 ++++++++-
+ .../src/syscall/ltp/debug/family-open-02.md   | 69 +++++++++++++++++++
+ .../src/syscall/ltp/testcases/all.txt         |  2 +-
+ 3 files changed, 100 insertions(+), 2 deletions(-)
+ create mode 100644 test/initramfs/src/syscall/ltp/debug/family-open-02.md
+
+diff --git a/kernel/src/fs/vfs/path/mod.rs b/kernel/src/fs/vfs/path/mod.rs
+index 717bde0d..1e257d92 100644
+--- a/kernel/src/fs/vfs/path/mod.rs
++++ b/kernel/src/fs/vfs/path/mod.rs
+@@ -9,6 +9,7 @@ use dentry::DirDentry;
+ use inherit_methods_macro::inherit_methods;
+ pub use mount::{Mount, MountPropType, PerMountFlags};
+ pub use mount_namespace::MountNamespace;
++use ostd::task::Task;
+ pub use resolver::{AT_FDCWD, AbsPathResult, FsPath, LookupResult, PathResolver, SplitPath};
+ 
+ use crate::{
+@@ -23,7 +24,7 @@ use crate::{
+         },
+     },
+     prelude::*,
+-    process::{Gid, Uid},
++    process::{Gid, Uid, credentials::capabilities::CapSet, posix_thread::AsPosixThread},
+ };
+ 
+ mod dentry;
+@@ -128,6 +129,7 @@ impl Path {
+                 "O_DIRECTORY is specified but the file is not a directory"
+             );
+         }
++        self.check_noatime_permission(*status_flags)?;
+ 
+         if inode_type.is_regular_file()
+             && creation_flags.contains(CreationFlags::O_TRUNC)
+@@ -139,6 +141,33 @@ impl Path {
+         InodeHandle::new(self.clone(), open_args.access_mode, *status_flags)
+     }
+ 
++    fn check_noatime_permission(&self, status_flags: StatusFlags) -> Result<()> {
++        if !status_flags.contains(StatusFlags::O_NOATIME)
++            || status_flags.contains(StatusFlags::O_PATH)
++        {
++            return Ok(());
++        }
++
++        let Some(task) = Task::current() else {
++            return Ok(());
++        };
++        let Some(thread) = task.as_posix_thread() else {
++            return Ok(());
++        };
++
++        let credentials = thread.credentials();
++        if credentials.effective_capset().contains(CapSet::FOWNER)
++            || credentials.euid() == self.inode().metadata().uid
++        {
++            return Ok(());
++        }
++
++        return_errno_with_message!(
++            Errno::EPERM,
++            "O_NOATIME requires file ownership or CAP_FOWNER"
++        );
++    }
++
+     /// Gets the real name of the `Path` from its dentry.
+     pub fn name(&self) -> String {
+         self.dentry.name()
+diff --git a/test/initramfs/src/syscall/ltp/debug/family-open-02.md b/test/initramfs/src/syscall/ltp/debug/family-open-02.md
+new file mode 100644
+index 00000000..5146d78e
+--- /dev/null
++++ b/test/initramfs/src/syscall/ltp/debug/family-open-02.md
+@@ -0,0 +1,69 @@
++# `open02`
++
++## Goal
++
++Re-enable `open02` in Phase 3 and verify that it passes on `/tmp`, `/ext2`,
++and `/exfat`.
++
++## Root Cause
++
++The kernel accepted `open(..., O_NOATIME)` from an unprivileged caller even
++when Linux should reject it with `EPERM`.
++
++This testcase checks two paths:
++
++- opening a nonexistent file without `O_CREAT` -> `ENOENT`
++- opening an existing file with `O_RDONLY | O_NOATIME` as an unprivileged user
++  -> `EPERM`
++
++The first path was already correct. The second failed because Asterinas parsed
++`O_NOATIME` into `StatusFlags`, but the open path never enforced the Linux
++permission gate for that flag.
++
++## Solution
++
++- Added an `O_NOATIME` permission check in `Path::open()` for existing files.
++- Allowed `O_NOATIME` only when the caller effective UID matches the inode
++  owner, or when the caller has `CAP_FOWNER`.
++- Returned `EPERM` otherwise.
++- Re-enabled `open02` in `testcases/all.txt`.
++
++## Validation
++
++```bash
++SSH_PORT=46068 NGINX_PORT=52126 REDIS_PORT=50425 IPERF_PORT=49247 \
++LMBENCH_TCP_LAT_PORT=45694 LMBENCH_TCP_BW_PORT=45696 MEMCACHED_PORT=45671 \
++make run_kernel AUTO_TEST=syscall SYSCALL_TEST_SUITE=ltp \
++  LTP_CASES=open02
++
++SSH_PORT=46069 NGINX_PORT=52127 REDIS_PORT=50426 IPERF_PORT=49248 \
++LMBENCH_TCP_LAT_PORT=45704 LMBENCH_TCP_BW_PORT=45706 MEMCACHED_PORT=45681 \
++make run_kernel AUTO_TEST=syscall SYSCALL_TEST_SUITE=ltp \
++  SYSCALL_TEST_WORKDIR=/ext2 \
++  LTP_CASES=open02
++
++SSH_PORT=46070 NGINX_PORT=52128 REDIS_PORT=50427 IPERF_PORT=49249 \
++LMBENCH_TCP_LAT_PORT=45714 LMBENCH_TCP_BW_PORT=45716 MEMCACHED_PORT=45691 \
++make run_kernel AUTO_TEST=syscall SYSCALL_TEST_SUITE=ltp \
++  SYSCALL_TEST_WORKDIR=/exfat \
++  LTP_CASES=open02
++```
++
++Observed results:
++
++- `/tmp`: `PASS`
++- `/ext2`: `PASS`
++- `/exfat`: `PASS`
++
++Observed behavior:
++
++- before the fix, the unprivileged `O_NOATIME` subcheck unexpectedly succeeded
++- after the fix, LTP observed the expected `EPERM` on all three workdirs
++
++## Impact / Residual Risk
++
++- This fixes a real open-path permission bug, not just testcase enablement.
++- The check is intentionally narrow and only affects the Linux-specific
++  `O_NOATIME` gate on existing files.
++- Remaining Priority A work in the `open/openat` family should be checked next,
++  starting from the next disabled testcase in `all.txt`.
+diff --git a/test/initramfs/src/syscall/ltp/testcases/all.txt b/test/initramfs/src/syscall/ltp/testcases/all.txt
+index 23088aa6..d9d4ad3a 100644
+--- a/test/initramfs/src/syscall/ltp/testcases/all.txt
++++ b/test/initramfs/src/syscall/ltp/testcases/all.txt
+@@ -984,7 +984,7 @@ nice03
+ # nice05
+ 
+ open01
+-# open02
++open02
+ open03
+ # open04
+ # open06
+-- 
+2.43.0
+

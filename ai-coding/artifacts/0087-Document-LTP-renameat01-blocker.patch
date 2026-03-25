@@ -1,0 +1,47 @@
+From 9b46c85475998b4f2b69bb1bd20356e359056495 Mon Sep 17 00:00:00 2001
+From: Qingsong Chen <changxian.cqs@antgroup.com>
+Date: Wed, 25 Mar 2026 06:45:54 +0000
+Subject: [PATCH 87/97] Document LTP renameat01 blocker
+
+---
+ .../syscall/ltp/debug/family-renameat-01.md   | 28 +++++++++++++++++++
+ 1 file changed, 28 insertions(+)
+ create mode 100644 test/initramfs/src/syscall/ltp/debug/family-renameat-01.md
+
+diff --git a/test/initramfs/src/syscall/ltp/debug/family-renameat-01.md b/test/initramfs/src/syscall/ltp/debug/family-renameat-01.md
+new file mode 100644
+index 00000000..ea27fb32
+--- /dev/null
++++ b/test/initramfs/src/syscall/ltp/debug/family-renameat-01.md
+@@ -0,0 +1,28 @@
++# renameat01
++
++## Goal
++
++Assess whether `renameat01` needs a `/tmp`-side fix before enabling it in the Priority A set.
++
++## Failure
++
++`renameat01` did not reach its rename-at assertions. The testcase failed while preparing an ext2
++test device:
++
++- `mkfs.ext2: lseek(0, 2): Invalid argument`
++- `renameat01.c:177: mkfs.ext2 failed with exit code 1`
++
++## Root Cause
++
++This case is blocked in the ext2-device setup path rather than by `/tmp` or `renameat()` lookup
++semantics. The failure happens before the testcase exercises the target syscall behavior.
++
++## Resolution
++
++- Left `renameat01` disabled in `testcases/all.txt`.
++- Recorded the blocker instead of changing ext2-specific behavior, following the current priority
++  to finish `/tmp` coverage first.
++
++## Validation
++
++- `make run_kernel AUTO_TEST=syscall SYSCALL_TEST_SUITE=ltp LTP_CASES=renameat01`
+-- 
+2.43.0
+

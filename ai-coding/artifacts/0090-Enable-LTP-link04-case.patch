@@ -1,0 +1,112 @@
+From 1e632075b35847876ddebb93445b80b8b0111ae2 Mon Sep 17 00:00:00 2001
+From: Qingsong Chen <changxian.cqs@antgroup.com>
+Date: Wed, 25 Mar 2026 06:57:58 +0000
+Subject: [PATCH 90/97] Enable LTP link04 case
+
+---
+ kernel/src/fs/vfs/path/mod.rs                 | 11 +++++++
+ .../src/syscall/ltp/debug/family-link-04.md   | 29 +++++++++++++++++++
+ .../src/syscall/ltp/testcases/all.txt         |  2 +-
+ 3 files changed, 41 insertions(+), 1 deletion(-)
+ create mode 100644 test/initramfs/src/syscall/ltp/debug/family-link-04.md
+
+diff --git a/kernel/src/fs/vfs/path/mod.rs b/kernel/src/fs/vfs/path/mod.rs
+index 60fcdc52..5a627e58 100644
+--- a/kernel/src/fs/vfs/path/mod.rs
++++ b/kernel/src/fs/vfs/path/mod.rs
+@@ -527,8 +527,14 @@ impl Path {
+     pub fn inode(&self) -> &Arc<dyn Inode>;
+     pub fn type_(&self) -> InodeType;
+ 
++    fn check_dir_modification_permission(&self) -> Result<()> {
++        self.inode()
++            .check_permission(Permission::MAY_WRITE | Permission::MAY_EXEC)
++    }
++
+     /// Creates a `Path` by making an inode of the `type_` with the `mode`.
+     pub fn mknod(&self, name: &str, mode: InodeMode, type_: MknodType) -> Result<Self> {
++        self.check_dir_modification_permission()?;
+         let inner = self
+             .dentry
+             .as_dir_dentry_or_err()?
+@@ -541,17 +547,20 @@ impl Path {
+         if !Arc::ptr_eq(&old.mount, &self.mount) {
+             return_errno_with_message!(Errno::EXDEV, "the operation cannot cross mounts");
+         }
++        self.check_dir_modification_permission()?;
+ 
+         self.dentry.as_dir_dentry_or_err()?.link(old.inode(), name)
+     }
+ 
+     /// Unlinks a name from the `Path`.
+     pub fn unlink(&self, name: &str) -> Result<()> {
++        self.check_dir_modification_permission()?;
+         self.dentry.as_dir_dentry_or_err()?.unlink(name)
+     }
+ 
+     /// Removes a directory by `rmdir()` the inner inode.
+     pub fn rmdir(&self, name: &str) -> Result<()> {
++        self.check_dir_modification_permission()?;
+         self.dentry.as_dir_dentry_or_err()?.rmdir(name)
+     }
+ 
+@@ -560,6 +569,8 @@ impl Path {
+         if !Arc::ptr_eq(&self.mount, &new_dir.mount) {
+             return_errno_with_message!(Errno::EXDEV, "the operation cannot cross mounts");
+         }
++        self.check_dir_modification_permission()?;
++        new_dir.check_dir_modification_permission()?;
+ 
+         DirDentry::rename(&self.dentry, old_name, &new_dir.dentry, new_name)
+     }
+diff --git a/test/initramfs/src/syscall/ltp/debug/family-link-04.md b/test/initramfs/src/syscall/ltp/debug/family-link-04.md
+new file mode 100644
+index 00000000..3dd32780
+--- /dev/null
++++ b/test/initramfs/src/syscall/ltp/debug/family-link-04.md
+@@ -0,0 +1,29 @@
++# link04
++
++## Goal
++
++Enable `link04` on `/tmp`.
++
++## Failure
++
++`link04` verifies that creating a hard link inside a directory without search/write permission is
++rejected with `EACCES`. On `/tmp`, the testcase observed that `link()` succeeded where Linux
++returns `EACCES`.
++
++## Root Cause
++
++The VFS mutation helpers delegated `link()`, `unlink()`, `rmdir()`, `rename()`, and `mknod()`
++directly to the directory dentry implementation without first checking permission on the parent
++directory inode. That skipped the required directory write/search permission gate and allowed
++mutations through directories that should have been denied.
++
++## Fix
++
++- Added a shared directory-modification permission check in `Path`.
++- Required `MAY_WRITE | MAY_EXEC` on the parent directory before `mknod()`, `link()`, `unlink()`,
++  `rmdir()`, and `rename()`.
++- Enabled `link04` in `testcases/all.txt`.
++
++## Validation
++
++- `make run_kernel AUTO_TEST=syscall SYSCALL_TEST_SUITE=ltp LTP_CASES=link04`
+diff --git a/test/initramfs/src/syscall/ltp/testcases/all.txt b/test/initramfs/src/syscall/ltp/testcases/all.txt
+index 03480616..466132f4 100644
+--- a/test/initramfs/src/syscall/ltp/testcases/all.txt
++++ b/test/initramfs/src/syscall/ltp/testcases/all.txt
+@@ -738,7 +738,7 @@ lchown01
+ # lgetxattr02
+ 
+ link02
+-# link04
++link04
+ link05
+ # link08
+ 
+-- 
+2.43.0
+

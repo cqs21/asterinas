@@ -1,0 +1,103 @@
+From e3cbd444185cf6fd8b67dec920a5436f55ad6523 Mon Sep 17 00:00:00 2001
+From: Qingsong Chen <changxian.cqs@antgroup.com>
+Date: Tue, 24 Mar 2026 06:01:25 +0000
+Subject: [PATCH 02/97] Add LTP case selection filters
+
+---
+ test/initramfs/src/syscall/ltp/Makefile       | 33 ++++++++++++++++---
+ .../ltp/debug/task-1.1-case-selection.md      | 30 +++++++++++++++++
+ 2 files changed, 59 insertions(+), 4 deletions(-)
+ create mode 100644 test/initramfs/src/syscall/ltp/debug/task-1.1-case-selection.md
+
+diff --git a/test/initramfs/src/syscall/ltp/Makefile b/test/initramfs/src/syscall/ltp/Makefile
+index 65846a19..f63b7843 100644
+--- a/test/initramfs/src/syscall/ltp/Makefile
++++ b/test/initramfs/src/syscall/ltp/Makefile
+@@ -20,11 +20,36 @@ $(TARGET_DIR): $(RUN_BASH) $(ALL_TESTS) $(EXT2_BLOCKLIST) $(EXFAT_BLOCKLIST)
+ 	@mkdir -p $@/runtest
+ 	@awk '!/^#/ && NF' $(ALL_TESTS) > $@/all.txt
+ 	@if [ "$(SYSCALL_TEST_WORKDIR)" = "/ext2" ]; then \
+-		grep -vxF -f $(EXT2_BLOCKLIST) $@/all.txt > $@/filtered.txt; \
++		grep -vxF -f $(EXT2_BLOCKLIST) $@/all.txt > $@/fs_filtered.txt; \
+ 	elif [ "$(SYSCALL_TEST_WORKDIR)" = "/exfat" ]; then \
+-		grep -vxF -f $(EXFAT_BLOCKLIST) $@/all.txt > $@/filtered.txt; \
++		grep -vxF -f $(EXFAT_BLOCKLIST) $@/all.txt > $@/fs_filtered.txt; \
+ 	else \
+-		cp -f $@/all.txt $@/filtered.txt; \
++		cp -f $@/all.txt $@/fs_filtered.txt; \
++	fi;
++	@if [ -n "$(LTP_CASES)" ] || [ -n "$(LTP_CASE_FILE)" ]; then \
++		: > $@/selected.txt; \
++		if [ -n "$(LTP_CASES)" ]; then \
++			printf '%s\n' "$(LTP_CASES)" | tr ',' '\n' | sed 's/^[[:space:]]*//;s/[[:space:]]*$$//' | awk 'NF' >> $@/selected.txt; \
++		fi; \
++		if [ -n "$(LTP_CASE_FILE)" ]; then \
++			if [ ! -f "$(LTP_CASE_FILE)" ]; then \
++				echo "Error: LTP_CASE_FILE does not exist: $(LTP_CASE_FILE)" >&2; \
++				exit 1; \
++			fi; \
++			awk '!/^#/ && NF { print $$1 }' "$(LTP_CASE_FILE)" >> $@/selected.txt; \
++		fi; \
++		sort -u -o $@/selected.txt $@/selected.txt; \
++		if [ ! -s $@/selected.txt ]; then \
++			echo "Error: no testcases selected from LTP_CASES/LTP_CASE_FILE." >&2; \
++			exit 1; \
++		fi; \
++		grep -xF -f $@/selected.txt $@/fs_filtered.txt > $@/filtered.txt || true; \
++		if [ ! -s $@/filtered.txt ]; then \
++			echo "Error: selected LTP cases are not enabled after blocklist filtering." >&2; \
++			exit 1; \
++		fi; \
++	else \
++		cp -f $@/fs_filtered.txt $@/filtered.txt; \
+ 	fi;
+ 	@# Process syscall testcases and copy binaries
+ 	@while read -r syscall binary params; do \
+@@ -38,7 +63,7 @@ $(TARGET_DIR): $(RUN_BASH) $(ALL_TESTS) $(EXT2_BLOCKLIST) $(EXFAT_BLOCKLIST)
+ 		fi; \
+ 	done < $(LTP_PREBUILT_DIR)/runtest/syscalls
+ 	@# Remove intermediate files
+-	@rm -f $@/all.txt $@/filtered.txt
++	@rm -f $@/all.txt $@/fs_filtered.txt $@/filtered.txt $@/selected.txt
+ 	@# Copy bash scripts
+ 	@cp -r $(LTP_PREBUILT_DIR)/bin $@
+ 	@cp -f $(LTP_PREBUILT_DIR)/runltp $@
+diff --git a/test/initramfs/src/syscall/ltp/debug/task-1.1-case-selection.md b/test/initramfs/src/syscall/ltp/debug/task-1.1-case-selection.md
+new file mode 100644
+index 00000000..32d89716
+--- /dev/null
++++ b/test/initramfs/src/syscall/ltp/debug/task-1.1-case-selection.md
+@@ -0,0 +1,30 @@
++# Task 1.1: Single-Case and Batch Selection
++
++## Goal
++
++Allow developers to run one LTP case or a small explicit batch without
++editing `testcases/all.txt`.
++
++## Problem Cause
++
++The original packaging path always turned the repository-wide enable list into
++`runtest/syscalls` as a single batch. That forced local triage to mutate
++tracked files even when a developer only wanted to retry one case.
++
++## Solution
++
++Extended the LTP packaging step in [`Makefile`](../Makefile) with two optional
++selection inputs:
++
++- `LTP_CASES`, a comma-separated case list.
++- `LTP_CASE_FILE`, a file containing one case per line.
++
++The Makefile now:
++
++- Applies the existing filesystem blocklist filter first.
++- Builds a normalized selection list from the optional inputs.
++- Intersects that selection with the enabled and non-blocked cases.
++- Fails early when the case file is missing, the selection is empty, or the
++  selection has no surviving cases after filtering.
++
++When no selection variables are set, packaging behavior stays unchanged.
+-- 
+2.43.0
+

@@ -1,0 +1,439 @@
+From 03d45094aa18335861bd60e7166e400ab248da80 Mon Sep 17 00:00:00 2001
+From: Qingsong Chen <changxian.cqs@antgroup.com>
+Date: Tue, 24 Mar 2026 15:21:54 +0000
+Subject: [PATCH 32/97] Enable LTP fcntl33 cases
+
+---
+ kernel/src/fs/file/inode_handle.rs            | 31 ++++++--
+ .../procfs/sys/fs/lease_break_time.rs         | 57 +++++++++++++++
+ kernel/src/fs/fs_impls/procfs/sys/fs/mod.rs   |  9 ++-
+ kernel/src/fs/vfs/fs_apis/inode_ext.rs        | 72 ++++++++++++++++++-
+ kernel/src/syscall/fcntl.rs                   |  3 +-
+ kernel/src/syscall/truncate.rs                | 13 +++-
+ .../src/syscall/ltp/debug/family-fcntl-16.md  | 59 +++++++++++++++
+ .../src/syscall/ltp/testcases/all.txt         |  4 +-
+ 8 files changed, 234 insertions(+), 14 deletions(-)
+ create mode 100644 kernel/src/fs/fs_impls/procfs/sys/fs/lease_break_time.rs
+ create mode 100644 test/initramfs/src/syscall/ltp/debug/family-fcntl-16.md
+
+diff --git a/kernel/src/fs/file/inode_handle.rs b/kernel/src/fs/file/inode_handle.rs
+index 08ca941a..bb7391d2 100644
+--- a/kernel/src/fs/file/inode_handle.rs
++++ b/kernel/src/fs/file/inode_handle.rs
+@@ -26,7 +26,10 @@ use crate::{
+         },
+     },
+     prelude::*,
+-    process::signal::{PollHandle, Pollable},
++    process::{
++        Process,
++        signal::{PollHandle, Pollable},
++    },
+     util::ioctl::RawIoctl,
+ };
+ 
+@@ -81,7 +84,8 @@ impl InodeHandle {
+             status_flags: AtomicStatusFlags::new(status_flags),
+             rights,
+         }
+-        .register_open_file_description())
++        .register_open_file_description()
++        .notify_lease_break_if_conflicted_open(access_mode))
+     }
+ 
+     pub fn path(&self) -> &Path {
+@@ -96,6 +100,15 @@ impl InodeHandle {
+         self
+     }
+ 
++    fn notify_lease_break_if_conflicted_open(self, access_mode: AccessMode) -> Self {
++        if let Some(lock_context) = self.path.inode().fs_lock_context() {
++            let requester_pid = Process::current().map(|process| process.pid());
++            lock_context.notify_lease_break_for_open(access_mode, requester_pid);
++        }
++
++        self
++    }
++
+     pub fn get_lease(&self) -> crate::fs::vfs::inode_ext::LeaseType {
+         self.path
+             .inode()
+@@ -104,7 +117,11 @@ impl InodeHandle {
+             .unwrap_or(crate::fs::vfs::inode_ext::LeaseType::Unlock)
+     }
+ 
+-    pub fn set_lease(&self, lease_type: crate::fs::vfs::inode_ext::LeaseType) -> Result<()> {
++    pub fn set_lease(
++        &self,
++        lease_type: crate::fs::vfs::inode_ext::LeaseType,
++        owner_pid: crate::process::Pid,
++    ) -> Result<()> {
+         if self.rights.is_empty() {
+             return_errno_with_message!(Errno::EBADF, "the file is opened as a path");
+         }
+@@ -131,7 +148,7 @@ impl InodeHandle {
+         self.path
+             .inode()
+             .fs_lock_context_or_init()
+-            .set_lease(self.owner_id, lease_type)
++            .set_lease(self.owner_id, owner_pid, lease_type)
+     }
+ 
+     pub fn release_lease(&self) {
+@@ -460,6 +477,12 @@ impl FileLike for InodeHandle {
+             // FIXME: It's allowed to `ftruncate` an append-only file on Linux.
+             return_errno_with_message!(Errno::EPERM, "can not resize append-only file");
+         }
++
++        if let Some(lock_context) = self.path.inode().fs_lock_context() {
++            let requester_pid = Process::current().map(|process| process.pid());
++            lock_context.notify_lease_break_for_truncate(requester_pid);
++        }
++
+         self.path.inode().resize(new_size)
+     }
+ 
+diff --git a/kernel/src/fs/fs_impls/procfs/sys/fs/lease_break_time.rs b/kernel/src/fs/fs_impls/procfs/sys/fs/lease_break_time.rs
+new file mode 100644
+index 00000000..346a9ec3
+--- /dev/null
++++ b/kernel/src/fs/fs_impls/procfs/sys/fs/lease_break_time.rs
+@@ -0,0 +1,57 @@
++// SPDX-License-Identifier: MPL-2.0
++
++use core::sync::atomic::{AtomicU32, Ordering};
++
++use aster_util::printer::VmPrinter;
++
++use crate::{
++    fs::{
++        file::mkmod,
++        procfs::template::{FileOps, ProcFileBuilder, read_i32_from},
++        vfs::inode::Inode,
++    },
++    prelude::*,
++};
++
++/// Represents the inode at `/proc/sys/fs/lease-break-time`.
++pub struct LeaseBreakTimeFileOps;
++
++// Linux defaults to 45 seconds for lease break timeout.
++static LEASE_BREAK_TIME_SECONDS: AtomicU32 = AtomicU32::new(45);
++
++impl LeaseBreakTimeFileOps {
++    pub fn new_inode(parent: Weak<dyn Inode>) -> Arc<dyn Inode> {
++        // Reference:
++        // <https://docs.kernel.org/admin-guide/sysctl/fs.html#lease-break-time>
++        ProcFileBuilder::new(Self, mkmod!(a+r, u+w))
++            .parent(parent)
++            .build()
++            .unwrap()
++    }
++}
++
++impl FileOps for LeaseBreakTimeFileOps {
++    fn read_at(&self, offset: usize, writer: &mut VmWriter) -> Result<usize> {
++        let mut printer = VmPrinter::new_skip(writer, offset);
++        writeln!(
++            printer,
++            "{}",
++            LEASE_BREAK_TIME_SECONDS.load(Ordering::Relaxed)
++        )?;
++
++        Ok(printer.bytes_written())
++    }
++
++    fn write_at(&self, _offset: usize, reader: &mut VmReader) -> Result<usize> {
++        let (val, read_bytes) = read_i32_from(reader)?;
++        let seconds = u32::try_from(val).map_err(|_| {
++            Error::with_message(
++                Errno::EINVAL,
++                "lease-break-time must be a non-negative integer",
++            )
++        })?;
++
++        LEASE_BREAK_TIME_SECONDS.store(seconds, Ordering::Relaxed);
++        Ok(read_bytes)
++    }
++}
+diff --git a/kernel/src/fs/fs_impls/procfs/sys/fs/mod.rs b/kernel/src/fs/fs_impls/procfs/sys/fs/mod.rs
+index ddba1510..629ffa18 100644
+--- a/kernel/src/fs/fs_impls/procfs/sys/fs/mod.rs
++++ b/kernel/src/fs/fs_impls/procfs/sys/fs/mod.rs
+@@ -3,7 +3,7 @@
+ use aster_util::slot_vec::SlotVec;
+ use ostd::sync::RwMutexUpgradeableGuard;
+ 
+-use self::pipe_max_size::PipeMaxSizeFileOps;
++use self::{lease_break_time::LeaseBreakTimeFileOps, pipe_max_size::PipeMaxSizeFileOps};
+ use crate::{
+     fs::{
+         file::mkmod,
+@@ -15,6 +15,7 @@ use crate::{
+     prelude::*,
+ };
+ 
++mod lease_break_time;
+ mod pipe_max_size;
+ 
+ /// Represents the inode at `/proc/sys/fs`.
+@@ -29,8 +30,10 @@ impl FsDirOps {
+     }
+ 
+     #[expect(clippy::type_complexity)]
+-    const STATIC_ENTRIES: &'static [(&'static str, fn(Weak<dyn Inode>) -> Arc<dyn Inode>)] =
+-        &[("pipe-max-size", PipeMaxSizeFileOps::new_inode)];
++    const STATIC_ENTRIES: &'static [(&'static str, fn(Weak<dyn Inode>) -> Arc<dyn Inode>)] = &[
++        ("pipe-max-size", PipeMaxSizeFileOps::new_inode),
++        ("lease-break-time", LeaseBreakTimeFileOps::new_inode),
++    ];
+ }
+ 
+ impl DirOps for FsDirOps {
+diff --git a/kernel/src/fs/vfs/fs_apis/inode_ext.rs b/kernel/src/fs/vfs/fs_apis/inode_ext.rs
+index 41066246..76503017 100644
+--- a/kernel/src/fs/vfs/fs_apis/inode_ext.rs
++++ b/kernel/src/fs/vfs/fs_apis/inode_ext.rs
+@@ -4,7 +4,7 @@ use alloc::{boxed::ThinBox, collections::BTreeSet};
+ 
+ use crate::{
+     fs::{
+-        file::flock::FlockList,
++        file::{AccessMode, flock::FlockList},
+         vfs::{
+             inode::Inode,
+             notify::FsEventPublisher,
+@@ -12,11 +12,18 @@ use crate::{
+         },
+     },
+     prelude::*,
++    process::{
++        Pid, process_table,
++        signal::{constants::SIGIO, signals::kernel::KernelSignal},
++    },
+ };
+ 
++#[derive(Debug, Clone, Copy)]
+ struct FileLease {
+     owner_id: u64,
++    owner_pid: Pid,
+     type_: RangeLockType,
++    has_pending_write_break: bool,
+ }
+ 
+ pub type LeaseType = RangeLockType;
+@@ -65,7 +72,7 @@ impl FsLockContext {
+         self.open_file_description_ids.lock().remove(&owner_id);
+     }
+ 
+-    pub fn set_lease(&self, owner_id: u64, lease_type: LeaseType) -> Result<()> {
++    pub fn set_lease(&self, owner_id: u64, owner_pid: Pid, lease_type: LeaseType) -> Result<()> {
+         debug_assert_ne!(lease_type, LeaseType::Unlock);
+ 
+         if self
+@@ -86,14 +93,75 @@ impl FsLockContext {
+         {
+             return_errno_with_message!(Errno::EBUSY, "the file already has a lease");
+         }
++        if let Some(existing_lease) = lease.as_ref()
++            && existing_lease.owner_id == owner_id
++            && existing_lease.type_ == LeaseType::WriteLock
++            && lease_type == LeaseType::ReadLock
++            && existing_lease.has_pending_write_break
++        {
++            return_errno_with_message!(
++                Errno::EAGAIN,
++                "cannot downgrade a write lease while a write break is pending"
++            );
++        }
+ 
+         *lease = Some(FileLease {
+             owner_id,
++            owner_pid,
+             type_: lease_type,
++            has_pending_write_break: false,
+         });
+         Ok(())
+     }
+ 
++    pub fn notify_lease_break_for_open(&self, access_mode: AccessMode, requester_pid: Option<Pid>) {
++        let mut lease_guard = self.lease.lock();
++        let Some(lease) = lease_guard.as_mut() else {
++            return;
++        };
++
++        let has_conflict = match lease.type_ {
++            LeaseType::ReadLock => access_mode.is_writable(),
++            LeaseType::WriteLock => true,
++            LeaseType::Unlock => false,
++        };
++        if !has_conflict {
++            return;
++        }
++
++        if lease.type_ == LeaseType::WriteLock {
++            lease.has_pending_write_break = access_mode.is_writable();
++        }
++
++        let lease = *lease;
++        drop(lease_guard);
++        self.enqueue_lease_break_signal(lease, requester_pid);
++    }
++
++    pub fn notify_lease_break_for_truncate(&self, requester_pid: Option<Pid>) {
++        let mut lease_guard = self.lease.lock();
++        let Some(lease) = lease_guard.as_mut() else {
++            return;
++        };
++
++        if lease.type_ == LeaseType::WriteLock {
++            lease.has_pending_write_break = true;
++        }
++        let lease = *lease;
++        drop(lease_guard);
++        self.enqueue_lease_break_signal(lease, requester_pid);
++    }
++
++    fn enqueue_lease_break_signal(&self, lease: FileLease, requester_pid: Option<Pid>) {
++        if requester_pid.is_some_and(|pid| pid == lease.owner_pid) {
++            return;
++        }
++
++        if let Some(lease_holder) = process_table::get_process(lease.owner_pid) {
++            lease_holder.enqueue_signal(Box::new(KernelSignal::new(SIGIO)));
++        }
++    }
++
+     pub fn release_lease(&self, owner_id: u64) {
+         let mut lease = self.lease.lock();
+         if lease
+diff --git a/kernel/src/syscall/fcntl.rs b/kernel/src/syscall/fcntl.rs
+index 71ee9770..4bfa5e92 100644
+--- a/kernel/src/syscall/fcntl.rs
++++ b/kernel/src/syscall/fcntl.rs
+@@ -234,7 +234,8 @@ fn handle_setlease(fd: FileDesc, arg: u64, ctx: &Context) -> Result<SyscallRetur
+ 
+     let mut file_table = ctx.thread_local.borrow_file_table_mut();
+     let file = get_file_fast!(&mut file_table, fd);
+-    file.as_inode_handle_or_err()?.set_lease(lease_type)?;
++    file.as_inode_handle_or_err()?
++        .set_lease(lease_type, ctx.process.pid())?;
+ 
+     Ok(SyscallReturn::Return(0))
+ }
+diff --git a/kernel/src/syscall/truncate.rs b/kernel/src/syscall/truncate.rs
+index 422cd2c5..5a463366 100644
+--- a/kernel/src/syscall/truncate.rs
++++ b/kernel/src/syscall/truncate.rs
+@@ -6,10 +6,13 @@ use crate::{
+     fs::{
+         file::file_table::{FileDesc, get_file_fast},
+         utils::PATH_MAX,
+-        vfs::path::{AT_FDCWD, FsPath},
++        vfs::{
++            inode_ext::InodeExt,
++            path::{AT_FDCWD, FsPath},
++        },
+     },
+     prelude::*,
+-    process::ResourceType,
++    process::{Process, ResourceType},
+ };
+ 
+ pub fn sys_ftruncate(fd: FileDesc, len: isize, ctx: &Context) -> Result<SyscallReturn> {
+@@ -39,6 +42,12 @@ pub fn sys_truncate(path_ptr: Vaddr, len: isize, ctx: &Context) -> Result<Syscal
+             .read()
+             .lookup(&fs_path)?
+     };
++
++    if let Some(lock_context) = dir_path.inode().fs_lock_context() {
++        let requester_pid = Process::current().map(|process| process.pid());
++        lock_context.notify_lease_break_for_truncate(requester_pid);
++    }
++
+     dir_path.resize(len as usize)?;
+     fs::vfs::notify::on_change(&dir_path);
+     Ok(SyscallReturn::Return(0))
+diff --git a/test/initramfs/src/syscall/ltp/debug/family-fcntl-16.md b/test/initramfs/src/syscall/ltp/debug/family-fcntl-16.md
+new file mode 100644
+index 00000000..6459f71c
+--- /dev/null
++++ b/test/initramfs/src/syscall/ltp/debug/family-fcntl-16.md
+@@ -0,0 +1,59 @@
++# Fcntl Family Batch 16
++
++## Goal
++
++Re-enable Priority A cases `fcntl33` and `fcntl33_64`, validating `/tmp` first
++and then `/ext2` and `/exfat` serially.
++
++## Problem Cause
++
++`fcntl33*` exercises lease break behavior:
++
++- user space writes `/proc/sys/fs/lease-break-time` before testing;
++- a conflicting open/truncate must notify the lease holder with `SIGIO`;
++- when a write lease is being broken by a conflicting writer, changing that
++  lease from write to read must fail with `EAGAIN`.
++
++Asterinas had three gaps:
++
++- `/proc/sys/fs/lease-break-time` was missing, so the test setup failed with
++  `EPERM`;
++- lease break notifications for open/truncate did not enqueue `SIGIO` to lease
++  owner processes;
++- write-lease downgrade during a pending write break was accepted instead of
++  being rejected.
++
++## Solution
++
++- Implement `/proc/sys/fs/lease-break-time` in procfs as a writable integer
++  sysctl node (default `45`).
++- Extend inode lease state to track lease owner PID and pending write-break
++  status.
++- Send `SIGIO` to the lease holder when conflicting open/truncate operations
++  occur from another process.
++- Reject `F_SETLEASE(F_RDLCK)` with `EAGAIN` when downgrading a write lease
++  under a pending write break.
++- Re-enable `fcntl33` and `fcntl33_64` in `testcases/all.txt`.
++
++## Validation Results
++
++Commands:
++
++```bash
++make run_kernel AUTO_TEST=syscall SYSCALL_TEST_SUITE=ltp \
++  LTP_CASES=fcntl33,fcntl33_64
++
++make run_kernel AUTO_TEST=syscall SYSCALL_TEST_SUITE=ltp \
++  SYSCALL_TEST_WORKDIR=/ext2 \
++  LTP_CASES=fcntl33,fcntl33_64
++
++make run_kernel AUTO_TEST=syscall SYSCALL_TEST_SUITE=ltp \
++  SYSCALL_TEST_WORKDIR=/exfat \
++  LTP_CASES=fcntl33,fcntl33_64
++```
++
++Observed:
++
++- `/tmp`: both cases `CONF` on `ramfs`, `Total Failures: 0`.
++- `/ext2`: both cases `PASS`.
++- `/exfat`: both cases `PASS`.
+diff --git a/test/initramfs/src/syscall/ltp/testcases/all.txt b/test/initramfs/src/syscall/ltp/testcases/all.txt
+index b6ec5248..b19778f2 100644
+--- a/test/initramfs/src/syscall/ltp/testcases/all.txt
++++ b/test/initramfs/src/syscall/ltp/testcases/all.txt
+@@ -355,8 +355,8 @@ fcntl31
+ fcntl31_64
+ fcntl32
+ fcntl32_64
+-# fcntl33
+-# fcntl33_64
++fcntl33
++fcntl33_64
+ # fcntl34
+ # fcntl34_64
+ # fcntl35
+-- 
+2.43.0
+

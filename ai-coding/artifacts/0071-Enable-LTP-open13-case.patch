@@ -1,0 +1,184 @@
+From 78b089ffd758072c0b5ab212f9d2e548d757303f Mon Sep 17 00:00:00 2001
+From: Qingsong Chen <changxian.cqs@antgroup.com>
+Date: Wed, 25 Mar 2026 04:58:43 +0000
+Subject: [PATCH 71/97] Enable LTP open13 case
+
+---
+ kernel/src/syscall/chmod.rs                   |  5 ++-
+ kernel/src/syscall/chown.rs                   |  8 ++++-
+ kernel/src/syscall/getxattr.rs                |  6 ++--
+ kernel/src/syscall/setxattr.rs                | 14 +++++++-
+ .../src/syscall/ltp/debug/family-open-13.md   | 35 +++++++++++++++++++
+ .../src/syscall/ltp/testcases/all.txt         |  2 +-
+ 6 files changed, 64 insertions(+), 6 deletions(-)
+ create mode 100644 test/initramfs/src/syscall/ltp/debug/family-open-13.md
+
+diff --git a/kernel/src/syscall/chmod.rs b/kernel/src/syscall/chmod.rs
+index 1f75258a..377f4977 100644
+--- a/kernel/src/syscall/chmod.rs
++++ b/kernel/src/syscall/chmod.rs
+@@ -5,7 +5,7 @@ use crate::{
+     fs,
+     fs::{
+         file::{
+-            InodeMode,
++            InodeMode, StatusFlags,
+             file_table::{FileDesc, get_file_fast},
+         },
+         utils::PATH_MAX,
+@@ -19,6 +19,9 @@ pub fn sys_fchmod(fd: FileDesc, mode: u16, ctx: &Context) -> Result<SyscallRetur
+ 
+     let mut file_table = ctx.thread_local.borrow_file_table_mut();
+     let file = get_file_fast!(&mut file_table, fd);
++    if file.status_flags().contains(StatusFlags::O_PATH) {
++        return_errno_with_message!(Errno::EBADF, "the file is opened as a path");
++    }
+     file.path().set_mode(InodeMode::from_bits_truncate(mode))?;
+     fs::vfs::notify::on_attr_change(file.path());
+     Ok(SyscallReturn::Return(0))
+diff --git a/kernel/src/syscall/chown.rs b/kernel/src/syscall/chown.rs
+index 4609456b..8bf76cda 100644
+--- a/kernel/src/syscall/chown.rs
++++ b/kernel/src/syscall/chown.rs
+@@ -3,7 +3,10 @@
+ use super::SyscallReturn;
+ use crate::{
+     fs::{
+-        file::file_table::{FileDesc, get_file_fast},
++        file::{
++            StatusFlags,
++            file_table::{FileDesc, get_file_fast},
++        },
+         utils::PATH_MAX,
+         vfs::path::{AT_FDCWD, FsPath},
+     },
+@@ -22,6 +25,9 @@ pub fn sys_fchown(fd: FileDesc, uid: i32, gid: i32, ctx: &Context) -> Result<Sys
+ 
+     let mut file_table = ctx.thread_local.borrow_file_table_mut();
+     let file = get_file_fast!(&mut file_table, fd);
++    if file.status_flags().contains(StatusFlags::O_PATH) {
++        return_errno_with_message!(Errno::EBADF, "the file is opened as a path");
++    }
+     let path = file.path();
+     if let Some(uid) = uid {
+         path.set_owner(uid)?;
+diff --git a/kernel/src/syscall/getxattr.rs b/kernel/src/syscall/getxattr.rs
+index 31e7ad5b..829b380c 100644
+--- a/kernel/src/syscall/getxattr.rs
++++ b/kernel/src/syscall/getxattr.rs
+@@ -3,8 +3,8 @@
+ use super::{
+     SyscallReturn,
+     setxattr::{
+-        XattrFileCtx, check_xattr_namespace, lookup_path_for_xattr, parse_xattr_name,
+-        read_xattr_name_cstr_from_user,
++        XattrFileCtx, check_xattr_namespace, ensure_xattr_file_ctx_is_accessible,
++        lookup_path_for_xattr, parse_xattr_name, read_xattr_name_cstr_from_user,
+     },
+ };
+ use crate::{
+@@ -91,6 +91,8 @@ fn getxattr(
+     user_space: &CurrentUserSpace,
+     ctx: &Context,
+ ) -> Result<usize> {
++    ensure_xattr_file_ctx_is_accessible(&file_ctx)?;
++
+     let name_cstr = read_xattr_name_cstr_from_user(name_ptr, user_space)?;
+     let name_str = name_cstr.to_string_lossy();
+     let xattr_name = parse_xattr_name(name_str.as_ref())?;
+diff --git a/kernel/src/syscall/setxattr.rs b/kernel/src/syscall/setxattr.rs
+index 4017a2f3..f20efc12 100644
+--- a/kernel/src/syscall/setxattr.rs
++++ b/kernel/src/syscall/setxattr.rs
+@@ -7,7 +7,7 @@ use crate::{
+     fs,
+     fs::{
+         file::{
+-            FileLike,
++            FileLike, StatusFlags,
+             file_table::{FileDesc, get_file_fast},
+         },
+         vfs::{
+@@ -104,6 +104,8 @@ fn setxattr(
+     user_space: &CurrentUserSpace,
+     ctx: &Context,
+ ) -> Result<()> {
++    ensure_xattr_file_ctx_is_accessible(&file_ctx)?;
++
+     let flags = XattrSetFlags::from_bits(flags as _)
+         .ok_or(Error::with_message(Errno::EINVAL, "invalid xattr flags"))?;
+ 
+@@ -130,6 +132,16 @@ pub(super) enum XattrFileCtx<'a> {
+     FileHandle(Cow<'a, Arc<dyn FileLike>>),
+ }
+ 
++pub(super) fn ensure_xattr_file_ctx_is_accessible(file_ctx: &XattrFileCtx<'_>) -> Result<()> {
++    if let XattrFileCtx::FileHandle(file) = file_ctx
++        && file.status_flags().contains(StatusFlags::O_PATH)
++    {
++        return_errno_with_message!(Errno::EBADF, "the file is opened as a path");
++    }
++
++    Ok(())
++}
++
+ pub(super) fn lookup_path_for_xattr<'a>(
+     file_ctx: &'a XattrFileCtx<'a>,
+     ctx: &'a Context,
+diff --git a/test/initramfs/src/syscall/ltp/debug/family-open-13.md b/test/initramfs/src/syscall/ltp/debug/family-open-13.md
+new file mode 100644
+index 00000000..d56388fe
+--- /dev/null
++++ b/test/initramfs/src/syscall/ltp/debug/family-open-13.md
+@@ -0,0 +1,35 @@
++# open13
++
++## Goal
++
++Enable `open13` and make the `O_PATH` regression checks pass for `/tmp`.
++
++## Failure
++
++On `/tmp`, `open13` failed because operations that should be rejected on `O_PATH` file
++descriptors still succeeded or returned the wrong errno:
++
++- `fchmod()` succeeded
++- `fchown()` succeeded
++- `fgetxattr()` returned `EOPNOTSUPP` instead of `EBADF`
++
++## Root Cause
++
++The syscall layer already treated `O_PATH` specially for read, write, `ioctl`, and `mmap`, but
++`fchmod()` and `fchown()` operated on the underlying inode path without checking whether the file
++descriptor was opened with `O_PATH`.
++
++For xattrs, `fgetxattr()` reused the path-based lookup flow. That flow parsed the xattr name and
++namespace before checking whether the file descriptor itself was valid for data-bearing inode
++operations, so an invalid xattr namespace escaped first as `EOPNOTSUPP`.
++
++## Fix
++
++- Reject `fchmod()` on `O_PATH` descriptors with `EBADF`.
++- Reject `fchown()` on `O_PATH` descriptors with `EBADF`.
++- Add a shared xattr file-handle accessibility check and run it before xattr name parsing so
++  `fgetxattr()` on `O_PATH` also returns `EBADF`.
++
++## Validation
++
++- `make run_kernel AUTO_TEST=syscall SYSCALL_TEST_SUITE=ltp LTP_CASES=open13`
+diff --git a/test/initramfs/src/syscall/ltp/testcases/all.txt b/test/initramfs/src/syscall/ltp/testcases/all.txt
+index 4ee05d44..760e962c 100644
+--- a/test/initramfs/src/syscall/ltp/testcases/all.txt
++++ b/test/initramfs/src/syscall/ltp/testcases/all.txt
+@@ -994,7 +994,7 @@ open09
+ open10
+ open11
+ open12
+-# open13
++open13
+ # open14
+ open15
+ 
+-- 
+2.43.0
+

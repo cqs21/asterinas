@@ -1,0 +1,76 @@
+From 2cdf207a2cbc95f9fa21b960afbd2ec443f47109 Mon Sep 17 00:00:00 2001
+From: Qingsong Chen <changxian.cqs@antgroup.com>
+Date: Tue, 24 Mar 2026 08:10:27 +0000
+Subject: [PATCH 13/97] Enable LTP epoll_pwait03
+
+---
+ .../src/syscall/ltp/debug/family-epoll-05.md  | 43 +++++++++++++++++++
+ .../src/syscall/ltp/testcases/all.txt         |  2 +-
+ 2 files changed, 44 insertions(+), 1 deletion(-)
+ create mode 100644 test/initramfs/src/syscall/ltp/debug/family-epoll-05.md
+
+diff --git a/test/initramfs/src/syscall/ltp/debug/family-epoll-05.md b/test/initramfs/src/syscall/ltp/debug/family-epoll-05.md
+new file mode 100644
+index 00000000..24653cbc
+--- /dev/null
++++ b/test/initramfs/src/syscall/ltp/debug/family-epoll-05.md
+@@ -0,0 +1,43 @@
++# `epoll_pwait03`
++
++## Goal
++
++Finish the epoll family Phase 3 by enabling `epoll_pwait03`, which relies on
++tight timing guarantees from `epoll_pwait()` and `epoll_pwait2()` when sleeping
++for microsecond-scale deadlines while measuring the resulting latency.
++
++## Root cause
++
++This testcase previously failed because the kernel wired `ManagedTimeout` to
++the coarse `JIFFIES_TIMER_MANAGER`. That manager fires at 1 ms granularity,
++which is too coarse for the 1–25 ms threshold that `epoll_pwait03` monitors,
++so the measured timings frequently drifted outside the allowable range.
++`ManagedTimeout::new()` now uses `MonotonicClock::timer_manager()`, which ticks
++in true nanoseconds, eliminating the previous jitter-induced failures.
++
++## Solution
++
++- Re-enable `epoll_pwait03` in `testcases/all.txt`.
++- Document the successful triage and link it to the earlier monotonic timer
++  manager fix in `family-epoll-02`/`family-epoll-03`.
++
++## Validation
++
++```bash
++make run_kernel AUTO_TEST=syscall SYSCALL_TEST_SUITE=ltp LTP_CASES=epoll_pwait03
++make run_kernel AUTO_TEST=syscall SYSCALL_TEST_SUITE=ltp \
++  SYSCALL_TEST_WORKDIR=/ext2 LTP_CASES=epoll_pwait03
++make run_kernel AUTO_TEST=syscall SYSCALL_TEST_SUITE=ltp \
++  SYSCALL_TEST_WORKDIR=/exfat LTP_CASES=epoll_pwait03
++```
++
++All three targets reported `TPASS` with the measured latencies staying within
++the `2450–2540` µs thresholds (even at large sleep values), which matches the
++test's expectations.
++
++## Impact / Residual risk
++
++- This change just enables an existing test whose only remaining barrier was
++  timer accuracy; no new code paths were touched.
++- Keep an eye on other timer-heavy epoll cases in case the kernel's timer
++  manager choices diverge in the future.
+diff --git a/test/initramfs/src/syscall/ltp/testcases/all.txt b/test/initramfs/src/syscall/ltp/testcases/all.txt
+index 44399a63..046ebbfe 100644
+--- a/test/initramfs/src/syscall/ltp/testcases/all.txt
++++ b/test/initramfs/src/syscall/ltp/testcases/all.txt
+@@ -190,7 +190,7 @@ epoll_wait05
+ epoll_wait07
+ epoll_pwait01
+ epoll_pwait02
+-# epoll_pwait03
++epoll_pwait03
+ epoll_pwait04
+ epoll_pwait05
+ epoll_pwait06
+-- 
+2.43.0
+

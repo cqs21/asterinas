@@ -1,0 +1,82 @@
+From 00382c4bf8e152b093f26e10c0858b66f7a96129 Mon Sep 17 00:00:00 2001
+From: Qingsong Chen <changxian.cqs@antgroup.com>
+Date: Tue, 24 Mar 2026 10:04:52 +0000
+Subject: [PATCH 22/97] Enable LTP fcntl20 cases
+
+---
+ .../src/syscall/ltp/debug/family-fcntl-06.md  | 47 +++++++++++++++++++
+ .../src/syscall/ltp/testcases/all.txt         |  4 +-
+ 2 files changed, 49 insertions(+), 2 deletions(-)
+ create mode 100644 test/initramfs/src/syscall/ltp/debug/family-fcntl-06.md
+
+diff --git a/test/initramfs/src/syscall/ltp/debug/family-fcntl-06.md b/test/initramfs/src/syscall/ltp/debug/family-fcntl-06.md
+new file mode 100644
+index 00000000..8fac59ae
+--- /dev/null
++++ b/test/initramfs/src/syscall/ltp/debug/family-fcntl-06.md
+@@ -0,0 +1,47 @@
++# Fcntl Family Batch 06
++
++## Goal
++
++Re-enable `fcntl20` and `fcntl20_64` in Phase 3 after confirming the existing
++kernel behavior is already correct on `/tmp`, `/ext2`, and `/exfat`.
++
++## Problem Cause
++
++This batch was not blocked by a kernel bug. The two cases were still commented
++out in `all.txt` because they had not yet been revalidated end to end after the
++earlier `fcntl` work.
++
++`fcntl20*` exercises a set of record-lock state transitions across seven small
++blocks. The current `fcntl()` and range-lock behavior already matches the LTP
++expectation on all three workdirs.
++
++## Solution
++
++- Run `fcntl20` and `fcntl20_64` on `/tmp`, `/ext2`, and `/exfat`.
++- Confirm every block passes on every workdir.
++- Re-enable both cases in `testcases/all.txt`.
++
++No kernel code changes or filesystem-specific blocklists were needed.
++
++## Validation Results
++
++Representative commands:
++
++```bash
++make run_kernel AUTO_TEST=syscall SYSCALL_TEST_SUITE=ltp \
++  LTP_CASES=fcntl20,fcntl20_64
++
++make run_kernel AUTO_TEST=syscall SYSCALL_TEST_SUITE=ltp \
++  SYSCALL_TEST_WORKDIR=/ext2 \
++  LTP_CASES=fcntl20,fcntl20_64
++
++make run_kernel AUTO_TEST=syscall SYSCALL_TEST_SUITE=ltp \
++  SYSCALL_TEST_WORKDIR=/exfat \
++  LTP_CASES=fcntl20,fcntl20_64
++```
++
++Observed results:
++
++- `/tmp`: `fcntl20` and `fcntl20_64` both `PASS`.
++- `/ext2`: `fcntl20` and `fcntl20_64` both `PASS`.
++- `/exfat`: `fcntl20` and `fcntl20_64` both `PASS`.
+diff --git a/test/initramfs/src/syscall/ltp/testcases/all.txt b/test/initramfs/src/syscall/ltp/testcases/all.txt
+index 39f876a3..bce00db6 100644
+--- a/test/initramfs/src/syscall/ltp/testcases/all.txt
++++ b/test/initramfs/src/syscall/ltp/testcases/all.txt
+@@ -331,8 +331,8 @@ fcntl18
+ fcntl18_64
+ fcntl19
+ fcntl19_64
+-# fcntl20
+-# fcntl20_64
++fcntl20
++fcntl20_64
+ # fcntl21
+ # fcntl21_64
+ fcntl22
+-- 
+2.43.0
+

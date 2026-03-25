@@ -1,0 +1,58 @@
+From 270434201767a4cea75418c43f85300a57e5fe15 Mon Sep 17 00:00:00 2001
+From: Qingsong Chen <changxian.cqs@antgroup.com>
+Date: Wed, 25 Mar 2026 06:44:23 +0000
+Subject: [PATCH 86/97] Enable LTP rename15 case
+
+---
+ .../src/syscall/ltp/debug/family-rename-15.md | 25 +++++++++++++++++++
+ .../src/syscall/ltp/testcases/all.txt         |  2 +-
+ 2 files changed, 26 insertions(+), 1 deletion(-)
+ create mode 100644 test/initramfs/src/syscall/ltp/debug/family-rename-15.md
+
+diff --git a/test/initramfs/src/syscall/ltp/debug/family-rename-15.md b/test/initramfs/src/syscall/ltp/debug/family-rename-15.md
+new file mode 100644
+index 00000000..25027677
+--- /dev/null
++++ b/test/initramfs/src/syscall/ltp/debug/family-rename-15.md
+@@ -0,0 +1,25 @@
++# rename15
++
++## Goal
++
++Enable `rename15` on `/tmp`.
++
++## Failure
++
++No new kernel failure was reproduced on `/tmp`. The testcase validates rename behavior on
++symlinks, including symlinks to existing, missing, and later-created targets, and all checks
++already passed.
++
++## Root Cause
++
++The case had remained disabled in `all.txt`, but current pathname and symlink rename semantics
++already match the LTP expectations on `/tmp`.
++
++## Fix
++
++- Enabled `rename15` in `testcases/all.txt`.
++- No additional kernel code changes were required.
++
++## Validation
++
++- `make run_kernel AUTO_TEST=syscall SYSCALL_TEST_SUITE=ltp LTP_CASES=rename15`
+diff --git a/test/initramfs/src/syscall/ltp/testcases/all.txt b/test/initramfs/src/syscall/ltp/testcases/all.txt
+index 3c2eca65..9cba3ec2 100644
+--- a/test/initramfs/src/syscall/ltp/testcases/all.txt
++++ b/test/initramfs/src/syscall/ltp/testcases/all.txt
+@@ -1240,7 +1240,7 @@ rename10
+ rename12
+ rename13
+ rename14
+-# rename15
++rename15
+ 
+ #renameat test cases
+ # renameat01
+-- 
+2.43.0
+

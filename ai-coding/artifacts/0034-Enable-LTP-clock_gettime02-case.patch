@@ -1,0 +1,163 @@
+From ce5c478ad212b12eff593a640fc21a3943c45f66 Mon Sep 17 00:00:00 2001
+From: Qingsong Chen <changxian.cqs@antgroup.com>
+Date: Tue, 24 Mar 2026 16:25:18 +0000
+Subject: [PATCH 34/97] Enable LTP clock_gettime02 case
+
+---
+ test/initramfs/src/syscall/ltp/Makefile       |  4 +-
+ .../src/syscall/ltp/debug/family-clock-02.md  | 58 +++++++++++++++++++
+ test/initramfs/src/syscall/ltp/kernel.config  | 10 ++++
+ .../initramfs/src/syscall/ltp/run_ltp_test.sh |  5 ++
+ .../src/syscall/ltp/testcases/all.txt         |  2 +-
+ 5 files changed, 77 insertions(+), 2 deletions(-)
+ create mode 100644 test/initramfs/src/syscall/ltp/debug/family-clock-02.md
+ create mode 100644 test/initramfs/src/syscall/ltp/kernel.config
+
+diff --git a/test/initramfs/src/syscall/ltp/Makefile b/test/initramfs/src/syscall/ltp/Makefile
+index 973a70e4..8e8afeb1 100644
+--- a/test/initramfs/src/syscall/ltp/Makefile
++++ b/test/initramfs/src/syscall/ltp/Makefile
+@@ -6,6 +6,7 @@ CUR_DIR := $(patsubst %/,%,$(dir $(MKFILE_PATH)))
+ INITRAMFS ?= $(CUR_DIR)/../../../build/initramfs
+ TARGET_DIR := $(INITRAMFS)/opt/ltp
+ RUN_BASH := $(CUR_DIR)/run_ltp_test.sh
++KCONFIG_TEMPLATE := $(CUR_DIR)/kernel.config
+ ALL_TESTS := $(CUR_DIR)/testcases/all.txt
+ EXT2_BLOCKLIST := $(CUR_DIR)/testcases/blocked/ext2.txt
+ EXFAT_BLOCKLIST := $(CUR_DIR)/testcases/blocked/exfat.txt
+@@ -13,7 +14,7 @@ EXFAT_BLOCKLIST := $(CUR_DIR)/testcases/blocked/exfat.txt
+ .PHONY: all
+ all: $(TARGET_DIR)
+ 
+-$(TARGET_DIR): $(RUN_BASH) $(ALL_TESTS) $(EXT2_BLOCKLIST) $(EXFAT_BLOCKLIST)
++$(TARGET_DIR): $(RUN_BASH) $(KCONFIG_TEMPLATE) $(ALL_TESTS) $(EXT2_BLOCKLIST) $(EXFAT_BLOCKLIST)
+ 	@rm -rf $@ && mkdir -p $@
+ 	@# Prepare tests dir for test binaries
+ 	@mkdir -p $@/testcases/bin
+@@ -122,6 +123,7 @@ $(TARGET_DIR): $(RUN_BASH) $(ALL_TESTS) $(EXT2_BLOCKLIST) $(EXFAT_BLOCKLIST)
+ 	@cp -f $(LTP_PREBUILT_DIR)/ver_linux $@
+ 	@cp -f $(LTP_PREBUILT_DIR)/IDcheck.sh $@
+ 	@cp -f $(RUN_BASH) $@
++	@cp -f $(KCONFIG_TEMPLATE) $@/kernel.config
+ 
+ .PHONY: clean
+ clean:
+diff --git a/test/initramfs/src/syscall/ltp/debug/family-clock-02.md b/test/initramfs/src/syscall/ltp/debug/family-clock-02.md
+new file mode 100644
+index 00000000..06aa3c10
+--- /dev/null
++++ b/test/initramfs/src/syscall/ltp/debug/family-clock-02.md
+@@ -0,0 +1,58 @@
++# `clock_gettime02`
++
++## Goal
++
++Re-enable `clock_gettime02` in Phase 3 and verify that it passes on `/tmp`,
++`/ext2`, and `/exfat`.
++
++## Root Cause
++
++`clock_gettime02` was not blocked by a clock syscall bug. The testcase calls
++`tst_get_max_clocks()`, which asks LTP's `tst_kconfig` helper to parse a Linux
++kernel `.config`. Asterinas does not expose one in the guest by default, so
++the testcase stopped early with:
++
++- `TBROK: Cannot parse kernel .config`
++
++That made the failure a harness/environment mismatch rather than a kernel
++semantic incompatibility.
++
++## Solution
++
++- Added a small synthetic `kernel.config` file to the packaged LTP payload.
++- Updated the LTP runner to export `KCONFIG_PATH=/opt/ltp/kernel.config` when
++  no explicit `KCONFIG_PATH` is already set.
++- Kept the config conservative and explicitly marked
++  `CONFIG_POSIX_AUX_CLOCKS` as not set, which makes LTP use the normal
++  `MAX_CLOCKS` limit instead of auxiliary clock IDs.
++- Re-ran `clock_gettime02` on `/tmp`, `/ext2`, and `/exfat`, then re-enabled
++  the testcase in `testcases/all.txt`.
++
++## Validation
++
++```bash
++make run_kernel AUTO_TEST=syscall SYSCALL_TEST_SUITE=ltp \
++  LTP_CASES=clock_gettime02
++
++make run_kernel AUTO_TEST=syscall SYSCALL_TEST_SUITE=ltp \
++  SYSCALL_TEST_WORKDIR=/ext2 \
++  LTP_CASES=clock_gettime02
++
++make run_kernel AUTO_TEST=syscall SYSCALL_TEST_SUITE=ltp \
++  SYSCALL_TEST_WORKDIR=/exfat \
++  LTP_CASES=clock_gettime02
++```
++
++Observed result on all three workdirs:
++
++- `clock_gettime02` finished with `PASS`
++- invalid clock IDs returned `EINVAL`
++- valid clock IDs with a bad userspace pointer returned `EFAULT`
++
++## Impact / Residual risk
++
++- This change improves LTP compatibility for any testcase that depends on
++  `tst_kconfig`.
++- The packaged config is intentionally minimal. If future LTP cases depend on
++  more kernel config probes, the compatibility file may need additional
++  conservative entries.
+diff --git a/test/initramfs/src/syscall/ltp/kernel.config b/test/initramfs/src/syscall/ltp/kernel.config
+new file mode 100644
+index 00000000..ff5c02b5
+--- /dev/null
++++ b/test/initramfs/src/syscall/ltp/kernel.config
+@@ -0,0 +1,10 @@
++# Synthetic Linux-compatible kernel config hints for LTP on Asterinas.
++#
++# Asterinas is not built from the Linux kernel's Kconfig tree, but a subset of
++# LTP helpers expects a parseable kernel .config to exist. This file provides
++# only conservative compatibility hints that are known to be available in the
++# guest environment.
++CONFIG_PROC_FS=y
++CONFIG_EXT2_FS=y
++CONFIG_EXFAT_FS=y
++# CONFIG_POSIX_AUX_CLOCKS is not set
+diff --git a/test/initramfs/src/syscall/ltp/run_ltp_test.sh b/test/initramfs/src/syscall/ltp/run_ltp_test.sh
+index 3a326df3..a633a6d8 100755
+--- a/test/initramfs/src/syscall/ltp/run_ltp_test.sh
++++ b/test/initramfs/src/syscall/ltp/run_ltp_test.sh
+@@ -4,6 +4,7 @@
+ 
+ LTP_DIR=$(dirname "$0")
+ TEST_TMP_DIR=${SYSCALL_TEST_WORKDIR:-/tmp}
++LTP_KCONFIG_PATH="$LTP_DIR/kernel.config"
+ ARTIFACTS_ROOT="$TEST_TMP_DIR/.ltp_logs"
+ RUN_ID=$(date +%Y%m%d-%H%M%S)-$$
+ RUN_ARTIFACT_DIR="$ARTIFACTS_ROOT/run-$RUN_ID"
+@@ -66,6 +67,10 @@ print_case_bucket() {
+ cleanup_workdir
+ mkdir -p "$RUN_ARTIFACT_DIR"
+ 
++if [ -z "${KCONFIG_PATH:-}" ] && [ -f "$LTP_KCONFIG_PATH" ]; then
++    export KCONFIG_PATH="$LTP_KCONFIG_PATH"
++fi
++
+ rm -f \
+     "$LOG_FILE" \
+     "$SUMMARY_FILE" \
+diff --git a/test/initramfs/src/syscall/ltp/testcases/all.txt b/test/initramfs/src/syscall/ltp/testcases/all.txt
+index 29a8d409..3752a639 100644
+--- a/test/initramfs/src/syscall/ltp/testcases/all.txt
++++ b/test/initramfs/src/syscall/ltp/testcases/all.txt
+@@ -104,7 +104,7 @@ clock_nanosleep02
+ clock_nanosleep04
+ 
+ clock_gettime01
+-# clock_gettime02
++clock_gettime02
+ # clock_gettime03
+ # clock_gettime04
+ # leapsec01
+-- 
+2.43.0
+

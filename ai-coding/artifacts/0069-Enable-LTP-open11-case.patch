@@ -1,0 +1,88 @@
+From b6d7077ac491e04984c11b77973efca9d3b801f8 Mon Sep 17 00:00:00 2001
+From: Qingsong Chen <changxian.cqs@antgroup.com>
+Date: Wed, 25 Mar 2026 04:47:59 +0000
+Subject: [PATCH 69/97] Enable LTP open11 case
+
+---
+ kernel/src/fs/vfs/path/mod.rs                 |  3 ++
+ .../src/syscall/ltp/debug/family-open-11.md   | 40 +++++++++++++++++++
+ .../src/syscall/ltp/testcases/all.txt         |  2 +-
+ 3 files changed, 44 insertions(+), 1 deletion(-)
+ create mode 100644 test/initramfs/src/syscall/ltp/debug/family-open-11.md
+
+diff --git a/kernel/src/fs/vfs/path/mod.rs b/kernel/src/fs/vfs/path/mod.rs
+index 1e257d92..c69e0a7b 100644
+--- a/kernel/src/fs/vfs/path/mod.rs
++++ b/kernel/src/fs/vfs/path/mod.rs
+@@ -116,6 +116,9 @@ impl Path {
+         {
+             return_errno_with_message!(Errno::EEXIST, "the file already exists");
+         }
++        if creation_flags.contains(CreationFlags::O_CREAT) && inode_type == InodeType::Dir {
++            return_errno_with_message!(Errno::EISDIR, "O_CREAT cannot open an existing directory");
++        }
+ 
+         if inode_type == InodeType::SymLink
+             && creation_flags.contains(CreationFlags::O_NOFOLLOW)
+diff --git a/test/initramfs/src/syscall/ltp/debug/family-open-11.md b/test/initramfs/src/syscall/ltp/debug/family-open-11.md
+new file mode 100644
+index 00000000..df951c72
+--- /dev/null
++++ b/test/initramfs/src/syscall/ltp/debug/family-open-11.md
+@@ -0,0 +1,40 @@
++# open11
++
++## Goal
++
++Enable `open11` and make the generic `open()` success and error-path matrix pass on the primary
++LTP filesystems.
++
++## Failure
++
++On `/tmp`, two cases incorrectly succeeded:
++
++- opening an existing symlink-to-directory with `O_RDONLY | O_CREAT`
++- opening an existing directory with `O_RDONLY | O_CREAT`
++
++Both should fail with `EISDIR`.
++
++## Root Cause
++
++The resolved-path open flow rejected `O_CREAT | O_EXCL` on existing targets, but it did not apply
++the Linux rule that `open()` with `O_CREAT` must fail with `EISDIR` when the resolved target is an
++existing directory.
++
++## Fix
++
++Add the missing `EISDIR` check in the resolved `Path::open()` path when `O_CREAT` targets an
++existing directory.
++
++## Filesystem Notes
++
++`/tmp` and `/ext2` now pass.
++
++`/exfat` fails during testcase setup because `link(t_reg, t_link_reg)` returns `EINVAL`. `open11`
++requires hard-link coverage, so this remains an exfat capability gap rather than a generic `open()`
++issue.
++
++## Validation
++
++- `make run_kernel AUTO_TEST=syscall SYSCALL_TEST_SUITE=ltp LTP_CASES=open11`
++- `make run_kernel AUTO_TEST=syscall SYSCALL_TEST_SUITE=ltp SYSCALL_TEST_WORKDIR=/ext2 LTP_CASES=open11`
++- `make run_kernel AUTO_TEST=syscall SYSCALL_TEST_SUITE=ltp SYSCALL_TEST_WORKDIR=/exfat LTP_CASES=open11`
+diff --git a/test/initramfs/src/syscall/ltp/testcases/all.txt b/test/initramfs/src/syscall/ltp/testcases/all.txt
+index 9615e4ad..a0f3f63c 100644
+--- a/test/initramfs/src/syscall/ltp/testcases/all.txt
++++ b/test/initramfs/src/syscall/ltp/testcases/all.txt
+@@ -992,7 +992,7 @@ open07
+ open08
+ open09
+ open10
+-# open11
++open11
+ # open12
+ # open13
+ # open14
+-- 
+2.43.0
+

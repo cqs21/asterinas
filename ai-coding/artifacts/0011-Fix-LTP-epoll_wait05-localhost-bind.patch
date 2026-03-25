@@ -1,0 +1,110 @@
+From 816c45347bc67dbf76072214c8d35e5044ea8021 Mon Sep 17 00:00:00 2001
+From: Qingsong Chen <changxian.cqs@antgroup.com>
+Date: Tue, 24 Mar 2026 07:58:46 +0000
+Subject: [PATCH 11/97] Fix LTP epoll_wait05 localhost bind
+
+---
+ kernel/src/net/socket/ip/common.rs            | 10 +++-
+ .../src/syscall/ltp/debug/family-epoll-03.md  | 48 +++++++++++++++++++
+ .../src/syscall/ltp/testcases/all.txt         |  2 +-
+ 3 files changed, 58 insertions(+), 2 deletions(-)
+ create mode 100644 test/initramfs/src/syscall/ltp/debug/family-epoll-03.md
+
+diff --git a/kernel/src/net/socket/ip/common.rs b/kernel/src/net/socket/ip/common.rs
+index 5ebfc28e..f5024255 100644
+--- a/kernel/src/net/socket/ip/common.rs
++++ b/kernel/src/net/socket/ip/common.rs
+@@ -3,7 +3,7 @@
+ use aster_bigtcp::{
+     errors::BindError,
+     iface::BindPortConfig,
+-    wire::{IpAddress, IpEndpoint},
++    wire::{IpAddress, IpEndpoint, Ipv4Address},
+ };
+ 
+ use crate::{
+@@ -13,6 +13,14 @@ use crate::{
+ 
+ pub(super) fn get_iface_to_bind(ip_addr: &IpAddress) -> Option<Arc<Iface>> {
+     let IpAddress::Ipv4(ipv4_addr) = ip_addr;
++    if *ipv4_addr == Ipv4Address::UNSPECIFIED {
++        // `INADDR_ANY` should accept local binds instead of failing with
++        // `EADDRNOTAVAIL`. We currently bind sockets to one iface, so use
++        // loopback to preserve localhost listeners until wildcard binds can
++        // span multiple ifaces.
++        return Some(loopback_iface().clone());
++    }
++
+     iter_all_ifaces()
+         .find(|iface| {
+             if let Some(iface_ipv4_addr) = iface.ipv4_addr() {
+diff --git a/test/initramfs/src/syscall/ltp/debug/family-epoll-03.md b/test/initramfs/src/syscall/ltp/debug/family-epoll-03.md
+new file mode 100644
+index 00000000..50df4699
+--- /dev/null
++++ b/test/initramfs/src/syscall/ltp/debug/family-epoll-03.md
+@@ -0,0 +1,48 @@
++# `epoll_wait05`
++
++## Goal
++
++Enable `epoll_wait05` in the default LTP epoll batch by fixing the `/tmp`
++failure first, then verifying the same testcase on `/ext2` and `/exfat`.
++
++## Root cause
++
++`epoll_wait05` creates a TCP listener with `bind(INADDR_ANY)` and then connects
++to it through `127.0.0.1`. Asterinas rejected `0.0.0.0` in
++`get_iface_to_bind()`, because the bind path only accepted exact matches
++against concrete local IPv4 addresses. That made `bind()` fail with
++`EADDRNOTAVAIL` before the testcase could reach the `EPOLLRDHUP` check.
++
++## Solution
++
++- Accept `Ipv4Address::UNSPECIFIED` in `get_iface_to_bind()` instead of
++  treating it as a missing local address.
++- Map the wildcard bind to `loopback_iface()` for now, which preserves the
++  localhost listener that `epoll_wait05` needs.
++- Re-enable `epoll_wait05` in `testcases/all.txt`.
++
++## Validation
++
++The testcase now passes on all three LTP workdirs:
++
++```bash
++make run_kernel AUTO_TEST=syscall SYSCALL_TEST_SUITE=ltp LTP_CASES=epoll_wait05
++make run_kernel AUTO_TEST=syscall SYSCALL_TEST_SUITE=ltp \
++  SYSCALL_TEST_WORKDIR=/ext2 LTP_CASES=epoll_wait05
++make run_kernel AUTO_TEST=syscall SYSCALL_TEST_SUITE=ltp \
++  SYSCALL_TEST_WORKDIR=/exfat LTP_CASES=epoll_wait05
++```
++
++Observed behavior after the fix:
++
++- `bind(INADDR_ANY)` succeeds.
++- The listener accepts the local connection through `127.0.0.1`.
++- `epoll_wait()` reports `EPOLLRDHUP` as expected.
++
++## Impact / Residual risk
++
++- This is a targeted compatibility fix for localhost wildcard binds; it is not
++  a full Linux-style `INADDR_ANY` implementation across all interfaces.
++- Because sockets are still bound to one iface internally, wildcard listeners
++  that should be reachable through non-loopback addresses may need a broader
++  design change later.
+diff --git a/test/initramfs/src/syscall/ltp/testcases/all.txt b/test/initramfs/src/syscall/ltp/testcases/all.txt
+index bd0a54cc..2ca3014f 100644
+--- a/test/initramfs/src/syscall/ltp/testcases/all.txt
++++ b/test/initramfs/src/syscall/ltp/testcases/all.txt
+@@ -185,7 +185,7 @@ epoll_wait01
+ epoll_wait02
+ epoll_wait03
+ epoll_wait04
+-# epoll_wait05
++epoll_wait05
+ # epoll_wait06
+ epoll_wait07
+ epoll_pwait01
+-- 
+2.43.0
+

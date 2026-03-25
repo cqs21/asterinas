@@ -1,0 +1,47 @@
+From 7615d398010c88acb7430c76b08c133b64f92f23 Mon Sep 17 00:00:00 2001
+From: Qingsong Chen <changxian.cqs@antgroup.com>
+Date: Wed, 25 Mar 2026 07:06:24 +0000
+Subject: [PATCH 92/97] Document LTP linkat02 blocker
+
+---
+ .../src/syscall/ltp/debug/family-linkat-02.md | 28 +++++++++++++++++++
+ 1 file changed, 28 insertions(+)
+ create mode 100644 test/initramfs/src/syscall/ltp/debug/family-linkat-02.md
+
+diff --git a/test/initramfs/src/syscall/ltp/debug/family-linkat-02.md b/test/initramfs/src/syscall/ltp/debug/family-linkat-02.md
+new file mode 100644
+index 00000000..1c62f959
+--- /dev/null
++++ b/test/initramfs/src/syscall/ltp/debug/family-linkat-02.md
+@@ -0,0 +1,28 @@
++# linkat02
++
++## Goal
++
++Assess whether `linkat02` needs a `/tmp`-side fix before enabling it in the Priority A set.
++
++## Failure
++
++`linkat02` did not reach its `linkat()` assertions. The testcase failed while preparing an ext2
++test device:
++
++- `mkfs.ext2: lseek(0, 2): Invalid argument`
++- `linkat02.c:169: mkfs.ext2 failed with exit code 1`
++
++## Root Cause
++
++This case is blocked in the ext2-device setup path rather than by `/tmp` or `linkat()` semantics.
++The failure happens before the testcase exercises the target syscall behavior.
++
++## Resolution
++
++- Left `linkat02` disabled in `testcases/all.txt`.
++- Recorded the blocker instead of changing ext2-specific behavior, following the current priority
++  to finish `/tmp` coverage first.
++
++## Validation
++
++- `make run_kernel AUTO_TEST=syscall SYSCALL_TEST_SUITE=ltp LTP_CASES=linkat02`
+-- 
+2.43.0
+

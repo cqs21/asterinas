@@ -1,0 +1,62 @@
+From 8a78d3d7b32157d33e6a7c186a9ad5c503aa0ff0 Mon Sep 17 00:00:00 2001
+From: Qingsong Chen <changxian.cqs@antgroup.com>
+Date: Wed, 25 Mar 2026 05:29:43 +0000
+Subject: [PATCH 78/97] Enable LTP openat203 case
+
+---
+ .../syscall/ltp/debug/family-openat-203.md    | 29 +++++++++++++++++++
+ .../src/syscall/ltp/testcases/all.txt         |  2 +-
+ 2 files changed, 30 insertions(+), 1 deletion(-)
+ create mode 100644 test/initramfs/src/syscall/ltp/debug/family-openat-203.md
+
+diff --git a/test/initramfs/src/syscall/ltp/debug/family-openat-203.md b/test/initramfs/src/syscall/ltp/debug/family-openat-203.md
+new file mode 100644
+index 00000000..94f0e900
+--- /dev/null
++++ b/test/initramfs/src/syscall/ltp/debug/family-openat-203.md
+@@ -0,0 +1,29 @@
++# openat203
++
++## Goal
++
++Enable `openat203` on `/tmp` and verify Linux-compatible `openat2(2)` error handling.
++
++## Failure
++
++Before `openat2(2)` support was added, the testcase was skipped with `TCONF` because the syscall
++was not implemented.
++
++## Root Cause
++
++`openat203` checks the syscall boundary contract itself: invalid file descriptors, bad userspace
++pointers, illegal flag/mode/resolve combinations, and oversized `open_how` layouts. None of these
++paths were reachable until `openat2(2)` existed.
++
++## Fix
++
++- Added strict `open_how` size validation:
++  zero or undersized layouts return `EINVAL`, inaccessible extension bytes return `EFAULT`, and
++  non-zero extension bytes return `E2BIG`.
++- Added strict validation for unsupported open flags, invalid modes without `O_CREAT/O_TMPFILE`,
++  and unknown resolve bits.
++- Preserved Linux-compatible error ordering so `EBADF`, `EFAULT`, `EINVAL`, and `E2BIG` match LTP.
++
++## Validation
++
++- `make run_kernel AUTO_TEST=syscall SYSCALL_TEST_SUITE=ltp LTP_CASES=openat203`
+diff --git a/test/initramfs/src/syscall/ltp/testcases/all.txt b/test/initramfs/src/syscall/ltp/testcases/all.txt
+index 4d93935c..8da84cf0 100644
+--- a/test/initramfs/src/syscall/ltp/testcases/all.txt
++++ b/test/initramfs/src/syscall/ltp/testcases/all.txt
+@@ -1005,7 +1005,7 @@ openat04
+ 
+ openat201
+ openat202
+-# openat203
++openat203
+ 
+ # open_by_handle_at01
+ # open_by_handle_at02
+-- 
+2.43.0
+

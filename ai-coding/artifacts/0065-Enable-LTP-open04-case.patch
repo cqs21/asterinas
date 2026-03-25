@@ -1,0 +1,193 @@
+From 04effdaa35a0b3aaeb41e01d2b08837a548e642d Mon Sep 17 00:00:00 2001
+From: Qingsong Chen <changxian.cqs@antgroup.com>
+Date: Wed, 25 Mar 2026 03:35:10 +0000
+Subject: [PATCH 65/97] Enable LTP open04 case
+
+---
+ kernel/src/fs/file/file_table.rs              | 75 ++++++++++++-------
+ kernel/src/syscall/open.rs                    | 11 ++-
+ .../src/syscall/ltp/debug/family-open-04.md   | 29 +++++++
+ .../src/syscall/ltp/testcases/all.txt         |  2 +-
+ 4 files changed, 86 insertions(+), 31 deletions(-)
+ create mode 100644 test/initramfs/src/syscall/ltp/debug/family-open-04.md
+
+diff --git a/kernel/src/fs/file/file_table.rs b/kernel/src/fs/file/file_table.rs
+index 1a8ba0b2..3bdd2541 100644
+--- a/kernel/src/fs/file/file_table.rs
++++ b/kernel/src/fs/file/file_table.rs
+@@ -35,6 +35,25 @@ impl FileTable {
+         self.table.slots_len()
+     }
+ 
++    fn min_free_fd_from(&self, min_fd: usize, max_fd_exclusive: usize) -> Option<usize> {
++        if min_fd >= max_fd_exclusive {
++            return None;
++        }
++
++        let slots_len = self.table.slots_len();
++        if min_fd >= slots_len {
++            return Some(min_fd);
++        }
++
++        for fd in min_fd..slots_len.min(max_fd_exclusive) {
++            if self.table.get(fd).is_none() {
++                return Some(fd);
++            }
++        }
++
++        (slots_len < max_fd_exclusive).then_some(slots_len)
++    }
++
+     /// Duplicates `fd` onto the lowest-numbered available descriptor equal to
+     /// or greater than `ceil_fd`.
+     pub fn dup_ceil(
+@@ -62,35 +81,14 @@ impl FileTable {
+         let entry = self.duplicate_entry(fd, flags)?;
+ 
+         // Get the lowest-numbered available fd equal to or greater than `ceil_fd`.
+-        let get_min_free_fd = || -> Option<usize> {
+-            let ceil_fd = ceil_fd as usize;
+-            if ceil_fd >= max_fd_exclusive {
+-                return None;
+-            }
+-
+-            if self.table.get(ceil_fd).is_none() {
+-                return Some(ceil_fd);
+-            }
+-
+-            for idx in ceil_fd + 1..self.len().min(max_fd_exclusive) {
+-                if self.table.get(idx).is_none() {
+-                    return Some(idx);
+-                }
+-            }
+-
+-            if self.len() < max_fd_exclusive {
+-                return Some(self.len());
+-            }
+-
+-            None
+-        };
+-
+-        let min_free_fd = get_min_free_fd().ok_or_else(|| {
+-            Error::with_message(
+-                Errno::EMFILE,
+-                "no file descriptor available under the limit",
+-            )
+-        })?;
++        let min_free_fd = self
++            .min_free_fd_from(ceil_fd as usize, max_fd_exclusive)
++            .ok_or_else(|| {
++                Error::with_message(
++                    Errno::EMFILE,
++                    "no file descriptor available under the limit",
++                )
++            })?;
+         self.table.put_at(min_free_fd, entry);
+         Ok(min_free_fd as FileDesc)
+     }
+@@ -122,6 +120,25 @@ impl FileTable {
+         self.table.put(entry) as FileDesc
+     }
+ 
++    pub fn insert_with_limit(
++        &mut self,
++        item: Arc<dyn FileLike>,
++        flags: FdFlags,
++        max_fd_exclusive: usize,
++    ) -> Result<FileDesc> {
++        let entry = FileTableEntry::new(item, flags);
++
++        let min_free_fd = self.min_free_fd_from(0, max_fd_exclusive).ok_or_else(|| {
++            Error::with_message(
++                Errno::EMFILE,
++                "no file descriptor available under the limit",
++            )
++        })?;
++
++        self.table.put_at(min_free_fd, entry);
++        Ok(min_free_fd as FileDesc)
++    }
++
+     pub fn close_file(&mut self, fd: FileDesc) -> Option<Arc<dyn FileLike>> {
+         let removed_entry = self.table.remove(fd as usize)?;
+         // POSIX record locks are process-associated and Linux drops them when any fd for the inode is
+diff --git a/kernel/src/syscall/open.rs b/kernel/src/syscall/open.rs
+index 7a7b7409..d08e52ed 100644
+--- a/kernel/src/syscall/open.rs
++++ b/kernel/src/syscall/open.rs
+@@ -12,6 +12,7 @@ use crate::{
+         vfs::path::{AT_FDCWD, FsPath, LookupResult, PathResolver},
+     },
+     prelude::*,
++    process::ResourceType,
+     syscall::constants::MAX_FILENAME_LEN,
+ };
+ 
+@@ -57,7 +58,15 @@ pub fn sys_openat(
+             } else {
+                 FdFlags::empty()
+             };
+-        file_table_locked.insert(file_handle.clone(), fd_flags)
++        let max_fd_exclusive = ctx
++            .process
++            .resource_limits()
++            .get_rlimit(ResourceType::RLIMIT_NOFILE)
++            .get_cur()
++            .min(i32::MAX as u64 + 1) as usize;
++        let fd =
++            file_table_locked.insert_with_limit(file_handle.clone(), fd_flags, max_fd_exclusive)?;
++        fd
+     };
+     let file_like: Arc<dyn FileLike> = file_handle;
+     fs::vfs::notify::on_open(&file_like);
+diff --git a/test/initramfs/src/syscall/ltp/debug/family-open-04.md b/test/initramfs/src/syscall/ltp/debug/family-open-04.md
+new file mode 100644
+index 00000000..8c79fb34
+--- /dev/null
++++ b/test/initramfs/src/syscall/ltp/debug/family-open-04.md
+@@ -0,0 +1,29 @@
++# open04
++
++## Goal
++
++Enable `open04` and make it pass on `/tmp`, `/ext2`, and `/exfat`.
++
++## Failure
++
++`open04` expects `open()` to fail with `EMFILE` once the process reaches `RLIMIT_NOFILE`.
++On Asterinas, the final `open()` still succeeded on `/tmp`.
++
++## Root Cause
++
++The file table limit path reused `FileTable::len()`, which returns the slot vector length rather
++than the number of occupied descriptors. When the table already contained holes, `insert_with_limit`
++and `dup_ceil_with_limit` could skip lower free descriptor numbers and allocate at the current tail
++instead. `open04` exposed this because the first new descriptor was placed after a holey prefix,
++so the test consumed fewer descriptors than expected before reaching its final assertion.
++
++## Fix
++
++Add a shared helper that scans for the lowest free descriptor within the allowed range by checking
++actual slot occupancy. Use that helper for both `insert_with_limit()` and `dup_ceil_with_limit()`.
++
++## Validation
++
++- `make run_kernel AUTO_TEST=syscall SYSCALL_TEST_SUITE=ltp LTP_CASES=open04`
++- `make run_kernel AUTO_TEST=syscall SYSCALL_TEST_SUITE=ltp SYSCALL_TEST_WORKDIR=/ext2 LTP_CASES=open04`
++- `make run_kernel AUTO_TEST=syscall SYSCALL_TEST_SUITE=ltp SYSCALL_TEST_WORKDIR=/exfat LTP_CASES=open04`
+diff --git a/test/initramfs/src/syscall/ltp/testcases/all.txt b/test/initramfs/src/syscall/ltp/testcases/all.txt
+index d9d4ad3a..9fa05334 100644
+--- a/test/initramfs/src/syscall/ltp/testcases/all.txt
++++ b/test/initramfs/src/syscall/ltp/testcases/all.txt
+@@ -986,7 +986,7 @@ nice03
+ open01
+ open02
+ open03
+-# open04
++open04
+ # open06
+ open07
+ # open08
+-- 
+2.43.0
+

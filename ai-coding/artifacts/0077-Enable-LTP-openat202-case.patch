@@ -1,0 +1,62 @@
+From 287378dd237d61545851a39d507aaca2b5983692 Mon Sep 17 00:00:00 2001
+From: Qingsong Chen <changxian.cqs@antgroup.com>
+Date: Wed, 25 Mar 2026 05:28:56 +0000
+Subject: [PATCH 77/97] Enable LTP openat202 case
+
+---
+ .../syscall/ltp/debug/family-openat-202.md    | 29 +++++++++++++++++++
+ .../src/syscall/ltp/testcases/all.txt         |  2 +-
+ 2 files changed, 30 insertions(+), 1 deletion(-)
+ create mode 100644 test/initramfs/src/syscall/ltp/debug/family-openat-202.md
+
+diff --git a/test/initramfs/src/syscall/ltp/debug/family-openat-202.md b/test/initramfs/src/syscall/ltp/debug/family-openat-202.md
+new file mode 100644
+index 00000000..552922ea
+--- /dev/null
++++ b/test/initramfs/src/syscall/ltp/debug/family-openat-202.md
+@@ -0,0 +1,29 @@
++# openat202
++
++## Goal
++
++Enable `openat202` on `/tmp` and verify the negative `openat2(2)` resolve-flag semantics.
++
++## Failure
++
++Before `openat2(2)` support was added, the testcase was skipped with `TCONF` because the syscall
++was missing.
++
++## Root Cause
++
++`openat202` depends entirely on `openat2(2)` resolve handling. Without syscall support, LTP could
++not verify the expected `EXDEV`, `ELOOP`, and `ENOENT` results for mount crossing, magic links,
++symlinks, and scoped-root lookup.
++
++## Fix
++
++- Reused the new `openat2` path-resolution flow introduced for `openat201`.
++- Verified that `/proc` mount crossings are rejected under `RESOLVE_NO_XDEV` and
++  `RESOLVE_BENEATH`.
++- Verified that procfs magic links are rejected under `RESOLVE_NO_MAGICLINKS`, regular symlinks
++  are rejected under `RESOLVE_NO_SYMLINKS`, and absolute lookups are scoped by
++  `RESOLVE_IN_ROOT`.
++
++## Validation
++
++- `make run_kernel AUTO_TEST=syscall SYSCALL_TEST_SUITE=ltp LTP_CASES=openat202`
+diff --git a/test/initramfs/src/syscall/ltp/testcases/all.txt b/test/initramfs/src/syscall/ltp/testcases/all.txt
+index f87cc6b6..4d93935c 100644
+--- a/test/initramfs/src/syscall/ltp/testcases/all.txt
++++ b/test/initramfs/src/syscall/ltp/testcases/all.txt
+@@ -1004,7 +1004,7 @@ openat03
+ openat04
+ 
+ openat201
+-# openat202
++openat202
+ # openat203
+ 
+ # open_by_handle_at01
+-- 
+2.43.0
+

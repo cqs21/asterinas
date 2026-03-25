@@ -1,0 +1,167 @@
+From e415a8084e653d9b356957e0deccd7a8f7acaa8a Mon Sep 17 00:00:00 2001
+From: Qingsong Chen <changxian.cqs@antgroup.com>
+Date: Tue, 24 Mar 2026 08:06:44 +0000
+Subject: [PATCH 12/97] Fix LTP epoll_ctl04 nesting limit
+
+---
+ kernel/src/events/epoll/file.rs               | 54 ++++++++++++++++++-
+ .../src/syscall/ltp/debug/family-epoll-04.md  | 47 ++++++++++++++++
+ .../src/syscall/ltp/testcases/all.txt         |  2 +-
+ 3 files changed, 101 insertions(+), 2 deletions(-)
+ create mode 100644 test/initramfs/src/syscall/ltp/debug/family-epoll-04.md
+
+diff --git a/kernel/src/events/epoll/file.rs b/kernel/src/events/epoll/file.rs
+index 1aef30af..5c61a94b 100644
+--- a/kernel/src/events/epoll/file.rs
++++ b/kernel/src/events/epoll/file.rs
+@@ -3,7 +3,7 @@
+ use alloc::{collections::btree_set::BTreeSet, sync::Arc};
+ use core::{borrow::Borrow, fmt::Display, time::Duration};
+ 
+-use keyable_arc::KeyableWeak;
++use keyable_arc::{KeyableArc, KeyableWeak};
+ use ostd::sync::Mutex;
+ 
+ use super::{
+@@ -52,6 +52,8 @@ pub struct EpollFile {
+     pseudo_path: Path,
+ }
+ 
++const MAX_NESTED_EPOLL_DEPTH: usize = 5;
++
+ impl EpollFile {
+     /// Creates a new epoll file.
+     pub fn new() -> Arc<Self> {
+@@ -103,6 +105,8 @@ impl EpollFile {
+             );
+         }
+ 
++        self.check_nested_epoll(file.as_ref())?;
++
+         // Add the new entry to the interest list and start monitoring its events
+         let ready_entry = {
+             let mut interest = self.interest.lock();
+@@ -137,6 +141,54 @@ impl EpollFile {
+         Ok(())
+     }
+ 
++    fn check_nested_epoll(&self, file: &dyn FileLike) -> Result<()> {
++        let Some(target_epoll) = file.downcast_ref::<EpollFile>() else {
++            return Ok(());
++        };
++
++        let mut visited_epolls = BTreeSet::from([self as *const Self as usize]);
++        let nested_depth = target_epoll.nested_epoll_depth(&mut visited_epolls)?;
++        if nested_depth >= MAX_NESTED_EPOLL_DEPTH {
++            return_errno_with_message!(Errno::ELOOP, "the epoll nesting depth is too large");
++        }
++
++        Ok(())
++    }
++
++    fn nested_epoll_depth(&self, visited_epolls: &mut BTreeSet<usize>) -> Result<usize> {
++        let self_addr = self as *const Self as usize;
++        if !visited_epolls.insert(self_addr) {
++            return_errno_with_message!(Errno::ELOOP, "epoll loops are not allowed");
++        }
++
++        let result = (|| {
++            let nested_epolls = self.nested_epoll_files();
++            let mut max_depth = 1;
++            for nested_epoll_file in nested_epolls {
++                let Some(nested_epoll) = nested_epoll_file.downcast_ref::<Self>() else {
++                    continue;
++                };
++                let nested_depth = nested_epoll.nested_epoll_depth(visited_epolls)?;
++                max_depth = max_depth.max(nested_depth.saturating_add(1));
++            }
++
++            Ok(max_depth)
++        })();
++
++        visited_epolls.remove(&self_addr);
++        result
++    }
++
++    fn nested_epoll_files(&self) -> Vec<Arc<dyn FileLike>> {
++        self.interest
++            .lock()
++            .iter()
++            .filter_map(|entry| entry.0.file_weak().upgrade())
++            .map(KeyableArc::into)
++            .filter(|file: &Arc<dyn FileLike>| file.downcast_ref::<Self>().is_some())
++            .collect()
++    }
++
+     fn del_interest(&self, fd: FileDesc, file: KeyableWeak<dyn FileLike>) -> Result<()> {
+         // If this epoll entry is in the ready list, then we should delete it.
+         // But unfortunately, deleting an entry from the ready list has a
+diff --git a/test/initramfs/src/syscall/ltp/debug/family-epoll-04.md b/test/initramfs/src/syscall/ltp/debug/family-epoll-04.md
+new file mode 100644
+index 00000000..2a3d6a68
+--- /dev/null
++++ b/test/initramfs/src/syscall/ltp/debug/family-epoll-04.md
+@@ -0,0 +1,47 @@
++# `epoll_ctl04`
++
++## Goal
++
++Enable `epoll_ctl04` in the default LTP epoll batch by enforcing the Linux
++limit on nested epoll instances and validating the result on `/tmp`, `/ext2`,
++and `/exfat`.
++
++## Root cause
++
++`epoll_ctl04` builds a chain of nested epoll instances and expects the next
++`EPOLL_CTL_ADD` to fail once the nesting depth reaches 5. Asterinas previously
++accepted epoll-on-epoll additions without any topology check, so the testcase
++incorrectly succeeded on the extra nesting step instead of returning
++`ELOOP`/`EINVAL`.
++
++## Solution
++
++- Added nested-epoll validation in `EpollFile::add_interest()`.
++- Reject additions that would create an epoll cycle.
++- Reject additions when the target epoll subtree is already at the Linux
++  nesting limit, returning `ELOOP`.
++- Re-enable `epoll_ctl04` in `testcases/all.txt`.
++
++## Validation
++
++The testcase now passes on all three LTP workdirs:
++
++```bash
++make run_kernel AUTO_TEST=syscall SYSCALL_TEST_SUITE=ltp LTP_CASES=epoll_ctl04
++make run_kernel AUTO_TEST=syscall SYSCALL_TEST_SUITE=ltp \
++  SYSCALL_TEST_WORKDIR=/ext2 LTP_CASES=epoll_ctl04
++make run_kernel AUTO_TEST=syscall SYSCALL_TEST_SUITE=ltp \
++  SYSCALL_TEST_WORKDIR=/exfat LTP_CASES=epoll_ctl04
++```
++
++Observed result after the fix:
++
++- `epoll_ctl(..., EPOLL_CTL_ADD, ...) with number of nesting is 5 : ELOOP (40)`
++
++## Impact / Residual risk
++
++- The new check matches the tested Linux behavior for nested epoll graphs and
++  also closes the obvious epoll-cycle hole.
++- The implementation walks the epoll interest graph when adding nested epolls,
++  so any future changes to epoll graph semantics should keep the traversal and
++  lock behavior under review.
+diff --git a/test/initramfs/src/syscall/ltp/testcases/all.txt b/test/initramfs/src/syscall/ltp/testcases/all.txt
+index 2ca3014f..44399a63 100644
+--- a/test/initramfs/src/syscall/ltp/testcases/all.txt
++++ b/test/initramfs/src/syscall/ltp/testcases/all.txt
+@@ -179,7 +179,7 @@ epoll01
+ epoll_ctl01
+ epoll_ctl02
+ epoll_ctl03
+-# epoll_ctl04
++epoll_ctl04
+ # epoll_ctl05
+ epoll_wait01
+ epoll_wait02
+-- 
+2.43.0
+

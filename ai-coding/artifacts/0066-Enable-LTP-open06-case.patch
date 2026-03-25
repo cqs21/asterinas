@@ -1,0 +1,59 @@
+From 3b6d04261a6547ff1adaa5ca32fa7628d7c5976f Mon Sep 17 00:00:00 2001
+From: Qingsong Chen <changxian.cqs@antgroup.com>
+Date: Wed, 25 Mar 2026 03:38:06 +0000
+Subject: [PATCH 66/97] Enable LTP open06 case
+
+---
+ .../src/syscall/ltp/debug/family-open-06.md   | 26 +++++++++++++++++++
+ .../src/syscall/ltp/testcases/all.txt         |  2 +-
+ 2 files changed, 27 insertions(+), 1 deletion(-)
+ create mode 100644 test/initramfs/src/syscall/ltp/debug/family-open-06.md
+
+diff --git a/test/initramfs/src/syscall/ltp/debug/family-open-06.md b/test/initramfs/src/syscall/ltp/debug/family-open-06.md
+new file mode 100644
+index 00000000..c9a2d7a5
+--- /dev/null
++++ b/test/initramfs/src/syscall/ltp/debug/family-open-06.md
+@@ -0,0 +1,26 @@
++# open06
++
++## Goal
++
++Enable `open06` and verify its FIFO `ENXIO` behavior on supported filesystems.
++
++## Result
++
++No kernel change was needed. The testcase already passed on `/tmp` and `/ext2`.
++
++## Root Cause
++
++`open06` had remained disabled even though the kernel already returned `ENXIO` for
++`open(O_NONBLOCK | O_WRONLY)` on a FIFO with no reader.
++
++## Filesystem Notes
++
++`/exfat` does not support FIFO creation in the current setup. The testcase breaks earlier at
++`mkfifo("tmpfile", 0644)` with `EINVAL`, so this is a filesystem capability gap rather than an
++`open()` bug.
++
++## Validation
++
++- `make run_kernel AUTO_TEST=syscall SYSCALL_TEST_SUITE=ltp LTP_CASES=open06`
++- `make run_kernel AUTO_TEST=syscall SYSCALL_TEST_SUITE=ltp SYSCALL_TEST_WORKDIR=/ext2 LTP_CASES=open06`
++- `make run_kernel AUTO_TEST=syscall SYSCALL_TEST_SUITE=ltp SYSCALL_TEST_WORKDIR=/exfat LTP_CASES=open06`
+diff --git a/test/initramfs/src/syscall/ltp/testcases/all.txt b/test/initramfs/src/syscall/ltp/testcases/all.txt
+index 9fa05334..830d19ed 100644
+--- a/test/initramfs/src/syscall/ltp/testcases/all.txt
++++ b/test/initramfs/src/syscall/ltp/testcases/all.txt
+@@ -987,7 +987,7 @@ open01
+ open02
+ open03
+ open04
+-# open06
++open06
+ open07
+ # open08
+ open09
+-- 
+2.43.0
+

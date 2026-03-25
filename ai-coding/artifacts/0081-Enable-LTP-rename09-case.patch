@@ -1,0 +1,57 @@
+From b58579f3b75ef468bba55beb0bf42bb516c3f2c8 Mon Sep 17 00:00:00 2001
+From: Qingsong Chen <changxian.cqs@antgroup.com>
+Date: Wed, 25 Mar 2026 06:21:54 +0000
+Subject: [PATCH 81/97] Enable LTP rename09 case
+
+---
+ .../src/syscall/ltp/debug/family-rename-09.md | 24 +++++++++++++++++++
+ .../src/syscall/ltp/testcases/all.txt         |  2 +-
+ 2 files changed, 25 insertions(+), 1 deletion(-)
+ create mode 100644 test/initramfs/src/syscall/ltp/debug/family-rename-09.md
+
+diff --git a/test/initramfs/src/syscall/ltp/debug/family-rename-09.md b/test/initramfs/src/syscall/ltp/debug/family-rename-09.md
+new file mode 100644
+index 00000000..e31c8d74
+--- /dev/null
++++ b/test/initramfs/src/syscall/ltp/debug/family-rename-09.md
+@@ -0,0 +1,24 @@
++# rename09
++
++## Goal
++
++Enable `rename09` on `/tmp`.
++
++## Failure
++
++No new kernel failure was reproduced on `/tmp`. The testcase already returned the expected
++`EACCES` for rename permission denial.
++
++## Root Cause
++
++The case had remained disabled in `all.txt`, but current VFS permission checks already match the
++LTP expectation for this rename scenario.
++
++## Fix
++
++- Enabled `rename09` in `testcases/all.txt`.
++- No kernel code changes were required.
++
++## Validation
++
++- `make run_kernel AUTO_TEST=syscall SYSCALL_TEST_SUITE=ltp LTP_CASES=rename09`
+diff --git a/test/initramfs/src/syscall/ltp/testcases/all.txt b/test/initramfs/src/syscall/ltp/testcases/all.txt
+index 34a8be83..efa5ab10 100644
+--- a/test/initramfs/src/syscall/ltp/testcases/all.txt
++++ b/test/initramfs/src/syscall/ltp/testcases/all.txt
+@@ -1234,7 +1234,7 @@ rename05
+ rename06
+ rename07
+ rename08
+-# rename09
++rename09
+ # rename10
+ # rename11
+ # rename12
+-- 
+2.43.0
+

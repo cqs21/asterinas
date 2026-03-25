@@ -1,0 +1,125 @@
+From 535c6967bce1b253a5bf957ec8890cb78f143543 Mon Sep 17 00:00:00 2001
+From: Qingsong Chen <changxian.cqs@antgroup.com>
+Date: Tue, 24 Mar 2026 06:00:12 +0000
+Subject: [PATCH 01/97] Add LTP batch tracker template
+
+---
+ .../src/syscall/ltp/BATCH_TRACKER.md          | 70 +++++++++++++++++++
+ .../ltp/debug/task-2.2-batch-tracker.md       | 28 ++++++++
+ 2 files changed, 98 insertions(+)
+ create mode 100644 test/initramfs/src/syscall/ltp/BATCH_TRACKER.md
+ create mode 100644 test/initramfs/src/syscall/ltp/debug/task-2.2-batch-tracker.md
+
+diff --git a/test/initramfs/src/syscall/ltp/BATCH_TRACKER.md b/test/initramfs/src/syscall/ltp/BATCH_TRACKER.md
+new file mode 100644
+index 00000000..d61b1f52
+--- /dev/null
++++ b/test/initramfs/src/syscall/ltp/BATCH_TRACKER.md
+@@ -0,0 +1,70 @@
++# LTP Batch Tracker Template
++
++This document provides a fixed template to track LTP re-enable batches.
++Create one section per batch and keep status updated in the overview table.
++
++## Status Values
++
++- `todo`: Defined but not started.
++- `debugging`: Reproduction and kernel or harness debugging in progress.
++- `blocked`: Waiting on prerequisite support, design decision, or external dependency.
++- `ready-to-enable`: Batch passes target runs and is ready to update enable or block lists.
++- `done`: Enable or blocklist updates merged and validated.
++
++## Batch Overview
++
++| Batch ID | Family | Owner | Status | Current run target | Suspected subsystem |
++|----------|--------|-------|--------|--------------------|---------------------|
++| example-fcntl-01 | File descriptor and eventing | @owner | todo | /tmp | `kernel/src/fs`, `kernel/src/syscall` |
++
++## Per-Batch Template
++
++Copy this section for each new batch.
++
++### Batch: `<batch-id>`
++
++- Family: `<family-name>`
++- Owner: `<github-id-or-name>`
++- Status: `todo | debugging | blocked | ready-to-enable | done`
++- Current run target: `/tmp | /ext2 | /exfat`
++- Enabled cases under test:
++  - `<case-name-1>`
++  - `<case-name-2>`
++  - `<case-name-3>`
++- Suspected kernel subsystem:
++  - `<crate-or-module-1>`
++  - `<crate-or-module-2>`
++
++#### Failure Taxonomy Mapping
++
++| Case | Run target | Taxonomy class | Notes |
++|------|------------|----------------|-------|
++| `<case-name>` | `/tmp` | Missing syscall, flag, or option support | `<short-note>` |
++| `<case-name>` | `/ext2` | VFS or filesystem semantic mismatch | `<short-note>` |
++
++Taxonomy class must use one of:
++
++- Missing syscall, flag, or option support.
++- Wrong Linux-compatible errno or return semantics.
++- VFS or filesystem semantic mismatch.
++- Credential, permission, namespace, or capability semantic mismatch.
++- Signal, timer, scheduler, futex, or wakeup ordering issue.
++- Test harness limitation, packaging problem, or environment assumption.
++
++#### Run Results
++
++| Target | Command | Result | Log path |
++|--------|---------|--------|----------|
++| `/tmp` | `make run_kernel AUTO_TEST=syscall SYSCALL_TEST_SUITE=ltp` | `<pass/fail>` | `<path>` |
++| `/ext2` | `make run_kernel AUTO_TEST=syscall SYSCALL_TEST_SUITE=ltp SYSCALL_TEST_WORKDIR=/ext2` | `<pass/fail>` | `<path>` |
++| `/exfat` | `make run_kernel AUTO_TEST=syscall SYSCALL_TEST_SUITE=ltp SYSCALL_TEST_WORKDIR=/exfat` | `<pass/fail>` | `<path>` |
++
++#### Decision
++
++- Enable-list changes:
++  - `<update in testcases/all.txt>`
++- Filesystem blocklist changes:
++  - `<update in testcases/blocked/ext2.txt or exfat.txt>`
++- Follow-up items:
++  - `<next-step-1>`
++  - `<next-step-2>`
+diff --git a/test/initramfs/src/syscall/ltp/debug/task-2.2-batch-tracker.md b/test/initramfs/src/syscall/ltp/debug/task-2.2-batch-tracker.md
+new file mode 100644
+index 00000000..691fc98a
+--- /dev/null
++++ b/test/initramfs/src/syscall/ltp/debug/task-2.2-batch-tracker.md
+@@ -0,0 +1,28 @@
++# Task 2.2: Fixed Batch Tracker Template
++
++## Goal
++
++Provide a reusable tracking template so every LTP re-enable batch records the
++same required fields: enabled cases, run target, failure taxonomy, suspected
++subsystem, owner, and status.
++
++## Problem Cause
++
++`TASKS.md` defined the tracking requirements, but the repository had no
++standard document contributors could copy. That made it easy for different
++batches to omit fields or use inconsistent terminology, which slows parallel
++triage.
++
++## Solution
++
++Added [`BATCH_TRACKER.md`](../BATCH_TRACKER.md) as the canonical template for
++future LTP batches. The template includes:
++
++- A fixed status vocabulary.
++- An overview table for splitting work across contributors.
++- A per-batch section that captures all required metadata.
++- A failure-taxonomy table aligned with `TASKS.md`.
++- A run-results matrix for `/tmp`, `/ext2`, and `/exfat`.
++
++Also linked the template from [`TASKS.md`](../TASKS.md) so the workflow points
++to the concrete artifact contributors should use.
+-- 
+2.43.0
+

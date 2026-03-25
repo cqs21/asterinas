@@ -1,0 +1,58 @@
+From f0dfd54d5bdc0e099300721b6cd0f59b6b73c0e2 Mon Sep 17 00:00:00 2001
+From: Qingsong Chen <changxian.cqs@antgroup.com>
+Date: Wed, 25 Mar 2026 07:15:54 +0000
+Subject: [PATCH 95/97] Enable LTP sigtimedwait01 case
+
+---
+ .../ltp/debug/family-sigtimedwait-01.md       | 25 +++++++++++++++++++
+ .../src/syscall/ltp/testcases/all.txt         |  2 +-
+ 2 files changed, 26 insertions(+), 1 deletion(-)
+ create mode 100644 test/initramfs/src/syscall/ltp/debug/family-sigtimedwait-01.md
+
+diff --git a/test/initramfs/src/syscall/ltp/debug/family-sigtimedwait-01.md b/test/initramfs/src/syscall/ltp/debug/family-sigtimedwait-01.md
+new file mode 100644
+index 00000000..a355b34a
+--- /dev/null
++++ b/test/initramfs/src/syscall/ltp/debug/family-sigtimedwait-01.md
+@@ -0,0 +1,25 @@
++# sigtimedwait01
++
++## Goal
++
++Enable `sigtimedwait01` on `/tmp`.
++
++## Result
++
++`sigtimedwait01` already passes on the current kernel without code changes. The testcase covers
++normal wakeups, timeout handling, `siginfo_t` contents, original-mask restoration, and `EFAULT`
++cases.
++
++## Root Cause
++
++There was no kernel defect for this testcase. It remained commented out in `testcases/all.txt`
++even though the current implementation already satisfies the expected behavior.
++
++## Fix
++
++- Enabled `sigtimedwait01` in `testcases/all.txt`.
++- Recorded the validation result for future signal-family tracking.
++
++## Validation
++
++- `make run_kernel AUTO_TEST=syscall SYSCALL_TEST_SUITE=ltp LTP_CASES=sigtimedwait01`
+diff --git a/test/initramfs/src/syscall/ltp/testcases/all.txt b/test/initramfs/src/syscall/ltp/testcases/all.txt
+index 4e9f7c69..8008ec88 100644
+--- a/test/initramfs/src/syscall/ltp/testcases/all.txt
++++ b/test/initramfs/src/syscall/ltp/testcases/all.txt
+@@ -1573,7 +1573,7 @@ sigrelse01
+ sigsuspend01
+ sigsuspend02
+ 
+-# sigtimedwait01
++sigtimedwait01
+ 
+ sigwait01
+ sigwaitinfo01
+-- 
+2.43.0
+

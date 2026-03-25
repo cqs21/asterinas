@@ -1,0 +1,90 @@
+From 4a2eb3083399508fb84e50471140e3f4facc205f Mon Sep 17 00:00:00 2001
+From: Qingsong Chen <changxian.cqs@antgroup.com>
+Date: Tue, 24 Mar 2026 08:20:30 +0000
+Subject: [PATCH 14/97] Format pending kernel and initramfs files
+
+---
+ kernel/src/fs/file/file_table.rs       | 5 ++++-
+ kernel/src/syscall/clock_gettime.rs    | 3 +--
+ kernel/src/time/wait.rs                | 6 +-----
+ test/initramfs/nix/default.nix         | 4 +++-
+ test/initramfs/nix/syscall/default.nix | 3 +--
+ 5 files changed, 10 insertions(+), 11 deletions(-)
+
+diff --git a/kernel/src/fs/file/file_table.rs b/kernel/src/fs/file/file_table.rs
+index eff53c1d..e474b9a1 100644
+--- a/kernel/src/fs/file/file_table.rs
++++ b/kernel/src/fs/file/file_table.rs
+@@ -84,7 +84,10 @@ impl FileTable {
+         };
+ 
+         let min_free_fd = get_min_free_fd().ok_or_else(|| {
+-            Error::with_message(Errno::EMFILE, "no file descriptor available under the limit")
++            Error::with_message(
++                Errno::EMFILE,
++                "no file descriptor available under the limit",
++            )
+         })?;
+         self.table.put_at(min_free_fd, entry);
+         Ok(min_free_fd as FileDesc)
+diff --git a/kernel/src/syscall/clock_gettime.rs b/kernel/src/syscall/clock_gettime.rs
+index 1e9b59df..19832ffb 100644
+--- a/kernel/src/syscall/clock_gettime.rs
++++ b/kernel/src/syscall/clock_gettime.rs
+@@ -3,8 +3,7 @@
+ use core::time::Duration;
+ 
+ use int_to_c_enum::TryFromInt;
+-use ostd::mm::VmIo;
+-use ostd::timer::TIMER_FREQ;
++use ostd::{mm::VmIo, timer::TIMER_FREQ};
+ 
+ use super::SyscallReturn;
+ use crate::{
+diff --git a/kernel/src/time/wait.rs b/kernel/src/time/wait.rs
+index 04c8e57d..cae84d0f 100644
+--- a/kernel/src/time/wait.rs
++++ b/kernel/src/time/wait.rs
+@@ -4,11 +4,7 @@ use core::time::Duration;
+ 
+ use ostd::sync::{WaitQueue, Waiter};
+ 
+-use super::{
+-    Timer, TimerManager,
+-    clocks::MonotonicClock,
+-    timer::Timeout,
+-};
++use super::{Timer, TimerManager, clocks::MonotonicClock, timer::Timeout};
+ use crate::{prelude::*, time::timer::TimerGuard};
+ 
+ /// A trait that provide the timeout related function for [`Waiter`] and [`WaitQueue`]`.
+diff --git a/test/initramfs/nix/default.nix b/test/initramfs/nix/default.nix
+index b5804a8e..f05809cd 100644
+--- a/test/initramfs/nix/default.nix
++++ b/test/initramfs/nix/default.nix
+@@ -32,7 +32,9 @@ in rec {
+     testSuite = syscallTestSuite;
+     workDir = syscallTestWorkDir;
+     inherit ltpCases extraBlocklistsDirs;
+-    ltpCaseFile = if ltpCaseFile == "" then "" else
++    ltpCaseFile = if ltpCaseFile == "" then
++      ""
++    else
+       toString (builtins.path {
+         name = "ltp-case-file";
+         path = ltpCaseFile;
+diff --git a/test/initramfs/nix/syscall/default.nix b/test/initramfs/nix/syscall/default.nix
+index 6f5f119e..8069e592 100644
+--- a/test/initramfs/nix/syscall/default.nix
++++ b/test/initramfs/nix/syscall/default.nix
+@@ -1,6 +1,5 @@
+ { lib, stdenvNoCC, callPackage, testSuite ? "ltp", workDir ? "/tmp"
+-, ltpCases ? "", ltpCaseFile ? "", extraBlocklistsDirs ? "", smp ? 1,
+-}: rec {
++, ltpCases ? "", ltpCaseFile ? "", extraBlocklistsDirs ? "", smp ? 1, }: rec {
+   inherit testSuite;
+   ltp = callPackage ./ltp.nix { };
+   # FIXME: Build gvisor syscall test with nix.
+-- 
+2.43.0
+

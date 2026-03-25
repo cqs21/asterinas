@@ -1,0 +1,297 @@
+From 20cf8db9ae9a10cd3538397574236e96585576ce Mon Sep 17 00:00:00 2001
+From: Qingsong Chen <changxian.cqs@antgroup.com>
+Date: Tue, 24 Mar 2026 08:47:00 +0000
+Subject: [PATCH 15/97] Fix LTP epoll_wait06 with pipe2 and F_SETPIPE_SZ
+
+---
+ kernel/src/fs/file/inode_handle.rs            | 24 ++++++++---
+ kernel/src/fs/pipe/anon_pipe.rs               | 12 ++----
+ kernel/src/fs/pipe/common.rs                  | 29 +++++++++++++
+ kernel/src/syscall/fcntl.rs                   | 26 ++++++++++--
+ kernel/src/syscall/pipe.rs                    | 12 +++++-
+ .../src/syscall/ltp/debug/family-epoll-06.md  | 42 +++++++++++++++++++
+ .../src/syscall/ltp/testcases/all.txt         |  2 +-
+ 7 files changed, 126 insertions(+), 21 deletions(-)
+ create mode 100644 test/initramfs/src/syscall/ltp/debug/family-epoll-06.md
+
+diff --git a/kernel/src/fs/file/inode_handle.rs b/kernel/src/fs/file/inode_handle.rs
+index c2d8d477..d362c7af 100644
+--- a/kernel/src/fs/file/inode_handle.rs
++++ b/kernel/src/fs/file/inode_handle.rs
+@@ -89,6 +89,23 @@ impl InodeHandle {
+         self.rights
+     }
+ 
++    fn pipe_handle(&self) -> Option<&PipeHandle> {
++        self.file_io
++            .as_ref()
++            .and_then(|file_io| (file_io.as_ref() as &dyn Any).downcast_ref::<PipeHandle>())
++    }
++
++    pub(crate) fn set_pipe_capacity(&self, requested: usize) -> Result<usize> {
++        let pipe_handle = self.pipe_handle().ok_or_else(|| {
++            Error::with_message(
++                Errno::EINVAL,
++                "F_SETPIPE_SZ is only supported on pipe file handles",
++            )
++        })?;
++
++        pipe_handle.set_capacity(requested)
++    }
++
+     fn inode_io_and_is_offset_aware(&self) -> (&dyn InodeIo, bool) {
+         if let Some(ref file_io) = self.file_io {
+             let is_offset_aware = file_io.is_offset_aware();
+@@ -383,12 +400,7 @@ impl FileLike for InodeHandle {
+         // TODO: Pipes currently require a special status flag check because
+         // "packet" mode is not yet supported. Remove this check once "packet"
+         // mode is implemented.
+-        if self
+-            .file_io
+-            .as_ref()
+-            .and_then(|file_io| (file_io.as_ref() as &dyn Any).downcast_ref::<PipeHandle>())
+-            .is_some()
+-        {
++        if self.pipe_handle().is_some() {
+             crate::fs::pipe::check_status_flags(new_status_flags)?;
+         }
+ 
+diff --git a/kernel/src/fs/pipe/anon_pipe.rs b/kernel/src/fs/pipe/anon_pipe.rs
+index 9fe984aa..8907c410 100644
+--- a/kernel/src/fs/pipe/anon_pipe.rs
++++ b/kernel/src/fs/pipe/anon_pipe.rs
+@@ -19,17 +19,13 @@ use crate::{
+ };
+ 
+ /// Creates a pair of connected pipe file handles with the default capacity.
+-pub fn new_file_pair() -> Result<(Arc<InodeHandle>, Arc<InodeHandle>)> {
++pub fn new_file_pair(status_flags: StatusFlags) -> Result<(Arc<InodeHandle>, Arc<InodeHandle>)> {
+     let pipe_inode = Arc::new(AnonPipeInode::new());
+     let path = PipeFs::new_path(pipe_inode);
+ 
+-    let reader = InodeHandle::new_unchecked_access(
+-        path.clone(),
+-        AccessMode::O_RDONLY,
+-        StatusFlags::empty(),
+-    )?;
+-    let writer =
+-        InodeHandle::new_unchecked_access(path, AccessMode::O_WRONLY, StatusFlags::empty())?;
++    let reader =
++        InodeHandle::new_unchecked_access(path.clone(), AccessMode::O_RDONLY, status_flags)?;
++    let writer = InodeHandle::new_unchecked_access(path, AccessMode::O_WRONLY, status_flags)?;
+ 
+     Ok((Arc::new(reader), Arc::new(writer)))
+ }
+diff --git a/kernel/src/fs/pipe/common.rs b/kernel/src/fs/pipe/common.rs
+index 76884822..f484265e 100644
+--- a/kernel/src/fs/pipe/common.rs
++++ b/kernel/src/fs/pipe/common.rs
+@@ -53,6 +53,10 @@ impl PipeHandle {
+ 
+         self.inner.writer.try_write(reader)
+     }
++
++    pub(crate) fn set_capacity(&self, requested: usize) -> Result<usize> {
++        self.inner.set_capacity(requested)
++    }
+ }
+ 
+ impl Pollable for PipeHandle {
+@@ -306,6 +310,26 @@ impl PipeObj {
+             num_writer: AtomicUsize::new(0),
+         })
+     }
++
++    fn set_capacity(&self, requested: usize) -> Result<usize> {
++        let capacity = normalize_pipe_capacity(requested);
++
++        let mut producer = self.writer.producer.lock();
++        let mut consumer = self.reader.consumer.lock();
++
++        if !producer.is_empty() || !consumer.is_empty() {
++            return_errno_with_message!(Errno::EBUSY, "resizing a non-empty pipe is not supported");
++        }
++
++        let (new_producer, new_consumer) = RingBuffer::new(capacity).split();
++        *producer = new_producer;
++        *consumer = new_consumer;
++
++        self.reader.state.this_end().cloned_pollee().invalidate();
++        self.writer.state.this_end().cloned_pollee().invalidate();
++
++        Ok(capacity)
++    }
+ }
+ 
+ #[derive(Default)]
+@@ -354,6 +378,7 @@ fn new_pair() -> (PipeReader, PipeWriter) {
+ }
+ 
+ fn new_pair_with_capacity(capacity: usize) -> (PipeReader, PipeWriter) {
++    let capacity = normalize_pipe_capacity(capacity);
+     let (producer, consumer) = RingBuffer::new(capacity).split();
+     let (producer_state, consumer_state) =
+         Endpoint::new_pair(EndpointState::default(), EndpointState::default());
+@@ -364,6 +389,10 @@ fn new_pair_with_capacity(capacity: usize) -> (PipeReader, PipeWriter) {
+     )
+ }
+ 
++fn normalize_pipe_capacity(requested: usize) -> usize {
++    requested.max(PIPE_BUF).next_power_of_two()
++}
++
+ struct PipeReader {
+     consumer: Mutex<RbConsumer<u8>>,
+     state: Endpoint<EndpointState>,
+diff --git a/kernel/src/syscall/fcntl.rs b/kernel/src/syscall/fcntl.rs
+index 688397ac..60b04fcd 100644
+--- a/kernel/src/syscall/fcntl.rs
++++ b/kernel/src/syscall/fcntl.rs
+@@ -34,6 +34,7 @@ pub fn sys_fcntl(fd: FileDesc, cmd: i32, arg: u64, ctx: &Context) -> Result<Sysc
+         }),
+         FcntlCmd::F_GETOWN => handle_getown(fd, ctx),
+         FcntlCmd::F_SETOWN => handle_setown(fd, arg, ctx),
++        FcntlCmd::F_SETPIPE_SZ => handle_setpipe_sz(fd, arg, ctx),
+         FcntlCmd::F_ADD_SEALS => handle_addseal(fd, arg, ctx),
+         FcntlCmd::F_GET_SEALS => handle_getseal(fd, ctx),
+     }
+@@ -54,10 +55,12 @@ fn handle_dupfd(fd: FileDesc, arg: u64, flags: FdFlags, ctx: &Context) -> Result
+     }
+ 
+     let file_table = ctx.thread_local.borrow_file_table();
+-    let new_fd = file_table
+-        .unwrap()
+-        .write()
+-        .dup_ceil_with_limit(fd, minimum_fd as FileDesc, max_fd_exclusive, flags)?;
++    let new_fd = file_table.unwrap().write().dup_ceil_with_limit(
++        fd,
++        minimum_fd as FileDesc,
++        max_fd_exclusive,
++        flags,
++    )?;
+     Ok(SyscallReturn::Return(new_fd as _))
+ }
+ 
+@@ -174,6 +177,20 @@ fn handle_setown(fd: FileDesc, arg: u64, ctx: &Context) -> Result<SyscallReturn>
+     Ok(SyscallReturn::Return(0))
+ }
+ 
++fn handle_setpipe_sz(fd: FileDesc, arg: u64, ctx: &Context) -> Result<SyscallReturn> {
++    let requested_size = usize::try_from(arg)
++        .map_err(|_| Error::with_message(Errno::EINVAL, "invalid pipe size"))?;
++    if requested_size == 0 {
++        return_errno_with_message!(Errno::EINVAL, "pipe size must be positive");
++    }
++
++    let mut file_table = ctx.thread_local.borrow_file_table_mut();
++    let file = get_file_fast!(&mut file_table, fd);
++    let inode_handle = file.as_inode_handle_or_err()?;
++    let actual_size = inode_handle.set_pipe_capacity(requested_size)?;
++    Ok(SyscallReturn::Return(actual_size as _))
++}
++
+ fn handle_addseal(fd: FileDesc, arg: u64, ctx: &Context) -> Result<SyscallReturn> {
+     let new_seals = FileSeals::from_bits(arg as u32)
+         .ok_or_else(|| Error::with_message(Errno::EINVAL, "invalid seals"))?;
+@@ -210,6 +227,7 @@ enum FcntlCmd {
+     F_SETOWN = 8,
+     F_GETOWN = 9,
+     F_DUPFD_CLOEXEC = 1030,
++    F_SETPIPE_SZ = 1031,
+     F_ADD_SEALS = 1033,
+     F_GET_SEALS = 1034,
+ }
+diff --git a/kernel/src/syscall/pipe.rs b/kernel/src/syscall/pipe.rs
+index c7950b05..043efa61 100644
+--- a/kernel/src/syscall/pipe.rs
++++ b/kernel/src/syscall/pipe.rs
+@@ -6,7 +6,7 @@ use super::SyscallReturn;
+ use crate::{
+     fs::{
+         file::{
+-            CreationFlags,
++            CreationFlags, StatusFlags,
+             file_table::{FdFlags, FileDesc},
+         },
+         pipe,
+@@ -17,7 +17,15 @@ use crate::{
+ pub fn sys_pipe2(fds: Vaddr, flags: u32, ctx: &Context) -> Result<SyscallReturn> {
+     debug!("flags: {:?}", flags);
+ 
+-    let (pipe_reader, pipe_writer) = pipe::new_file_pair()?;
++    let allowed_flags = CreationFlags::O_CLOEXEC.bits()
++        | StatusFlags::O_NONBLOCK.bits()
++        | StatusFlags::O_DIRECT.bits();
++    if flags & !allowed_flags != 0 {
++        return_errno_with_message!(Errno::EINVAL, "invalid pipe2 flags");
++    }
++
++    let status_flags = StatusFlags::from_bits_truncate(flags);
++    let (pipe_reader, pipe_writer) = pipe::new_file_pair(status_flags)?;
+ 
+     let fd_flags = if CreationFlags::from_bits_truncate(flags).contains(CreationFlags::O_CLOEXEC) {
+         FdFlags::CLOEXEC
+diff --git a/test/initramfs/src/syscall/ltp/debug/family-epoll-06.md b/test/initramfs/src/syscall/ltp/debug/family-epoll-06.md
+new file mode 100644
+index 00000000..3201a3e5
+--- /dev/null
++++ b/test/initramfs/src/syscall/ltp/debug/family-epoll-06.md
+@@ -0,0 +1,42 @@
++# `epoll_wait06`
++
++## Goal
++
++Enable `epoll_wait06` in Phase 3 and make it pass on `/tmp`.
++This testcase verifies EPOLLET behavior on non-blocking pipes after the pipe
++is intentionally resized with `fcntl(F_SETPIPE_SZ, ...)`.
++
++## Root cause
++
++Two kernel gaps blocked this testcase:
++
++1. `fcntl(F_SETPIPE_SZ)` was not implemented, so testcase setup failed with
++   `EINVAL`.
++2. `pipe2(O_NONBLOCK)` did not propagate `O_NONBLOCK` into pipe file status
++   flags. After `F_SETPIPE_SZ` started working, the second `write()` on a full
++   pipe blocked instead of returning `EAGAIN`, causing LTP timeout.
++
++## Solution
++
++- Implement `F_SETPIPE_SZ` in `sys_fcntl` and wire it to pipe handles.
++- Add pipe-capacity resizing support for empty pipes.
++- Parse `pipe2` flags correctly and pass pipe status flags into anonymous pipe
++  handles so `O_NONBLOCK` is honored.
++- Re-enable `epoll_wait06` in `testcases/all.txt`.
++
++## Validation
++
++```bash
++make run_kernel AUTO_TEST=syscall SYSCALL_TEST_SUITE=ltp LTP_CASES=epoll_wait06
++```
++
++Observed result: `epoll_wait06` reported `PASS` on `/tmp` with all 9 checks
++(`write`/`read` `EAGAIN`, EPOLLIN/EPOLLOUT edge-trigger expectations) passing.
++
++## Impact / Residual risk
++
++- This change unlocks both the testcase and real user-visible semantics for
++  `pipe2(O_NONBLOCK)` and `F_SETPIPE_SZ`.
++- Current pipe resizing supports empty-pipe updates, which is sufficient for
++  this testcase; more complete Linux parity for resizing non-empty pipes can be
++  handled in follow-up work if future LTP coverage requires it.
+diff --git a/test/initramfs/src/syscall/ltp/testcases/all.txt b/test/initramfs/src/syscall/ltp/testcases/all.txt
+index 046ebbfe..b6603e70 100644
+--- a/test/initramfs/src/syscall/ltp/testcases/all.txt
++++ b/test/initramfs/src/syscall/ltp/testcases/all.txt
+@@ -186,7 +186,7 @@ epoll_wait02
+ epoll_wait03
+ epoll_wait04
+ epoll_wait05
+-# epoll_wait06
++epoll_wait06
+ epoll_wait07
+ epoll_pwait01
+ epoll_pwait02
+-- 
+2.43.0
+

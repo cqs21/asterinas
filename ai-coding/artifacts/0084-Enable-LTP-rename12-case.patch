@@ -1,0 +1,252 @@
+From 1aaed9adf0734db3fa9a641ced5d024f516a2e74 Mon Sep 17 00:00:00 2001
+From: Qingsong Chen <changxian.cqs@antgroup.com>
+Date: Wed, 25 Mar 2026 06:40:58 +0000
+Subject: [PATCH 84/97] Enable LTP rename12 case
+
+---
+ kernel/src/fs/vfs/path/dentry.rs              | 123 ++++++++++++++----
+ .../src/syscall/ltp/debug/family-rename-12.md |  28 ++++
+ .../src/syscall/ltp/testcases/all.txt         |   2 +-
+ 3 files changed, 127 insertions(+), 26 deletions(-)
+ create mode 100644 test/initramfs/src/syscall/ltp/debug/family-rename-12.md
+
+diff --git a/kernel/src/fs/vfs/path/dentry.rs b/kernel/src/fs/vfs/path/dentry.rs
+index b74cc3dc..6a7f801b 100644
+--- a/kernel/src/fs/vfs/path/dentry.rs
++++ b/kernel/src/fs/vfs/path/dentry.rs
+@@ -6,7 +6,7 @@ use core::{
+ };
+ 
+ use hashbrown::HashMap;
+-use ostd::sync::RwMutexWriteGuard;
++use ostd::{sync::RwMutexWriteGuard, task::Task};
+ 
+ use super::{is_dot, is_dot_or_dotdot, is_dotdot};
+ use crate::{
+@@ -19,6 +19,7 @@ use crate::{
+         },
+     },
+     prelude::*,
++    process::{credentials::capabilities::CapSet, posix_thread::AsPosixThread},
+ };
+ 
+ /// A `Dentry` represents a cached filesystem node in the VFS tree.
+@@ -356,24 +357,17 @@ impl DirDentry<'_> {
+ 
+         let children = self.children.upread();
+         children.check_mountpoint(name)?;
+-
+-        let mut children = children.upgrade();
+         let dir_inode = &self.inode;
++        let child_inode = lookup_existing_child_inode(&children, dir_inode, name)?;
++        check_sticky_directory_permission(dir_inode, &child_inode)?;
+ 
+-        let child_inode = if let Some(cached_dentry) = children.entry(name)? {
+-            let child_inode = cached_dentry.inode().clone();
+-
++        let mut children = children.upgrade();
++        if children.entry(name)?.is_some() {
+             dir_inode.unlink(name)?;
+             children.delete(name);
+-
+-            child_inode
+         } else {
+-            // Cache miss: need to lookup from the underlying filesystem
+-            let child_inode = dir_inode.lookup(name)?;
+             dir_inode.unlink(name)?;
+-
+-            child_inode
+-        };
++        }
+ 
+         drop(children);
+ 
+@@ -409,24 +403,17 @@ impl DirDentry<'_> {
+ 
+         let children = self.children.upread();
+         children.check_mountpoint(name)?;
+-
+-        let mut children = children.upgrade();
+         let dir_inode = &self.inode;
++        let child_inode = lookup_existing_child_inode(&children, dir_inode, name)?;
++        check_sticky_directory_permission(dir_inode, &child_inode)?;
+ 
+-        let child_inode = if let Some(cached_dentry) = children.entry(name)? {
+-            let child_inode = cached_dentry.inode().clone();
+-
++        let mut children = children.upgrade();
++        if children.entry(name)?.is_some() {
+             dir_inode.rmdir(name)?;
+             children.delete(name);
+-
+-            child_inode
+         } else {
+-            // Cache miss: need to lookup from the underlying filesystem
+-            let child_inode = dir_inode.lookup(name)?;
+             dir_inode.rmdir(name)?;
+-
+-            child_inode
+-        };
++        }
+ 
+         drop(children);
+ 
+@@ -480,7 +467,15 @@ impl DirDentry<'_> {
+ 
+             let children = old_dir.children.upread();
+             let old_dentry = children.check_mountpoint_then_find(old_name)?;
++            let old_inode =
++                child_inode_from_optional_dentry(old_dentry.as_ref(), old_dir_inode, old_name)?;
++            check_sticky_directory_permission(old_dir_inode, &old_inode)?;
+             children.check_mountpoint(new_name)?;
++            if let Some(replaced_inode) =
++                lookup_optional_child_inode(&children, old_dir_inode, new_name)?
++            {
++                check_sticky_directory_permission(old_dir_inode, &replaced_inode)?;
++            }
+ 
+             old_dir_inode.rename(old_name, old_dir_inode, new_name)?;
+ 
+@@ -505,7 +500,15 @@ impl DirDentry<'_> {
+             let (mut self_children, mut new_dir_children) =
+                 write_lock_children_on_two_dentries(&old_dir, &new_dir);
+             let old_dentry = self_children.check_mountpoint_then_find(old_name)?;
++            let old_inode =
++                child_inode_from_optional_dentry(old_dentry.as_ref(), old_dir_inode, old_name)?;
++            check_sticky_directory_permission(old_dir_inode, &old_inode)?;
+             new_dir_children.check_mountpoint(new_name)?;
++            if let Some(replaced_inode) =
++                lookup_optional_child_inode(&new_dir_children, new_dir_inode, new_name)?
++            {
++                check_sticky_directory_permission(new_dir_inode, &replaced_inode)?;
++            }
+ 
+             old_dir_inode.rename(old_name, new_dir_inode, new_name)?;
+             match old_dentry.as_ref() {
+@@ -528,6 +531,76 @@ impl DirDentry<'_> {
+     }
+ }
+ 
++fn check_sticky_directory_permission(
++    dir_inode: &Arc<dyn Inode>,
++    child_inode: &Arc<dyn Inode>,
++) -> Result<()> {
++    if !dir_inode.metadata().mode.has_sticky_bit() {
++        return Ok(());
++    }
++
++    let Some(task) = Task::current() else {
++        return Ok(());
++    };
++    let Some(thread) = task.as_posix_thread() else {
++        return Ok(());
++    };
++
++    let credentials = thread.credentials();
++    if credentials.effective_capset().contains(CapSet::FOWNER) {
++        return Ok(());
++    }
++
++    let fsuid = credentials.fsuid();
++    let dir_uid = dir_inode.metadata().uid;
++    let child_uid = child_inode.metadata().uid;
++    if fsuid == dir_uid || fsuid == child_uid {
++        return Ok(());
++    }
++
++    return_errno_with_message!(Errno::EPERM, "sticky directory rename/delete denied");
++}
++
++fn lookup_existing_child_inode(
++    children: &DentryChildren,
++    dir_inode: &Arc<dyn Inode>,
++    name: &str,
++) -> Result<Arc<dyn Inode>> {
++    child_inode_from_optional_dentry(
++        children.check_mountpoint_then_find(name)?.as_ref(),
++        dir_inode,
++        name,
++    )
++}
++
++fn lookup_optional_child_inode(
++    children: &DentryChildren,
++    dir_inode: &Arc<dyn Inode>,
++    name: &str,
++) -> Result<Option<Arc<dyn Inode>>> {
++    match children.entry(name) {
++        Ok(Some(dentry)) => Ok(Some(dentry.inode().clone())),
++        Ok(None) => match dir_inode.lookup(name) {
++            Ok(inode) => Ok(Some(inode)),
++            Err(err) if err.error() == Errno::ENOENT => Ok(None),
++            Err(err) => Err(err),
++        },
++        Err(err) if err.error() == Errno::ENOENT => Ok(None),
++        Err(err) => Err(err),
++    }
++}
++
++fn child_inode_from_optional_dentry(
++    dentry: Option<&Arc<Dentry>>,
++    dir_inode: &Arc<dyn Inode>,
++    name: &str,
++) -> Result<Arc<dyn Inode>> {
++    match dentry {
++        Some(dentry) => Ok(dentry.inode().clone()),
++        None => dir_inode.lookup(name),
++    }
++}
++
+ impl Debug for Dentry {
+     fn fmt(&self, f: &mut core::fmt::Formatter) -> core::fmt::Result {
+         f.debug_struct("Dentry")
+diff --git a/test/initramfs/src/syscall/ltp/debug/family-rename-12.md b/test/initramfs/src/syscall/ltp/debug/family-rename-12.md
+new file mode 100644
+index 00000000..67c3457a
+--- /dev/null
++++ b/test/initramfs/src/syscall/ltp/debug/family-rename-12.md
+@@ -0,0 +1,28 @@
++# rename12
++
++## Goal
++
++Enable `rename12` on `/tmp`.
++
++## Failure
++
++`rename12` creates a sticky directory, switches to `nobody`, and then tries to rename a file
++owned by another user. Linux should reject that rename with `EPERM` or `EACCES`, but Asterinas
++incorrectly allowed it on `/tmp`.
++
++## Root Cause
++
++The VFS dentry layer did not enforce sticky-directory ownership rules for delete-like operations.
++`rename()` could remove or replace entries in a sticky directory even when the caller owned
++neither the directory nor the victim inode and lacked `CAP_FOWNER`.
++
++## Fix
++
++- Added sticky-directory permission checks in `DirDentry` for `rename`, `unlink`, and `rmdir`.
++- Kept the checks aligned with Linux ownership rules based on `fsuid`, directory owner, victim
++  owner, and `CAP_FOWNER`.
++- Enabled `rename12` in `testcases/all.txt`.
++
++## Validation
++
++- `make run_kernel AUTO_TEST=syscall SYSCALL_TEST_SUITE=ltp LTP_CASES=rename12`
+diff --git a/test/initramfs/src/syscall/ltp/testcases/all.txt b/test/initramfs/src/syscall/ltp/testcases/all.txt
+index 37a58fc4..f4b3ecdc 100644
+--- a/test/initramfs/src/syscall/ltp/testcases/all.txt
++++ b/test/initramfs/src/syscall/ltp/testcases/all.txt
+@@ -1237,7 +1237,7 @@ rename08
+ rename09
+ rename10
+ # rename11
+-# rename12
++rename12
+ # rename13
+ rename14
+ # rename15
+-- 
+2.43.0
+

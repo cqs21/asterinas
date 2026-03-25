@@ -1,0 +1,57 @@
+From d3bac3eb59577660be4ced5fca23a22ef1d6784a Mon Sep 17 00:00:00 2001
+From: Qingsong Chen <changxian.cqs@antgroup.com>
+Date: Wed, 25 Mar 2026 06:43:01 +0000
+Subject: [PATCH 85/97] Enable LTP rename13 case
+
+---
+ .../src/syscall/ltp/debug/family-rename-13.md | 24 +++++++++++++++++++
+ .../src/syscall/ltp/testcases/all.txt         |  2 +-
+ 2 files changed, 25 insertions(+), 1 deletion(-)
+ create mode 100644 test/initramfs/src/syscall/ltp/debug/family-rename-13.md
+
+diff --git a/test/initramfs/src/syscall/ltp/debug/family-rename-13.md b/test/initramfs/src/syscall/ltp/debug/family-rename-13.md
+new file mode 100644
+index 00000000..990ff57f
+--- /dev/null
++++ b/test/initramfs/src/syscall/ltp/debug/family-rename-13.md
+@@ -0,0 +1,24 @@
++# rename13
++
++## Goal
++
++Enable `rename13` on `/tmp`.
++
++## Failure
++
++No new kernel failure was reproduced on `/tmp`. The testcase expects `rename(path, path)` to
++behave as a no-op, and Asterinas already matches that behavior.
++
++## Root Cause
++
++The case had remained disabled in `all.txt`, but current rename handling already preserves inode
++identity and returns success for self-renames.
++
++## Fix
++
++- Enabled `rename13` in `testcases/all.txt`.
++- No additional kernel code changes were required.
++
++## Validation
++
++- `make run_kernel AUTO_TEST=syscall SYSCALL_TEST_SUITE=ltp LTP_CASES=rename13`
+diff --git a/test/initramfs/src/syscall/ltp/testcases/all.txt b/test/initramfs/src/syscall/ltp/testcases/all.txt
+index f4b3ecdc..3c2eca65 100644
+--- a/test/initramfs/src/syscall/ltp/testcases/all.txt
++++ b/test/initramfs/src/syscall/ltp/testcases/all.txt
+@@ -1238,7 +1238,7 @@ rename09
+ rename10
+ # rename11
+ rename12
+-# rename13
++rename13
+ rename14
+ # rename15
+ 
+-- 
+2.43.0
+

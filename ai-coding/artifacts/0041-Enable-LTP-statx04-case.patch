@@ -1,0 +1,369 @@
+From 9de081410c1828aa7399d52b5adfa85dafda721c Mon Sep 17 00:00:00 2001
+From: Qingsong Chen <changxian.cqs@antgroup.com>
+Date: Tue, 24 Mar 2026 17:20:30 +0000
+Subject: [PATCH 41/97] Enable LTP statx04 case
+
+---
+ kernel/src/fs/file/inode_handle.rs            | 42 ++++++++++++-
+ kernel/src/syscall/statx.rs                   | 57 ++++++++++++++---
+ test/initramfs/Makefile                       |  9 ++-
+ .../src/syscall/ltp/debug/family-statx-04.md  | 63 +++++++++++++++++++
+ .../initramfs/src/syscall/ltp/run_ltp_test.sh | 18 ++++++
+ .../src/syscall/ltp/testcases/all.txt         |  2 +-
+ tools/qemu_args.sh                            |  3 +
+ 7 files changed, 182 insertions(+), 12 deletions(-)
+ create mode 100644 test/initramfs/src/syscall/ltp/debug/family-statx-04.md
+
+diff --git a/kernel/src/fs/file/inode_handle.rs b/kernel/src/fs/file/inode_handle.rs
+index 0ae9a26b..a8dd7dc8 100644
+--- a/kernel/src/fs/file/inode_handle.rs
++++ b/kernel/src/fs/file/inode_handle.rs
+@@ -3,6 +3,7 @@
+ //! Opened Inode-backed File Handle
+ 
+ use core::{
++    ffi::c_long,
+     fmt::Display,
+     sync::atomic::{AtomicU64, Ordering},
+ };
+@@ -30,11 +31,21 @@ use crate::{
+         Process,
+         signal::{PollHandle, Pollable},
+     },
+-    util::ioctl::RawIoctl,
++    util::ioctl::{RawIoctl, dispatch_ioctl},
+ };
+ 
+ static NEXT_INODE_HANDLE_ID: AtomicU64 = AtomicU64::new(1);
+ 
++const FS_IOC_GETFLAGS_TMPFS_FLAGS: c_long = 0;
++
++mod ioctl_defs {
++    use core::ffi::c_long;
++
++    use crate::util::ioctl::{OutData, ioc};
++
++    pub(super) type GetFileFlags = ioc!(FS_IOC_GETFLAGS, b'f', 0x01, OutData<c_long>);
++}
++
+ pub struct InodeHandle {
+     owner_id: u64,
+     path: Path,
+@@ -96,6 +107,20 @@ impl InodeHandle {
+         self.owner_id
+     }
+ 
++    fn inode_file_flags(&self) -> Option<c_long> {
++        let fs_name = self.path.mount_node().fs().name();
++
++        match fs_name {
++            "tmpfs" => Some(FS_IOC_GETFLAGS_TMPFS_FLAGS),
++            "ext2" => self
++                .path
++                .inode()
++                .downcast_ref::<crate::fs::ext2::Inode>()
++                .map(|inode| inode.file_flags().bits() as c_long),
++            _ => None,
++        }
++    }
++
+     fn register_open_file_description(self) -> Self {
+         self.path
+             .inode()
+@@ -447,6 +472,8 @@ impl FileLike for InodeHandle {
+     }
+ 
+     fn ioctl(&self, raw_ioctl: RawIoctl) -> Result<i32> {
++        use ioctl_defs::*;
++
+         if self.rights.is_empty() {
+             return_errno_with_message!(Errno::EBADF, "the file is opened as a path");
+         }
+@@ -455,7 +482,18 @@ impl FileLike for InodeHandle {
+             return file_io.ioctl(raw_ioctl);
+         }
+ 
+-        return_errno_with_message!(Errno::ENOTTY, "ioctl is not supported");
++        dispatch_ioctl!(match raw_ioctl {
++            cmd @ GetFileFlags => {
++                let flags = self.inode_file_flags().ok_or(Error::with_message(
++                    Errno::ENOTTY,
++                    "the inode does not support file flags",
++                ))?;
++                cmd.write(&flags)?;
++            }
++            _ => return_errno_with_message!(Errno::ENOTTY, "ioctl is not supported"),
++        });
++
++        Ok(0)
+     }
+ 
+     fn mappable(&self) -> Result<Mappable> {
+diff --git a/kernel/src/syscall/statx.rs b/kernel/src/syscall/statx.rs
+index be5c3da5..507e28b2 100644
+--- a/kernel/src/syscall/statx.rs
++++ b/kernel/src/syscall/statx.rs
+@@ -15,6 +15,15 @@ use crate::{
+ };
+ 
+ const STATX_ATTR_MOUNT_ROOT: u64 = 0x0000_2000;
++const STATX_ATTR_COMPRESSED: u64 = 0x0000_0004;
++const STATX_ATTR_IMMUTABLE: u64 = 0x0000_0010;
++const STATX_ATTR_APPEND: u64 = 0x0000_0020;
++const STATX_ATTR_NODUMP: u64 = 0x0000_0040;
++
++const FS_COMPR_FL: u32 = 0x0000_0004;
++const FS_IMMUTABLE_FL: u32 = 0x0000_0010;
++const FS_APPEND_FL: u32 = 0x0000_0020;
++const FS_NODUMP_FL: u32 = 0x0000_0040;
+ 
+ pub fn sys_statx(
+     dirfd: FileDesc,
+@@ -133,13 +142,7 @@ impl Statx {
+         let (stx_rdev_major, stx_rdev_minor) =
+             device_id::decode_device_numbers(info.self_dev_id.map_or(0, |id| id.as_encoded_u64()));
+ 
+-        // TODO: Support more `stx_attributes` flags.
+-        let stx_attributes_mask = STATX_ATTR_MOUNT_ROOT;
+-
+-        let mut stx_attributes = 0;
+-        if path.is_mount_root() {
+-            stx_attributes |= STATX_ATTR_MOUNT_ROOT;
+-        }
++        let (stx_attributes, stx_attributes_mask) = statx_attributes(path);
+ 
+         let stx_mask = StatxMask::STATX_BASIC_STATS.bits()
+             | StatxMask::STATX_BTIME.bits()
+@@ -175,6 +178,46 @@ impl Statx {
+     }
+ }
+ 
++fn statx_attributes(path: &Path) -> (u64, u64) {
++    let mut attributes = 0;
++    let mut attributes_mask = STATX_ATTR_MOUNT_ROOT;
++
++    if path.is_mount_root() {
++        attributes |= STATX_ATTR_MOUNT_ROOT;
++    }
++
++    match path.fs().name() {
++        "tmpfs" | "ramfs" => {
++            attributes_mask |= STATX_ATTR_APPEND | STATX_ATTR_IMMUTABLE | STATX_ATTR_NODUMP;
++        }
++        "ext2" => {
++            attributes_mask |= STATX_ATTR_COMPRESSED
++                | STATX_ATTR_APPEND
++                | STATX_ATTR_IMMUTABLE
++                | STATX_ATTR_NODUMP;
++
++            if let Some(inode) = path.inode().downcast_ref::<crate::fs::ext2::Inode>() {
++                let flags = inode.file_flags().bits();
++                if flags & FS_COMPR_FL != 0 {
++                    attributes |= STATX_ATTR_COMPRESSED;
++                }
++                if flags & FS_IMMUTABLE_FL != 0 {
++                    attributes |= STATX_ATTR_IMMUTABLE;
++                }
++                if flags & FS_APPEND_FL != 0 {
++                    attributes |= STATX_ATTR_APPEND;
++                }
++                if flags & FS_NODUMP_FL != 0 {
++                    attributes |= STATX_ATTR_NODUMP;
++                }
++            }
++        }
++        _ => {}
++    }
++
++    (attributes, attributes_mask)
++}
++
+ /// Statx Timestamp (seconds and nanoseconds)
+ #[derive(Debug, Clone, Copy, Pod, Default)]
+ #[repr(C)]
+diff --git a/test/initramfs/Makefile b/test/initramfs/Makefile
+index dc86ab04..1ff4dccb 100644
+--- a/test/initramfs/Makefile
++++ b/test/initramfs/Makefile
+@@ -31,6 +31,7 @@ INITRAMFS_COMPRESSED := true
+ endif
+ EXT2_IMAGE := $(BUILD_DIR)/ext2.img
+ EXFAT_IMAGE := $(BUILD_DIR)/exfat.img
++SCRATCH_IMAGE := $(BUILD_DIR)/scratch.img
+ 
+ # Include benchmark, if BENCHMARK is set.
+ ifeq ($(BENCHMARK), none)
+@@ -56,11 +57,11 @@ all: build
+ 
+ .PHONY: build
+ ifeq ($(OSDK_TARGET_ARCH), loongarch64)
+-build: $(EXT2_IMAGE) $(EXFAT_IMAGE)
++build: $(EXT2_IMAGE) $(EXFAT_IMAGE) $(SCRATCH_IMAGE)
+ 	@echo "For loongarch, we generate a fake initramfs to successfully test or build."
+ 	@touch $(INITRAMFS_IMAGE)
+ else
+-build: $(INITRAMFS_IMAGE) $(EXT2_IMAGE) $(EXFAT_IMAGE)
++build: $(INITRAMFS_IMAGE) $(EXT2_IMAGE) $(EXFAT_IMAGE) $(SCRATCH_IMAGE)
+ endif
+ 
+ .PHONY: $(INITRAMFS_IMAGE)
+@@ -177,6 +178,10 @@ $(EXFAT_IMAGE):
+ 	@fallocate -l 64M $(EXFAT_IMAGE)
+ 	@mkfs.exfat $(EXFAT_IMAGE)
+ 
++$(SCRATCH_IMAGE):
++	@mkdir -p $(BUILD_DIR)
++	@fallocate -l 512M $(SCRATCH_IMAGE)
++
+ .PHONY: format
+ format:
+ 	@$(MAKE) --no-print-directory -C src/apps format
+diff --git a/test/initramfs/src/syscall/ltp/debug/family-statx-04.md b/test/initramfs/src/syscall/ltp/debug/family-statx-04.md
+new file mode 100644
+index 00000000..352a5b01
+--- /dev/null
++++ b/test/initramfs/src/syscall/ltp/debug/family-statx-04.md
+@@ -0,0 +1,63 @@
++# `statx04`
++
++## Goal
++
++Re-enable `statx04` in Phase 3 and make it pass on `/tmp`, then verify the
++same fix on `/ext2` and `/exfat`.
++
++## Root Cause
++
++This testcase had two independent blockers:
++
++1. LTP requested a free block device for `mount_device=1`, but the QEMU test
++   machine only exposed `/dev/vda` and `/dev/vdb`, both already mounted for
++   `/ext2` and `/exfat`. LTP therefore stopped early with `No free devices
++   found`.
++2. After a spare device was provided, the real kernel gap appeared:
++   `FS_IOC_GETFLAGS` returned `ENOTTY` on inode-backed files and directories,
++   and `statx()` only advertised `STATX_ATTR_MOUNT_ROOT`. Linux exposes inode
++   flag support for tmpfs here, so LTP expected `STATX_ATTR_APPEND`,
++   `STATX_ATTR_IMMUTABLE`, and `STATX_ATTR_NODUMP` in
++   `stx_attributes_mask`.
++
++## Solution
++
++- Added a third unmounted scratch disk image to the initramfs/QEMU test setup.
++- Taught the LTP wrapper to auto-export the first unused `/dev/vd*` as
++  `LTP_DEV`, so `mount_device=1` tests can run without loop-device support.
++- Implemented `FS_IOC_GETFLAGS` for inode-backed files:
++  returning real ext2 inode flags and a zero-valued tmpfs flag set.
++- Extended `statx()` attribute reporting:
++  tmpfs/ramfs now advertise append/immutable/nodump support, and ext2 maps its
++  inode flags to the corresponding `statx` attribute bits.
++- Re-enabled `statx04` in `testcases/all.txt`.
++
++## Validation
++
++```bash
++make run_kernel AUTO_TEST=syscall SYSCALL_TEST_SUITE=ltp \
++  LTP_CASES=statx04
++
++make run_kernel AUTO_TEST=syscall SYSCALL_TEST_SUITE=ltp \
++  SYSCALL_TEST_WORKDIR=/ext2 \
++  LTP_CASES=statx04
++
++make run_kernel AUTO_TEST=syscall SYSCALL_TEST_SUITE=ltp \
++  SYSCALL_TEST_WORKDIR=/exfat \
++  LTP_CASES=statx04
++```
++
++Observed results:
++
++- `/tmp`: `PASS`
++- `/ext2`: `PASS`
++- `/exfat`: `PASS`
++
++## Impact / Residual Risk
++
++- This fixes the immediate `statx04` compatibility gap and also unblocks later
++  LTP cases that need an unused block device through `LTP_DEV`.
++- Tmpfs currently advertises inode-flag support through `FS_IOC_GETFLAGS` and
++  `statx()` but still reports all flags as clear. If future tests start setting
++  or mutating these flags, Asterinas will need `FS_IOC_SETFLAGS` and persistent
++  inode-flag storage for non-ext2 filesystems.
+diff --git a/test/initramfs/src/syscall/ltp/run_ltp_test.sh b/test/initramfs/src/syscall/ltp/run_ltp_test.sh
+index a633a6d8..164176bb 100755
+--- a/test/initramfs/src/syscall/ltp/run_ltp_test.sh
++++ b/test/initramfs/src/syscall/ltp/run_ltp_test.sh
+@@ -20,6 +20,18 @@ CASE_LOG_DIR="$RUN_ARTIFACT_DIR/ltp_case_logs"
+ RESULT=0
+ RUNLTP_EXIT_CODE=0
+ 
++find_unused_block_device() {
++    for candidate in /dev/vd[c-z] /dev/vd[a-z][a-z]; do
++        [ -b "$candidate" ] || continue
++        if ! awk -v dev="$candidate" '$1 == dev { found = 1; exit } END { exit found ? 0 : 1 }' /proc/mounts; then
++            echo "$candidate"
++            return 0
++        fi
++    done
++
++    return 1
++}
++
+ cleanup_workdir() {
+     mkdir -p "$TEST_TMP_DIR"
+     # Keep artifacts under `.ltp_logs` and clear everything else for isolation.
+@@ -71,6 +83,12 @@ if [ -z "${KCONFIG_PATH:-}" ] && [ -f "$LTP_KCONFIG_PATH" ]; then
+     export KCONFIG_PATH="$LTP_KCONFIG_PATH"
+ fi
+ 
++if [ -z "${LTP_DEV:-}" ]; then
++    if LTP_DEV=$(find_unused_block_device); then
++        export LTP_DEV
++    fi
++fi
++
+ rm -f \
+     "$LOG_FILE" \
+     "$SUMMARY_FILE" \
+diff --git a/test/initramfs/src/syscall/ltp/testcases/all.txt b/test/initramfs/src/syscall/ltp/testcases/all.txt
+index 5b6873fe..695097f6 100644
+--- a/test/initramfs/src/syscall/ltp/testcases/all.txt
++++ b/test/initramfs/src/syscall/ltp/testcases/all.txt
+@@ -1871,7 +1871,7 @@ futex_wait_bitset01
+ statx01
+ statx02
+ statx03
+-# statx04
++statx04
+ # statx05
+ # statx06
+ # statx07
+diff --git a/tools/qemu_args.sh b/tools/qemu_args.sh
+index 36c34fc5..dde857fb 100755
+--- a/tools/qemu_args.sh
++++ b/tools/qemu_args.sh
+@@ -98,6 +98,7 @@ COMMON_QEMU_ARGS="\
+     -device isa-debug-exit,iobase=0xf4,iosize=0x04 \
+     -drive if=none,format=raw,id=x0,file=./test/initramfs/build/ext2.img \
+     -drive if=none,format=raw,id=x1,file=./test/initramfs/build/exfat.img \
++    -drive if=none,format=raw,id=x2,file=./test/initramfs/build/scratch.img \
+ "
+ 
+ if [ "$1" = "iommu" ]; then
+@@ -118,6 +119,7 @@ QEMU_ARGS="\
+     -machine q35,kernel-irqchip=split \
+     -device virtio-blk-pci,bus=pcie.0,addr=0x6,drive=x0,serial=vext2,disable-legacy=on,disable-modern=off,queue-size=64,num-queues=1,request-merging=off,backend_defaults=off,discard=off,write-zeroes=off,event_idx=off,indirect_desc=off,queue_reset=off$IOMMU_DEV_EXTRA \
+     -device virtio-blk-pci,bus=pcie.0,addr=0x7,drive=x1,serial=vexfat,disable-legacy=on,disable-modern=off,queue-size=64,num-queues=1,request-merging=off,backend_defaults=off,discard=off,write-zeroes=off,event_idx=off,indirect_desc=off,queue_reset=off$IOMMU_DEV_EXTRA \
++    -device virtio-blk-pci,bus=pcie.0,addr=0x8,drive=x2,serial=vscratch,disable-legacy=on,disable-modern=off,queue-size=64,num-queues=1,request-merging=off,backend_defaults=off,discard=off,write-zeroes=off,event_idx=off,indirect_desc=off,queue_reset=off$IOMMU_DEV_EXTRA \
+     -device virtio-net-pci,netdev=net01,disable-legacy=on,disable-modern=off$VIRTIO_NET_FEATURES$IOMMU_DEV_EXTRA \
+     -device virtio-serial-pci,disable-legacy=on,disable-modern=off$IOMMU_DEV_EXTRA \
+     $CONSOLE_ARGS \
+@@ -131,6 +133,7 @@ MICROVM_QEMU_ARGS="\
+     -no-user-config \
+     -device virtio-blk-device,drive=x0,serial=vext2 \
+     -device virtio-blk-device,drive=x1,serial=vexfat \
++    -device virtio-blk-device,drive=x2,serial=vscratch \
+     -device virtio-keyboard-device \
+     -device virtio-net-device,netdev=net01 \
+     -device virtio-serial-device \
+-- 
+2.43.0
+

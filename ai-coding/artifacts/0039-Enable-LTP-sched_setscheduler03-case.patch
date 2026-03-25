@@ -1,0 +1,108 @@
+From 1d8159a639040903719470672c0d824e60e3dc4a Mon Sep 17 00:00:00 2001
+From: Qingsong Chen <changxian.cqs@antgroup.com>
+Date: Tue, 24 Mar 2026 16:58:49 +0000
+Subject: [PATCH 39/97] Enable LTP sched_setscheduler03 case
+
+---
+ kernel/src/syscall/sched_getattr.rs           |  4 +-
+ .../src/syscall/ltp/debug/family-sched-05.md  | 52 +++++++++++++++++++
+ .../src/syscall/ltp/testcases/all.txt         |  2 +-
+ 3 files changed, 55 insertions(+), 3 deletions(-)
+ create mode 100644 test/initramfs/src/syscall/ltp/debug/family-sched-05.md
+
+diff --git a/kernel/src/syscall/sched_getattr.rs b/kernel/src/syscall/sched_getattr.rs
+index 30c5d63a..414a4679 100644
+--- a/kernel/src/syscall/sched_getattr.rs
++++ b/kernel/src/syscall/sched_getattr.rs
+@@ -17,7 +17,7 @@ use crate::{
+ pub(super) const SCHED_NORMAL: u32 = 0;
+ pub(super) const SCHED_FIFO: u32 = 1;
+ pub(super) const SCHED_RR: u32 = 2;
+-// pub(super) const SCHED_BATCH: u32 = 3; // Not supported.
++pub(super) const SCHED_BATCH: u32 = 3;
+ // SCHED_ISO: Reserved but not implemented yet on Linux.
+ pub(super) const SCHED_IDLE: u32 = 5;
+ // pub(super) const SCHED_DEADLINE: u32 = 6; // Not supported.
+@@ -119,7 +119,7 @@ impl TryFrom<LinuxSchedAttr> for SchedPolicy {
+                 return_errno_with_message!(Errno::EINVAL, "invalid scheduling priority")
+             }
+ 
+-            SCHED_NORMAL => SchedPolicy::Fair(Nice::new(
++            SCHED_NORMAL | SCHED_BATCH => SchedPolicy::Fair(Nice::new(
+                 i8::try_from(value.sched_nice)
+                     .ok()
+                     .and_then(|n| n.try_into().ok())
+diff --git a/test/initramfs/src/syscall/ltp/debug/family-sched-05.md b/test/initramfs/src/syscall/ltp/debug/family-sched-05.md
+new file mode 100644
+index 00000000..71a9eb17
+--- /dev/null
++++ b/test/initramfs/src/syscall/ltp/debug/family-sched-05.md
+@@ -0,0 +1,52 @@
++# `sched_setscheduler03`
++
++## Goal
++
++Re-enable `sched_setscheduler03` in Phase 3 and verify that it passes on
++`/tmp`, `/ext2`, and `/exfat`.
++
++## Root Cause
++
++The testcase checks that an unprivileged task can still switch among
++non-real-time scheduling policies when the requested priority is `0`, even
++after `RLIMIT_NICE` is tightened. Asterinas already handled `SCHED_OTHER` and
++`SCHED_IDLE` correctly in this path, but it rejected `SCHED_BATCH` with
++`EINVAL` because the legacy scheduler-policy decoder did not recognize policy
++value `3`.
++
++## Solution
++
++- Added user-visible `SCHED_BATCH` decoding in the legacy scheduling attribute
++  conversion path.
++- Mapped `SCHED_BATCH` to the same internal fair-scheduler policy used for
++  non-real-time tasks.
++- Re-enabled `sched_setscheduler03` in `testcases/all.txt`.
++
++## Validation
++
++```bash
++make run_kernel AUTO_TEST=syscall SYSCALL_TEST_SUITE=ltp \
++  LTP_CASES=sched_setscheduler03
++
++make run_kernel AUTO_TEST=syscall SYSCALL_TEST_SUITE=ltp \
++  SYSCALL_TEST_WORKDIR=/ext2 \
++  LTP_CASES=sched_setscheduler03
++
++make run_kernel AUTO_TEST=syscall SYSCALL_TEST_SUITE=ltp \
++  SYSCALL_TEST_WORKDIR=/exfat \
++  LTP_CASES=sched_setscheduler03
++```
++
++Observed result on all three workdirs:
++
++- `sched_setscheduler03` finished with `PASS`
++- libc and raw-syscall variants both accepted `SCHED_OTHER`, `SCHED_BATCH`,
++  and `SCHED_IDLE` after privilege drop
++
++## Impact / Residual Risk
++
++- This fixes a compatibility gap in the legacy `sched_setscheduler()` policy
++  decoder for `SCHED_BATCH`.
++- Internally, `SCHED_BATCH` is still represented with the same fair scheduler
++  policy as `SCHED_OTHER`; future tests that require round-tripping the exact
++  batch policy via getters may need a more explicit internal distinction.
+diff --git a/test/initramfs/src/syscall/ltp/testcases/all.txt b/test/initramfs/src/syscall/ltp/testcases/all.txt
+index 68f8c441..07530c82 100644
+--- a/test/initramfs/src/syscall/ltp/testcases/all.txt
++++ b/test/initramfs/src/syscall/ltp/testcases/all.txt
+@@ -1298,7 +1298,7 @@ sched_getscheduler02
+ 
+ sched_setscheduler01
+ sched_setscheduler02
+-# sched_setscheduler03
++sched_setscheduler03
+ sched_setscheduler04
+ 
+ sched_yield01
+-- 
+2.43.0
+

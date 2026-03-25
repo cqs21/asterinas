@@ -1,0 +1,63 @@
+From 1db6109c2c0963415db2496ef057dea39eea0f75 Mon Sep 17 00:00:00 2001
+From: Qingsong Chen <changxian.cqs@antgroup.com>
+Date: Wed, 25 Mar 2026 05:08:59 +0000
+Subject: [PATCH 73/97] Enable LTP openat02 case
+
+---
+ .../src/syscall/ltp/debug/family-openat-02.md | 30 +++++++++++++++++++
+ .../src/syscall/ltp/testcases/all.txt         |  2 +-
+ 2 files changed, 31 insertions(+), 1 deletion(-)
+ create mode 100644 test/initramfs/src/syscall/ltp/debug/family-openat-02.md
+
+diff --git a/test/initramfs/src/syscall/ltp/debug/family-openat-02.md b/test/initramfs/src/syscall/ltp/debug/family-openat-02.md
+new file mode 100644
+index 00000000..f088e0f4
+--- /dev/null
++++ b/test/initramfs/src/syscall/ltp/debug/family-openat-02.md
+@@ -0,0 +1,30 @@
++# openat02
++
++## Goal
++
++Enable `openat02` and confirm the `/tmp` coverage for `O_APPEND`, `O_CLOEXEC`, `O_LARGEFILE`,
++`O_NOATIME`, `O_NOFOLLOW`, and `O_TRUNC`.
++
++## Failure
++
++No failure remained when this testcase was revalidated. `openat02` passed on `/tmp` with the
++current kernel state.
++
++## Root Cause
++
++The earlier `open*` fixes had already covered the behaviors that `openat02` exercises:
++
++- `O_NOATIME` handling on `tmpfs`
++- `O_CLOEXEC` helper binary packaging
++- `O_NOFOLLOW`/`O_TRUNC`/`O_APPEND` open semantics
++
++Because of that, `openat02` no longer needed an additional fix.
++
++## Fix
++
++- No kernel code change was required for this testcase.
++- Enable `openat02` in the LTP allowlist after validation.
++
++## Validation
++
++- `make run_kernel AUTO_TEST=syscall SYSCALL_TEST_SUITE=ltp LTP_CASES=openat02`
+diff --git a/test/initramfs/src/syscall/ltp/testcases/all.txt b/test/initramfs/src/syscall/ltp/testcases/all.txt
+index 11664b7a..16a48f5a 100644
+--- a/test/initramfs/src/syscall/ltp/testcases/all.txt
++++ b/test/initramfs/src/syscall/ltp/testcases/all.txt
+@@ -999,7 +999,7 @@ open14
+ open15
+ 
+ openat01
+-# openat02
++openat02
+ # openat03
+ # openat04
+ 
+-- 
+2.43.0
+

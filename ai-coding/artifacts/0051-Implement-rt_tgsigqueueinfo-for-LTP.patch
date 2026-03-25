@@ -1,0 +1,225 @@
+From 57b126f79e7580cf4be33d3c5d4f25eaa0bab530 Mon Sep 17 00:00:00 2001
+From: Qingsong Chen <changxian.cqs@antgroup.com>
+Date: Wed, 25 Mar 2026 02:06:30 +0000
+Subject: [PATCH 51/97] Implement rt_tgsigqueueinfo for LTP
+
+---
+ kernel/src/syscall/arch/generic.rs            |  2 +
+ kernel/src/syscall/arch/x86.rs                |  2 +
+ kernel/src/syscall/mod.rs                     |  1 +
+ kernel/src/syscall/rt_tgsigqueueinfo.rs       | 65 +++++++++++++++++++
+ .../ltp/debug/family-rt-tgsigqueueinfo-01.md  | 64 ++++++++++++++++++
+ .../src/syscall/ltp/testcases/all.txt         |  2 +-
+ 6 files changed, 135 insertions(+), 1 deletion(-)
+ create mode 100644 kernel/src/syscall/rt_tgsigqueueinfo.rs
+ create mode 100644 test/initramfs/src/syscall/ltp/debug/family-rt-tgsigqueueinfo-01.md
+
+diff --git a/kernel/src/syscall/arch/generic.rs b/kernel/src/syscall/arch/generic.rs
+index a349c659..3416d7cc 100644
+--- a/kernel/src/syscall/arch/generic.rs
++++ b/kernel/src/syscall/arch/generic.rs
+@@ -107,6 +107,7 @@ macro_rules! import_generic_syscall_entries {
+             rt_sigreturn::sys_rt_sigreturn,
+             rt_sigsuspend::sys_rt_sigsuspend,
+             rt_sigtimedwait::sys_rt_sigtimedwait,
++            rt_tgsigqueueinfo::sys_rt_tgsigqueueinfo,
+             sched_affinity::{sys_sched_getaffinity, sys_sched_setaffinity},
+             sched_get_priority_max::sys_sched_get_priority_max,
+             sched_get_priority_min::sys_sched_get_priority_min,
+@@ -396,6 +397,7 @@ macro_rules! define_syscalls_with_generic_syscall_table {
+             SYS_PREADV2 = 286                => sys_preadv2(args[..6]);
+             SYS_PWRITEV2 = 287               => sys_pwritev2(args[..6]);
+             SYS_STATX = 291                  => sys_statx(args[..5]);
++            SYS_RT_TGSIGQUEUEINFO = 240      => sys_rt_tgsigqueueinfo(args[..4]);
+             SYS_PIDFD_SEND_SIGNAL = 424      => sys_pidfd_send_signal(args[..4]);
+             SYS_PIDFD_OPEN = 434             => sys_pidfd_open(args[..2]);
+             SYS_CLONE3 = 435                 => sys_clone3(args[..2], &user_ctx);
+diff --git a/kernel/src/syscall/arch/x86.rs b/kernel/src/syscall/arch/x86.rs
+index d5d433fa..c3dee961 100644
+--- a/kernel/src/syscall/arch/x86.rs
++++ b/kernel/src/syscall/arch/x86.rs
+@@ -110,6 +110,7 @@ use super::{
+     rt_sigreturn::sys_rt_sigreturn,
+     rt_sigsuspend::sys_rt_sigsuspend,
+     rt_sigtimedwait::sys_rt_sigtimedwait,
++    rt_tgsigqueueinfo::sys_rt_tgsigqueueinfo,
+     sched_affinity::{sys_sched_getaffinity, sys_sched_setaffinity},
+     sched_get_priority_max::sys_sched_get_priority_max,
+     sched_get_priority_min::sys_sched_get_priority_min,
+@@ -411,6 +412,7 @@ impl_syscall_nums_and_dispatch_fn! {
+     SYS_PREADV2 = 327          => sys_preadv2(args[..6]);
+     SYS_PWRITEV2 = 328         => sys_pwritev2(args[..6]);
+     SYS_STATX = 332            => sys_statx(args[..5]);
++    SYS_RT_TGSIGQUEUEINFO = 297 => sys_rt_tgsigqueueinfo(args[..4]);
+     SYS_PIDFD_SEND_SIGNAL = 424 => sys_pidfd_send_signal(args[..4]);
+     SYS_PIDFD_OPEN = 434       => sys_pidfd_open(args[..2]);
+     SYS_CLONE3 = 435           => sys_clone3(args[..2], &user_ctx);
+diff --git a/kernel/src/syscall/mod.rs b/kernel/src/syscall/mod.rs
+index abbb7592..a562a343 100644
+--- a/kernel/src/syscall/mod.rs
++++ b/kernel/src/syscall/mod.rs
+@@ -122,6 +122,7 @@ mod rt_sigqueueinfo;
+ mod rt_sigreturn;
+ mod rt_sigsuspend;
+ mod rt_sigtimedwait;
++mod rt_tgsigqueueinfo;
+ mod sched_affinity;
+ mod sched_get_priority_max;
+ mod sched_get_priority_min;
+diff --git a/kernel/src/syscall/rt_tgsigqueueinfo.rs b/kernel/src/syscall/rt_tgsigqueueinfo.rs
+new file mode 100644
+index 00000000..4f2cdbf0
+--- /dev/null
++++ b/kernel/src/syscall/rt_tgsigqueueinfo.rs
+@@ -0,0 +1,65 @@
++// SPDX-License-Identifier: MPL-2.0
++
++use ostd::mm::VmIo;
++
++use super::SyscallReturn;
++use crate::{
++    prelude::*,
++    process::{
++        Pid,
++        signal::{
++            c_types::siginfo_t,
++            constants::SI_TKILL,
++            sig_num::SigNum,
++            signals::{Signal, raw::RawSignal},
++        },
++        tgkill,
++    },
++    thread::Tid,
++};
++
++pub fn sys_rt_tgsigqueueinfo(
++    tgid: Pid,
++    tid: Tid,
++    sig_num: u64,
++    info_ptr: Vaddr,
++    ctx: &Context,
++) -> Result<SyscallReturn> {
++    let sig_num = if sig_num == 0 {
++        None
++    } else {
++        Some(SigNum::try_from(sig_num as u8)?)
++    };
++    debug!(
++        "tgid = {}, tid = {}, sig_num = {:?}, info_ptr = {:#x}",
++        tgid, tid, sig_num, info_ptr
++    );
++
++    let signal = if let Some(sig_num) = sig_num {
++        let siginfo = read_siginfo_from_user(info_ptr, sig_num, ctx)?;
++        validate_si_code(siginfo.si_code, tgid, ctx)?;
++        Some(Box::new(RawSignal::new(siginfo)) as Box<dyn Signal>)
++    } else {
++        None
++    };
++
++    tgkill(tid, tgid, signal, ctx)?;
++    Ok(SyscallReturn::Return(0))
++}
++
++fn read_siginfo_from_user(info_ptr: Vaddr, sig_num: SigNum, ctx: &Context) -> Result<siginfo_t> {
++    let mut siginfo = ctx.user_space().read_val::<siginfo_t>(info_ptr)?;
++    siginfo.si_signo = sig_num.as_u8() as i32;
++    Ok(siginfo)
++}
++
++fn validate_si_code(si_code: i32, target_tgid: Pid, ctx: &Context) -> Result<()> {
++    if target_tgid != ctx.process.pid() && (si_code >= 0 || si_code == SI_TKILL) {
++        return_errno_with_message!(
++            Errno::EPERM,
++            "signals with nonnegative si_code or SI_TKILL require self-targeting"
++        );
++    }
++
++    Ok(())
++}
+diff --git a/test/initramfs/src/syscall/ltp/debug/family-rt-tgsigqueueinfo-01.md b/test/initramfs/src/syscall/ltp/debug/family-rt-tgsigqueueinfo-01.md
+new file mode 100644
+index 00000000..3c2c727d
+--- /dev/null
++++ b/test/initramfs/src/syscall/ltp/debug/family-rt-tgsigqueueinfo-01.md
+@@ -0,0 +1,64 @@
++# `rt_tgsigqueueinfo01`
++
++## Goal
++
++Re-enable `rt_tgsigqueueinfo01` in Phase 3 and verify that it passes on `/tmp`,
++`/ext2`, and `/exfat`.
++
++## Root Cause
++
++This testcase was blocked by a real kernel compatibility gap. The guest kernel
++did not expose an `rt_tgsigqueueinfo` syscall entry in the architecture
++dispatch tables, so LTP could not exercise thread-directed queued realtime
++signal delivery and treated the case as unsupported.
++
++## Solution
++
++- Added a new `rt_tgsigqueueinfo` syscall handler.
++- Wired the handler into both the x86 and generic syscall dispatch tables.
++- Implemented the Linux-compatible behavior needed by LTP: reading user
++  `siginfo_t`, overriding `si_signo` with the requested signal number,
++  rejecting invalid `si_code` values with `EPERM` for cross-process delivery,
++  and routing the request through `tgkill` for exact thread targeting.
++- Re-enabled `rt_tgsigqueueinfo01` in `testcases/all.txt`.
++
++## Validation
++
++```bash
++SSH_PORT=45022 NGINX_PORT=51080 REDIS_PORT=49379 IPERF_PORT=48201 \
++LMBENCH_TCP_LAT_PORT=44234 LMBENCH_TCP_BW_PORT=44236 MEMCACHED_PORT=44211 \
++make run_kernel AUTO_TEST=syscall SYSCALL_TEST_SUITE=ltp \
++  LTP_CASES=rt_tgsigqueueinfo01
++
++SSH_PORT=45022 NGINX_PORT=51080 REDIS_PORT=49379 IPERF_PORT=48201 \
++LMBENCH_TCP_LAT_PORT=44234 LMBENCH_TCP_BW_PORT=44236 MEMCACHED_PORT=44211 \
++make run_kernel AUTO_TEST=syscall SYSCALL_TEST_SUITE=ltp \
++  SYSCALL_TEST_WORKDIR=/ext2 \
++  LTP_CASES=rt_tgsigqueueinfo01
++
++SSH_PORT=45022 NGINX_PORT=51080 REDIS_PORT=49379 IPERF_PORT=48201 \
++LMBENCH_TCP_LAT_PORT=44234 LMBENCH_TCP_BW_PORT=44236 MEMCACHED_PORT=44211 \
++make run_kernel AUTO_TEST=syscall SYSCALL_TEST_SUITE=ltp \
++  SYSCALL_TEST_WORKDIR=/exfat \
++  LTP_CASES=rt_tgsigqueueinfo01
++```
++
++Observed results:
++
++- `/tmp`: `PASS`
++- `/ext2`: `PASS`
++- `/exfat`: `PASS`
++
++Observed behavior:
++
++- self-thread queued signal delivery succeeded
++- parent-to-thread queued signal delivery succeeded
++- thread-to-thread queued signal delivery succeeded
++
++## Impact / Residual Risk
++
++- This closes the thread-directed queued realtime signal syscall gap and
++  unlocks active LTP coverage for `rt_tgsigqueueinfo`.
++- The implementation is intentionally scoped to the Linux semantics exercised
++  by current LTP coverage; if later tests probe deeper permission or
++  `siginfo_t` provenance details, follow-up refinement may still be needed.
+diff --git a/test/initramfs/src/syscall/ltp/testcases/all.txt b/test/initramfs/src/syscall/ltp/testcases/all.txt
+index 28a1ce48..02c24efb 100644
+--- a/test/initramfs/src/syscall/ltp/testcases/all.txt
++++ b/test/initramfs/src/syscall/ltp/testcases/all.txt
+@@ -1268,7 +1268,7 @@ rt_sigqueueinfo01
+ rt_sigqueueinfo02
+ rt_sigsuspend01
+ rt_sigtimedwait01
+-# rt_tgsigqueueinfo01
++rt_tgsigqueueinfo01
+ 
+ sbrk01
+ sbrk02
+-- 
+2.43.0
+

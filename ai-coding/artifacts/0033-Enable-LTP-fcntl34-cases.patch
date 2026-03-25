@@ -1,0 +1,410 @@
+From 768f5a676d9b63607aa94a2d87d7169436da1519 Mon Sep 17 00:00:00 2001
+From: Qingsong Chen <changxian.cqs@antgroup.com>
+Date: Tue, 24 Mar 2026 16:15:43 +0000
+Subject: [PATCH 33/97] Enable LTP fcntl34 cases
+
+---
+ kernel/src/fs/file/inode_handle.rs            | 24 +++++--
+ kernel/src/fs/vfs/range_lock/mod.rs           | 67 +++++++++++++------
+ kernel/src/syscall/fcntl.rs                   | 60 ++++++++++++++---
+ .../src/syscall/ltp/debug/family-fcntl-17.md  | 48 +++++++++++++
+ .../src/syscall/ltp/testcases/all.txt         |  4 +-
+ 5 files changed, 165 insertions(+), 38 deletions(-)
+ create mode 100644 test/initramfs/src/syscall/ltp/debug/family-fcntl-17.md
+
+diff --git a/kernel/src/fs/file/inode_handle.rs b/kernel/src/fs/file/inode_handle.rs
+index bb7391d2..0ae9a26b 100644
+--- a/kernel/src/fs/file/inode_handle.rs
++++ b/kernel/src/fs/file/inode_handle.rs
+@@ -22,7 +22,7 @@ use crate::{
+             inode::{FallocMode, InodeIo},
+             inode_ext::InodeExt,
+             path::Path,
+-            range_lock::{FileRange, OFFSET_MAX, RangeLockItem, RangeLockType},
++            range_lock::{FileRange, OFFSET_MAX, RangeLockItem, RangeLockOwner, RangeLockType},
+         },
+     },
+     prelude::*,
+@@ -92,6 +92,10 @@ impl InodeHandle {
+         &self.path
+     }
+ 
++    pub fn owner_id(&self) -> u64 {
++        self.owner_id
++    }
++
+     fn register_open_file_description(self) -> Self {
+         self.path
+             .inode()
+@@ -285,11 +289,10 @@ impl InodeHandle {
+     }
+ 
+     pub fn release_range_locks(&self) {
+-        let range_lock = RangeLockItem::new(
+-            RangeLockType::Unlock,
+-            FileRange::new(0, OFFSET_MAX).unwrap(),
+-        );
+-        self.unlock_range_lock(&range_lock);
++        if let Some(process) = Process::current() {
++            self.unlock_range_lock_with_owner(RangeLockOwner::Process(process.pid()));
++        }
++        self.unlock_range_lock_with_owner(RangeLockOwner::OpenFileDescription(self.owner_id));
+     }
+ 
+     fn unlock_range_lock(&self, lock: &RangeLockItem) {
+@@ -303,6 +306,15 @@ impl InodeHandle {
+         }
+     }
+ 
++    fn unlock_range_lock_with_owner(&self, owner: RangeLockOwner) {
++        let range_lock = RangeLockItem::new_with_owner(
++            RangeLockType::Unlock,
++            FileRange::new(0, OFFSET_MAX).unwrap(),
++            owner,
++        );
++        self.unlock_range_lock(&range_lock);
++    }
++
+     pub fn set_flock(&self, lock: FlockItem, is_nonblocking: bool) -> Result<()> {
+         if self.rights.is_empty() {
+             return_errno_with_message!(Errno::EBADF, "the file is opened as a path");
+diff --git a/kernel/src/fs/vfs/range_lock/mod.rs b/kernel/src/fs/vfs/range_lock/mod.rs
+index 253eeb3c..797836b4 100644
+--- a/kernel/src/fs/vfs/range_lock/mod.rs
++++ b/kernel/src/fs/vfs/range_lock/mod.rs
+@@ -9,13 +9,28 @@ use range::{FileRangeChange, OverlapWith};
+ 
+ use crate::{prelude::*, process::Pid};
+ 
++#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
++pub enum RangeLockOwner {
++    Process(Pid),
++    OpenFileDescription(u64),
++}
++
++impl RangeLockOwner {
++    pub fn as_process(self) -> Option<Pid> {
++        match self {
++            Self::Process(pid) => Some(pid),
++            Self::OpenFileDescription(_) => None,
++        }
++    }
++}
++
+ mod range;
+ 
+ /// The metadata of a POSIX advisory file range lock.
+ #[derive(Debug, Clone)]
+ struct RangeLock {
+-    /// Owner of the lock, representing the process holding the lock
+-    owner: Pid,
++    /// Owner of the lock, representing either the process or OFD holder.
++    owner: RangeLockOwner,
+     /// Type of lock: can be F_RDLCK (read lock), F_WRLCK (write lock), or F_UNLCK (unlock)
+     type_: RangeLockType,
+     /// Range of the lock which specifies the portion of the file being locked
+@@ -33,11 +48,9 @@ pub struct RangeLockItem {
+ }
+ 
+ impl RangeLockItem {
+-    /// Creates a new instance with the given lock type and the file range.
+-    /// The new instance will be associated with the current process.
+-    pub fn new(type_: RangeLockType, range: FileRange) -> Self {
++    pub fn new_with_owner(type_: RangeLockType, range: FileRange, owner: RangeLockOwner) -> Self {
+         let lock = RangeLock {
+-            owner: current!().pid(),
++            owner,
+             type_,
+             range,
+         };
+@@ -58,12 +71,12 @@ impl RangeLockItem {
+     }
+ 
+     /// Returns the owner (process ID) of the lock
+-    pub fn owner(&self) -> Pid {
++    pub fn owner(&self) -> RangeLockOwner {
+         self.lock.owner
+     }
+ 
+-    /// Sets the owner of the lock to the specified process ID
+-    pub fn set_owner(&mut self, owner: Pid) {
++    /// Sets the owner of the lock to the specified owner.
++    pub fn set_owner(&mut self, owner: RangeLockOwner) {
+         self.lock.owner = owner;
+     }
+ 
+@@ -227,36 +240,44 @@ impl RangeLockList {
+     fn try_set_lock(&self, req_lock: &RangeLockItem, waker: Option<&Arc<Waker>>) -> Result<()> {
+         let mut list = self.inner.write();
+         let requester = req_lock.owner();
++        let requester_pid = requester.as_process();
+         let mut conflicting_waitqueues = Vec::new();
+         let mut conflicting_owners = BTreeSet::new();
++        let mut has_conflict = false;
+         for lock in list.iter() {
+             if !req_lock.conflict_with(lock) {
+                 continue;
+             }
+-            conflicting_owners.insert(lock.owner());
++            has_conflict = true;
++            if let Some(owner_pid) = lock.owner().as_process() {
++                conflicting_owners.insert(owner_pid);
++            }
+             conflicting_waitqueues.push(lock.waitqueue.clone());
+         }
+ 
+-        if conflicting_owners.is_empty() {
++        if !has_conflict {
+             Self::insert_lock_into_list(&mut list, req_lock);
+-            self.waiting_owners.lock().remove(&requester);
++            if let Some(requester_pid) = requester_pid {
++                self.waiting_owners.lock().remove(&requester_pid);
++            }
+             return Ok(());
+         }
+ 
+         if let Some(waker) = waker {
+-            let mut waiting_owners = self.waiting_owners.lock();
+-            if Self::would_deadlock(&waiting_owners, requester, &conflicting_owners) {
+-                waiting_owners.remove(&requester);
+-                return_errno_with_message!(Errno::EDEADLK, "the requested lock would deadlock");
++            if let Some(requester_pid) = requester_pid {
++                let mut waiting_owners = self.waiting_owners.lock();
++                if Self::would_deadlock(&waiting_owners, requester_pid, &conflicting_owners) {
++                    waiting_owners.remove(&requester_pid);
++                    return_errno_with_message!(Errno::EDEADLK, "the requested lock would deadlock");
++                }
++                waiting_owners.insert(requester_pid, conflicting_owners.iter().copied().collect());
+             }
+-            waiting_owners.insert(requester, conflicting_owners.into_iter().collect());
+-            drop(waiting_owners);
+ 
+             for waitqueue in conflicting_waitqueues {
+                 waitqueue.enqueue(waker.clone());
+             }
+-        } else {
+-            self.waiting_owners.lock().remove(&requester);
++        } else if let Some(requester_pid) = requester_pid {
++            self.waiting_owners.lock().remove(&requester_pid);
+         }
+ 
+         return_errno_with_message!(Errno::EAGAIN, "the file is locked");
+@@ -271,7 +292,7 @@ impl RangeLockList {
+             "set_lock with RangeLock: {:?}, is_nonblocking: {}",
+             req_lock, is_nonblocking
+         );
+-        let requester = req_lock.owner();
++        let requester_pid = req_lock.owner().as_process();
+         let result = if is_nonblocking {
+             self.try_set_lock(req_lock, None)
+         } else {
+@@ -285,7 +306,9 @@ impl RangeLockList {
+                 }
+             })?
+         };
+-        self.waiting_owners.lock().remove(&requester);
++        if let Some(requester_pid) = requester_pid {
++            self.waiting_owners.lock().remove(&requester_pid);
++        }
+         result
+     }
+ 
+diff --git a/kernel/src/syscall/fcntl.rs b/kernel/src/syscall/fcntl.rs
+index 4bfa5e92..a1398399 100644
+--- a/kernel/src/syscall/fcntl.rs
++++ b/kernel/src/syscall/fcntl.rs
+@@ -10,7 +10,7 @@ use crate::{
+             file_table::{FdFlags, FileAsyncOwner, FileDesc, WithFileTable, get_file_fast},
+         },
+         ramfs::memfd::{FileSeals, MemfdInodeHandle},
+-        vfs::range_lock::{FileRange, OFFSET_MAX, RangeLockItem, RangeLockType},
++        vfs::range_lock::{FileRange, OFFSET_MAX, RangeLockItem, RangeLockOwner, RangeLockType},
+     },
+     prelude::*,
+     process::{
+@@ -35,12 +35,32 @@ pub fn sys_fcntl(fd: FileDesc, cmd: i32, arg: u64, ctx: &Context) -> Result<Sysc
+         FcntlCmd::F_SETFD => handle_setfd(fd, arg, ctx),
+         FcntlCmd::F_GETFL => handle_getfl(fd, ctx),
+         FcntlCmd::F_SETFL => handle_setfl(fd, arg, ctx),
+-        FcntlCmd::F_GETLK => handle_getlk(fd, arg, ctx),
+-        FcntlCmd::F_SETLK => handle_setlk(fd, arg, true, ctx),
+-        FcntlCmd::F_SETLKW => handle_setlk(fd, arg, false, ctx).map_err(|err| match err.error() {
++        FcntlCmd::F_GETLK => handle_getlk(fd, arg, RangeLockOwner::Process(ctx.process.pid()), ctx),
++        FcntlCmd::F_SETLK => handle_setlk(
++            fd,
++            arg,
++            true,
++            RangeLockOwner::Process(ctx.process.pid()),
++            ctx,
++        ),
++        FcntlCmd::F_SETLKW => handle_setlk(
++            fd,
++            arg,
++            false,
++            RangeLockOwner::Process(ctx.process.pid()),
++            ctx,
++        )
++        .map_err(|err| match err.error() {
+             Errno::EINTR => Error::new(Errno::ERESTARTSYS),
+             _ => err,
+         }),
++        FcntlCmd::F_OFD_GETLK => handle_getlk(fd, arg, ofd_range_lock_owner(fd, ctx)?, ctx),
++        FcntlCmd::F_OFD_SETLK => handle_setlk(fd, arg, true, ofd_range_lock_owner(fd, ctx)?, ctx),
++        FcntlCmd::F_OFD_SETLKW => handle_setlk(fd, arg, false, ofd_range_lock_owner(fd, ctx)?, ctx)
++            .map_err(|err| match err.error() {
++                Errno::EINTR => Error::new(Errno::ERESTARTSYS),
++                _ => err,
++            }),
+         FcntlCmd::F_SETLEASE => handle_setlease(fd, arg, ctx),
+         FcntlCmd::F_GETLEASE => handle_getlease(fd, ctx),
+         FcntlCmd::F_GETOWN => handle_getown(fd, ctx),
+@@ -126,7 +146,12 @@ fn handle_setfl(fd: FileDesc, arg: u64, ctx: &Context) -> Result<SyscallReturn>
+     Ok(SyscallReturn::Return(0))
+ }
+ 
+-fn handle_getlk(fd: FileDesc, arg: u64, ctx: &Context) -> Result<SyscallReturn> {
++fn handle_getlk(
++    fd: FileDesc,
++    arg: u64,
++    owner: RangeLockOwner,
++    ctx: &Context,
++) -> Result<SyscallReturn> {
+     let mut file_table = ctx.thread_local.borrow_file_table_mut();
+     let file = get_file_fast!(&mut file_table, fd);
+     let lock_mut_ptr = arg as Vaddr;
+@@ -135,7 +160,11 @@ fn handle_getlk(fd: FileDesc, arg: u64, ctx: &Context) -> Result<SyscallReturn>
+     if lock_type == RangeLockType::Unlock {
+         return_errno_with_message!(Errno::EINVAL, "invalid flock type for getlk");
+     }
+-    let mut lock = RangeLockItem::new(lock_type, from_c_flock_and_file(&lock_mut_c, &**file)?);
++    let mut lock = RangeLockItem::new_with_owner(
++        lock_type,
++        from_c_flock_and_file(&lock_mut_c, &**file)?,
++        owner,
++    );
+     let inode_file = file.as_inode_handle_or_err()?;
+     lock = inode_file.test_range_lock(lock)?;
+     lock_mut_c.copy_from_range_lock(&lock);
+@@ -147,6 +176,7 @@ fn handle_setlk(
+     fd: FileDesc,
+     arg: u64,
+     is_nonblocking: bool,
++    owner: RangeLockOwner,
+     ctx: &Context,
+ ) -> Result<SyscallReturn> {
+     let mut file_table = ctx.thread_local.borrow_file_table_mut();
+@@ -154,7 +184,11 @@ fn handle_setlk(
+     let lock_mut_ptr = arg as Vaddr;
+     let lock_mut_c = ctx.user_space().read_val::<c_flock>(lock_mut_ptr)?;
+     let lock_type = RangeLockType::try_from(lock_mut_c.l_type)?;
+-    let lock = RangeLockItem::new(lock_type, from_c_flock_and_file(&lock_mut_c, &**file)?);
++    let lock = RangeLockItem::new_with_owner(
++        lock_type,
++        from_c_flock_and_file(&lock_mut_c, &**file)?,
++        owner,
++    );
+     let inode_file = file.as_inode_handle_or_err()?;
+     inode_file.set_range_lock(&lock, is_nonblocking)?;
+     Ok(SyscallReturn::Return(0))
+@@ -309,6 +343,9 @@ enum FcntlCmd {
+     F_GETSIG = 11,
+     F_SETOWN_EX = 15,
+     F_GETOWN_EX = 16,
++    F_OFD_GETLK = 36,
++    F_OFD_SETLK = 37,
++    F_OFD_SETLKW = 38,
+     F_SETLEASE = 1024,
+     F_GETLEASE = 1025,
+     F_DUPFD_CLOEXEC = 1030,
+@@ -443,7 +480,7 @@ impl c_flock {
+             } else {
+                 lock.range().len() as off_t
+             };
+-            self.l_pid = lock.owner();
++            self.l_pid = lock.owner().as_process().unwrap_or(0);
+         }
+     }
+ }
+@@ -543,3 +580,10 @@ fn signal_from_setsig_arg(arg: u64) -> Result<Option<SigNum>> {
+ 
+     Ok(Some(signal))
+ }
++
++fn ofd_range_lock_owner(fd: FileDesc, ctx: &Context) -> Result<RangeLockOwner> {
++    let mut file_table = ctx.thread_local.borrow_file_table_mut();
++    let file = get_file_fast!(&mut file_table, fd);
++    let inode_handle = file.as_inode_handle_or_err()?;
++    Ok(RangeLockOwner::OpenFileDescription(inode_handle.owner_id()))
++}
+diff --git a/test/initramfs/src/syscall/ltp/debug/family-fcntl-17.md b/test/initramfs/src/syscall/ltp/debug/family-fcntl-17.md
+new file mode 100644
+index 00000000..5c26b81d
+--- /dev/null
++++ b/test/initramfs/src/syscall/ltp/debug/family-fcntl-17.md
+@@ -0,0 +1,48 @@
++# Fcntl Family Batch 17
++
++## Goal
++
++Re-enable Priority A cases `fcntl34` and `fcntl34_64`, with `/tmp` validation
++first, then `/ext2` and `/exfat` serially.
++
++## Problem Cause
++
++`fcntl34*` exercises open-file-description locks with `F_OFD_SETLKW`. Asterinas
++still rejected command `38` with `EINVAL`, because the OFD fcntl commands were
++not wired into `sys_fcntl`. The existing range-lock implementation was also
++process-owned, which is correct for classic POSIX record locks but wrong for OFD
++locks: multiple threads in the same process would never conflict with each
++other, so the testcase could not use OFD locks to serialize file appends.
++
++## Solution
++
++- Add `F_OFD_GETLK`, `F_OFD_SETLK`, and `F_OFD_SETLKW` to `sys_fcntl`.
++- Extend range-lock ownership to distinguish process-owned locks from
++  open-file-description-owned locks.
++- Route OFD lock requests through the `InodeHandle` owner ID so each open file
++  description gets an independent lock owner.
++- Release OFD locks automatically when the owning `InodeHandle` is dropped.
++- Re-enable `fcntl34` and `fcntl34_64` in `testcases/all.txt`.
++
++## Validation Results
++
++Commands:
++
++```bash
++make run_kernel AUTO_TEST=syscall SYSCALL_TEST_SUITE=ltp \
++  LTP_CASES=fcntl34,fcntl34_64
++
++make run_kernel AUTO_TEST=syscall SYSCALL_TEST_SUITE=ltp \
++  SYSCALL_TEST_WORKDIR=/ext2 \
++  LTP_CASES=fcntl34,fcntl34_64
++
++make run_kernel AUTO_TEST=syscall SYSCALL_TEST_SUITE=ltp \
++  SYSCALL_TEST_WORKDIR=/exfat \
++  LTP_CASES=fcntl34,fcntl34_64
++```
++
++Observed:
++
++- `/tmp`: both cases `PASS`.
++- `/ext2`: both cases `PASS`.
++- `/exfat`: both cases `PASS`.
+diff --git a/test/initramfs/src/syscall/ltp/testcases/all.txt b/test/initramfs/src/syscall/ltp/testcases/all.txt
+index b19778f2..29a8d409 100644
+--- a/test/initramfs/src/syscall/ltp/testcases/all.txt
++++ b/test/initramfs/src/syscall/ltp/testcases/all.txt
+@@ -357,8 +357,8 @@ fcntl32
+ fcntl32_64
+ fcntl33
+ fcntl33_64
+-# fcntl34
+-# fcntl34_64
++fcntl34
++fcntl34_64
+ # fcntl35
+ # fcntl35_64
+ # fcntl36
+-- 
+2.43.0
+

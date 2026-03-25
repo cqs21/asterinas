@@ -1,0 +1,92 @@
+From c6ddf3d807e74ffae0d92c8e53ef645c9ba0ed02 Mon Sep 17 00:00:00 2001
+From: Qingsong Chen <changxian.cqs@antgroup.com>
+Date: Tue, 24 Mar 2026 09:26:53 +0000
+Subject: [PATCH 19/97] Enable LTP fcntl11 cases
+
+---
+ .../src/syscall/ltp/debug/family-fcntl-03.md  | 57 +++++++++++++++++++
+ .../src/syscall/ltp/testcases/all.txt         |  4 +-
+ 2 files changed, 59 insertions(+), 2 deletions(-)
+ create mode 100644 test/initramfs/src/syscall/ltp/debug/family-fcntl-03.md
+
+diff --git a/test/initramfs/src/syscall/ltp/debug/family-fcntl-03.md b/test/initramfs/src/syscall/ltp/debug/family-fcntl-03.md
+new file mode 100644
+index 00000000..58e57320
+--- /dev/null
++++ b/test/initramfs/src/syscall/ltp/debug/family-fcntl-03.md
+@@ -0,0 +1,57 @@
++# Fcntl Family Batch 03
++
++## Goal
++
++Re-enable `fcntl11` and `fcntl11_64` in Phase 3 and verify they pass on
++`/tmp`, `/ext2`, and `/exfat`.
++
++Enabled cases in this batch:
++
++- `fcntl11`
++- `fcntl11_64`
++
++## Problem Cause
++
++This batch targets POSIX record-lock interactions (`F_GETLK`, `F_SETLK`,
++`F_SETLKW`) across overlapping regions and process boundaries.
++
++There was no new kernel blocker in this round. The cases were still commented
++out in `testcases/all.txt` because they had not been revalidated recently.
++
++## Solution
++
++- Ran `fcntl11` and `fcntl11_64` on `/tmp`, `/ext2`, and `/exfat`.
++- Confirmed all three workdirs pass without kernel code changes.
++- Re-enabled `fcntl11` and `fcntl11_64` in `testcases/all.txt`.
++
++Files changed for this batch:
++
++- `test/initramfs/src/syscall/ltp/testcases/all.txt`
++
++## Validation Results
++
++Representative commands:
++
++```bash
++make run_kernel AUTO_TEST=syscall SYSCALL_TEST_SUITE=ltp \
++  LTP_CASES=fcntl11,fcntl11_64
++
++make run_kernel AUTO_TEST=syscall SYSCALL_TEST_SUITE=ltp \
++  SYSCALL_TEST_WORKDIR=/ext2 \
++  LTP_CASES=fcntl11,fcntl11_64
++
++make run_kernel AUTO_TEST=syscall SYSCALL_TEST_SUITE=ltp \
++  SYSCALL_TEST_WORKDIR=/exfat \
++  LTP_CASES=fcntl11,fcntl11_64
++```
++
++Observed results:
++
++- `/tmp`: `fcntl11` `PASS`, `fcntl11_64` `PASS`, `Total Failures: 0`
++- `/ext2`: `fcntl11` `PASS`, `fcntl11_64` `PASS`, `Total Failures: 0`
++- `/exfat`: `fcntl11` `PASS`, `fcntl11_64` `PASS`, `Total Failures: 0`
++
++## Follow-up
++
++- Continue with the next `fcntl` disabled pair (`fcntl17`, `fcntl17_64`) in a
++  separate sub-batch.
+diff --git a/test/initramfs/src/syscall/ltp/testcases/all.txt b/test/initramfs/src/syscall/ltp/testcases/all.txt
+index 7ee213f5..e699c3ff 100644
+--- a/test/initramfs/src/syscall/ltp/testcases/all.txt
++++ b/test/initramfs/src/syscall/ltp/testcases/all.txt
+@@ -313,8 +313,8 @@ fcntl09
+ fcntl09_64
+ fcntl10
+ fcntl10_64
+-# fcntl11
+-# fcntl11_64
++fcntl11
++fcntl11_64
+ fcntl12
+ fcntl12_64
+ fcntl13
+-- 
+2.43.0
+

@@ -1,0 +1,66 @@
+From ca06ea708bd316ae113a667650ee678214721052 Mon Sep 17 00:00:00 2001
+From: Qingsong Chen <changxian.cqs@antgroup.com>
+Date: Wed, 25 Mar 2026 04:33:06 +0000
+Subject: [PATCH 67/97] Enable LTP open08 case
+
+---
+ .../src/syscall/ltp/debug/family-open-08.md   | 33 +++++++++++++++++++
+ .../src/syscall/ltp/testcases/all.txt         |  2 +-
+ 2 files changed, 34 insertions(+), 1 deletion(-)
+ create mode 100644 test/initramfs/src/syscall/ltp/debug/family-open-08.md
+
+diff --git a/test/initramfs/src/syscall/ltp/debug/family-open-08.md b/test/initramfs/src/syscall/ltp/debug/family-open-08.md
+new file mode 100644
+index 00000000..fc2858d5
+--- /dev/null
++++ b/test/initramfs/src/syscall/ltp/debug/family-open-08.md
+@@ -0,0 +1,33 @@
++# open08
++
++## Goal
++
++Enable `open08` and verify the expected `open()` error paths for the main filesystems used by the
++LTP run.
++
++## Result
++
++No kernel change was needed. The testcase passed on `/tmp` and `/ext2`.
++
++## Coverage
++
++`open08` validated these error paths successfully on `/tmp` and `/ext2`:
++
++- `EEXIST` for `O_CREAT | O_EXCL`
++- `EISDIR` for write access on a directory
++- `ENOTDIR` for `O_DIRECTORY` on a non-directory
++- `ENAMETOOLONG` for an oversized pathname
++- `EACCES` for a `0600` file opened by `nobody`
++- `EFAULT` for an invalid pathname pointer
++
++## Filesystem Notes
++
++`/exfat` failed only on the permission case. After switching to `nobody`, opening the `0600`
++`user2_0600` file with `O_WRONLY` still succeeded. This indicates missing Unix permission
++enforcement on exfat rather than an `open()` regression in the generic VFS path.
++
++## Validation
++
++- `make run_kernel AUTO_TEST=syscall SYSCALL_TEST_SUITE=ltp LTP_CASES=open08`
++- `make run_kernel AUTO_TEST=syscall SYSCALL_TEST_SUITE=ltp SYSCALL_TEST_WORKDIR=/ext2 LTP_CASES=open08`
++- `make run_kernel AUTO_TEST=syscall SYSCALL_TEST_SUITE=ltp SYSCALL_TEST_WORKDIR=/exfat LTP_CASES=open08`
+diff --git a/test/initramfs/src/syscall/ltp/testcases/all.txt b/test/initramfs/src/syscall/ltp/testcases/all.txt
+index 830d19ed..cb472c40 100644
+--- a/test/initramfs/src/syscall/ltp/testcases/all.txt
++++ b/test/initramfs/src/syscall/ltp/testcases/all.txt
+@@ -989,7 +989,7 @@ open03
+ open04
+ open06
+ open07
+-# open08
++open08
+ open09
+ # open10
+ # open11
+-- 
+2.43.0
+

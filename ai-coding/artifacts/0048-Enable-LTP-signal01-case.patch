@@ -1,0 +1,95 @@
+From d8cf55d13633ec1cd3ac0358ca515851d2c40eca Mon Sep 17 00:00:00 2001
+From: Qingsong Chen <changxian.cqs@antgroup.com>
+Date: Wed, 25 Mar 2026 01:52:40 +0000
+Subject: [PATCH 48/97] Enable LTP signal01 case
+
+---
+ .../src/syscall/ltp/debug/family-signal-01.md | 62 +++++++++++++++++++
+ .../src/syscall/ltp/testcases/all.txt         |  2 +-
+ 2 files changed, 63 insertions(+), 1 deletion(-)
+ create mode 100644 test/initramfs/src/syscall/ltp/debug/family-signal-01.md
+
+diff --git a/test/initramfs/src/syscall/ltp/debug/family-signal-01.md b/test/initramfs/src/syscall/ltp/debug/family-signal-01.md
+new file mode 100644
+index 00000000..f0e27a9a
+--- /dev/null
++++ b/test/initramfs/src/syscall/ltp/debug/family-signal-01.md
+@@ -0,0 +1,62 @@
++# `signal01`
++
++## Goal
++
++Re-enable `signal01` in Phase 3 and verify that it passes on `/tmp`, `/ext2`,
++and `/exfat`.
++
++## Root Cause
++
++There was no remaining kernel defect in this case. `signal01` checks the
++Linux/POSIX rule that `SIGKILL` cannot be ignored, reset, or caught, and that
++the signal still kills the target process with its default action.
++
++The current signal implementation already rejects `signal(SIGKILL, ...)` with
++`EINVAL` and still delivers `SIGKILL` with default semantics. The testcase had
++simply remained disabled in `testcases/all.txt`.
++
++## Solution
++
++- Re-ran `signal01` on `/tmp`, `/ext2`, and `/exfat`.
++- Confirmed that the existing implementation already matches the expected
++  `SIGKILL` semantics.
++- Re-enabled `signal01` in `testcases/all.txt`.
++
++## Validation
++
++```bash
++SSH_PORT=43022 NGINX_PORT=49080 REDIS_PORT=47379 IPERF_PORT=46201 \
++LMBENCH_TCP_LAT_PORT=42234 LMBENCH_TCP_BW_PORT=42236 MEMCACHED_PORT=42211 \
++make run_kernel AUTO_TEST=syscall SYSCALL_TEST_SUITE=ltp \
++  LTP_CASES=signal01
++
++SSH_PORT=43022 NGINX_PORT=49080 REDIS_PORT=47379 IPERF_PORT=46201 \
++LMBENCH_TCP_LAT_PORT=42234 LMBENCH_TCP_BW_PORT=42236 MEMCACHED_PORT=42211 \
++make run_kernel AUTO_TEST=syscall SYSCALL_TEST_SUITE=ltp \
++  SYSCALL_TEST_WORKDIR=/ext2 \
++  LTP_CASES=signal01
++
++SSH_PORT=43022 NGINX_PORT=49080 REDIS_PORT=47379 IPERF_PORT=46201 \
++LMBENCH_TCP_LAT_PORT=42234 LMBENCH_TCP_BW_PORT=42236 MEMCACHED_PORT=42211 \
++make run_kernel AUTO_TEST=syscall SYSCALL_TEST_SUITE=ltp \
++  SYSCALL_TEST_WORKDIR=/exfat \
++  LTP_CASES=signal01
++```
++
++Observed results:
++
++- `/tmp`: `PASS`
++- `/ext2`: `PASS`
++- `/exfat`: `PASS`
++
++Observed behavior on all three runs:
++
++- `signal(SIGKILL, ...)` returned `EINVAL`
++- child processes terminated with default `SIGKILL` handling
++
++## Impact / Residual Risk
++
++- This extends active signal-family negative-path coverage without a kernel
++  code change.
++- The remaining disabled cases in this family are narrower signal syscall
++  coverage items, including the still-missing `rt_sigqueueinfo` path.
+diff --git a/test/initramfs/src/syscall/ltp/testcases/all.txt b/test/initramfs/src/syscall/ltp/testcases/all.txt
+index dd7c4dba..8988cfd9 100644
+--- a/test/initramfs/src/syscall/ltp/testcases/all.txt
++++ b/test/initramfs/src/syscall/ltp/testcases/all.txt
+@@ -1551,7 +1551,7 @@ sigaltstack02
+ 
+ # sighold02
+ 
+-# signal01
++signal01
+ signal02
+ signal03
+ signal04
+-- 
+2.43.0
+

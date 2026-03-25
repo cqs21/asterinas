@@ -1,0 +1,57 @@
+From ef1ee563c475924b8f3f213255b37d8c7ba8ac45 Mon Sep 17 00:00:00 2001
+From: Qingsong Chen <changxian.cqs@antgroup.com>
+Date: Wed, 25 Mar 2026 07:25:21 +0000
+Subject: [PATCH 97/97] Enable LTP sighold02 case
+
+---
+ .../syscall/ltp/debug/family-sighold-02.md    | 24 +++++++++++++++++++
+ .../src/syscall/ltp/testcases/all.txt         |  2 +-
+ 2 files changed, 25 insertions(+), 1 deletion(-)
+ create mode 100644 test/initramfs/src/syscall/ltp/debug/family-sighold-02.md
+
+diff --git a/test/initramfs/src/syscall/ltp/debug/family-sighold-02.md b/test/initramfs/src/syscall/ltp/debug/family-sighold-02.md
+new file mode 100644
+index 00000000..e1cc8f07
+--- /dev/null
++++ b/test/initramfs/src/syscall/ltp/debug/family-sighold-02.md
+@@ -0,0 +1,24 @@
++# sighold02
++
++## Goal
++
++Enable `sighold02` on `/tmp`.
++
++## Result
++
++`sighold02` already passes on `/tmp` without kernel changes. The testcase verifies that the
++legacy `sighold()` interface blocks the expected signals.
++
++## Root Cause
++
++There was no kernel defect for this testcase. It remained commented out in `testcases/all.txt`
++even though the current signal-mask implementation already satisfies the expected behavior.
++
++## Fix
++
++- Enabled `sighold02` in `testcases/all.txt`.
++- Recorded the validation result for batch tracking.
++
++## Validation
++
++- `make run_kernel AUTO_TEST=syscall SYSCALL_TEST_SUITE=ltp LTP_CASES=sighold02`
+diff --git a/test/initramfs/src/syscall/ltp/testcases/all.txt b/test/initramfs/src/syscall/ltp/testcases/all.txt
+index 150ff139..ce8f5e1f 100644
+--- a/test/initramfs/src/syscall/ltp/testcases/all.txt
++++ b/test/initramfs/src/syscall/ltp/testcases/all.txt
+@@ -1549,7 +1549,7 @@ sigaction02
+ sigaltstack01
+ sigaltstack02
+ 
+-# sighold02
++sighold02
+ 
+ signal01
+ signal02
+-- 
+2.43.0
+

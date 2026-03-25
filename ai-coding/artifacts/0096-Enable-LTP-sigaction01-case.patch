@@ -1,0 +1,190 @@
+From f6298b761c30d2411108ee8ce6e39d8b5efc95f5 Mon Sep 17 00:00:00 2001
+From: Qingsong Chen <changxian.cqs@antgroup.com>
+Date: Wed, 25 Mar 2026 07:24:10 +0000
+Subject: [PATCH 96/97] Enable LTP sigaction01 case
+
+---
+ .../src/process/posix_thread/thread_local.rs  |  9 +++++-
+ kernel/src/process/signal/mod.rs              | 29 +++++++++++--------
+ kernel/src/syscall/rt_sigreturn.rs            | 10 +++++++
+ .../syscall/ltp/debug/family-sigaction-01.md  | 28 ++++++++++++++++++
+ .../src/syscall/ltp/testcases/all.txt         |  2 +-
+ 5 files changed, 64 insertions(+), 14 deletions(-)
+ create mode 100644 test/initramfs/src/syscall/ltp/debug/family-sigaction-01.md
+
+diff --git a/kernel/src/process/posix_thread/thread_local.rs b/kernel/src/process/posix_thread/thread_local.rs
+index 5f2dae15..6f734e7e 100644
+--- a/kernel/src/process/posix_thread/thread_local.rs
++++ b/kernel/src/process/posix_thread/thread_local.rs
+@@ -10,7 +10,7 @@ use crate::{
+     prelude::*,
+     process::{
+         NsProxy, UserNamespace,
+-        signal::{SigStack, sig_mask::SigMask},
++        signal::{SigStack, sig_action::SigAction, sig_mask::SigMask, sig_num::SigNum},
+     },
+     vm::vmar::Vmar,
+ };
+@@ -46,6 +46,8 @@ pub struct ThreadLocal {
+     /// Saved signal mask. It will be restored either after the signal handler, or upon
+     /// return from the system call if there is no signal handler to run.
+     sig_mask_saved: Cell<Option<SigMask>>,
++    /// One-shot signal actions that should be reset to default on `rt_sigreturn`.
++    oneshot_sig_actions: RefCell<Vec<(SigNum, SigAction)>>,
+ 
+     // Namespaces.
+     user_ns: RefCell<Arc<UserNamespace>>,
+@@ -76,6 +78,7 @@ impl ThreadLocal {
+             fpu_state: Cell::new(FpuState::Unloaded),
+             sig_stack: RefCell::new(SigStack::default()),
+             sig_mask_saved: Cell::new(None),
++            oneshot_sig_actions: RefCell::new(Vec::new()),
+             user_ns: RefCell::new(user_ns),
+             ns_proxy: RefCell::new(Some(ns_proxy)),
+         }
+@@ -170,6 +173,10 @@ impl ThreadLocal {
+         &self.sig_mask_saved
+     }
+ 
++    pub(crate) fn oneshot_sig_actions(&self) -> &RefCell<Vec<(SigNum, SigAction)>> {
++        &self.oneshot_sig_actions
++    }
++
+     pub fn borrow_user_ns(&self) -> Ref<'_, Arc<UserNamespace>> {
+         self.user_ns.borrow()
+     }
+diff --git a/kernel/src/process/signal/mod.rs b/kernel/src/process/signal/mod.rs
+index 67c1d85c..ff2989e0 100644
+--- a/kernel/src/process/signal/mod.rs
++++ b/kernel/src/process/signal/mod.rs
+@@ -179,10 +179,10 @@ fn dequeue_pending_signal(ctx: &Context) -> Option<(Box<dyn Signal>, SigAction)>
+     let posix_thread = ctx.posix_thread;
+ 
+     let sig_dispositions = ctx.process.sig_dispositions().lock();
+-    let mut sig_dispositions = sig_dispositions.lock();
++    let sig_dispositions = sig_dispositions.lock();
+ 
+     let sig_mask = posix_thread.sig_mask();
+-    let (signal, sig_num, sig_action) = loop {
++    let (signal, sig_action) = loop {
+         let signal = ctx.dequeue_signal(&sig_mask)?;
+         let sig_num = signal.num();
+         let sig_action = sig_dispositions.get(sig_num);
+@@ -190,18 +190,9 @@ fn dequeue_pending_signal(ctx: &Context) -> Option<(Box<dyn Signal>, SigAction)>
+             continue;
+         }
+ 
+-        break (signal, sig_num, sig_action);
++        break (signal, sig_action);
+     };
+ 
+-    if let SigAction::User { flags, .. } = &sig_action
+-        && flags.contains(SigActionFlags::SA_RESETHAND)
+-    {
+-        // In Linux, SA_RESETHAND corresponds to SA_ONESHOT,
+-        // which means the user handler will be executed only once and then reset to the default.
+-        // Reference: <https://elixir.bootlin.com/linux/v6.0.9/source/kernel/signal.c#L2761>.
+-        sig_dispositions.set_default(sig_num);
+-    }
+-
+     trace!(
+         "sig_num = {:?}, sig_name = {}, sig_action = {:#x?}",
+         signal.num(),
+@@ -230,6 +221,13 @@ pub fn handle_user_signal(
+     debug!("restorer_addr = 0x{:x}", restorer_addr);
+     debug!("mask = {:?}, mask_to_restore = {:?}", mask, mask_to_restore);
+ 
++    let installed_sig_action = SigAction::User {
++        handler_addr,
++        flags,
++        restorer_addr,
++        mask,
++    };
++
+     if flags.contains_unsupported_flag() {
+         warn!("Unsupported signal flags: {:?}", flags);
+     }
+@@ -402,6 +400,13 @@ pub fn handle_user_signal(
+         }
+     }
+ 
++    if flags.contains(SigActionFlags::SA_RESETHAND) {
++        ctx.thread_local
++            .oneshot_sig_actions()
++            .borrow_mut()
++            .push((sig_num, installed_sig_action));
++    }
++
+     Ok(())
+ }
+ 
+diff --git a/kernel/src/syscall/rt_sigreturn.rs b/kernel/src/syscall/rt_sigreturn.rs
+index 8d120e87..0a579fbb 100644
+--- a/kernel/src/syscall/rt_sigreturn.rs
++++ b/kernel/src/syscall/rt_sigreturn.rs
+@@ -53,5 +53,15 @@ pub fn sys_rt_sigreturn(ctx: &Context, user_ctx: &mut UserContext) -> Result<Sys
+     let sig_mask = ucontext.uc_sigmask;
+     ctx.set_sig_mask(sig_mask.into());
+ 
++    if let Some((sig_num, expected_action)) =
++        ctx.thread_local.oneshot_sig_actions().borrow_mut().pop()
++    {
++        let sig_dispositions = ctx.process.sig_dispositions().lock();
++        let mut sig_dispositions = sig_dispositions.lock();
++        if sig_dispositions.get(sig_num) == expected_action {
++            sig_dispositions.set_default(sig_num);
++        }
++    }
++
+     Ok(SyscallReturn::NoReturn)
+ }
+diff --git a/test/initramfs/src/syscall/ltp/debug/family-sigaction-01.md b/test/initramfs/src/syscall/ltp/debug/family-sigaction-01.md
+new file mode 100644
+index 00000000..652fa365
+--- /dev/null
++++ b/test/initramfs/src/syscall/ltp/debug/family-sigaction-01.md
+@@ -0,0 +1,28 @@
++# sigaction01
++
++## Goal
++
++Enable `sigaction01` on `/tmp`.
++
++## Result
++
++`sigaction01` now passes on `/tmp`. The testcase verifies that `SA_RESETHAND` does not clear
++`SA_SIGINFO` while the handler is running, that the delivered signal is masked unless
++`SA_NODEFER` is set, and that the original handler mask still applies.
++
++## Root Cause
++
++The kernel reset one-shot signal dispositions too early during signal dequeue. That made an
++in-handler `sigaction()` query observe the default disposition instead of the installed user
++handler, so `SA_SIGINFO` appeared to be cleared before `rt_sigreturn`.
++
++## Fix
++
++- Delayed `SA_RESETHAND` disposition reset until `rt_sigreturn`.
++- Stored the installed one-shot `SigAction` in thread-local state while entering the handler.
++- Reset the disposition on return only if the current action still matches the originally
++  installed handler, so handler-side `sigaction()` updates are preserved.
++
++## Validation
++
++- `make run_kernel AUTO_TEST=syscall SYSCALL_TEST_SUITE=ltp LTP_CASES=sigaction01`
+diff --git a/test/initramfs/src/syscall/ltp/testcases/all.txt b/test/initramfs/src/syscall/ltp/testcases/all.txt
+index 8008ec88..150ff139 100644
+--- a/test/initramfs/src/syscall/ltp/testcases/all.txt
++++ b/test/initramfs/src/syscall/ltp/testcases/all.txt
+@@ -1543,7 +1543,7 @@ setuid04
+ # shutdown01
+ # shutdown02
+ 
+-# sigaction01
++sigaction01
+ sigaction02
+ 
+ sigaltstack01
+-- 
+2.43.0
+

@@ -1,0 +1,178 @@
+From 6afb68c8a865b80fa716b141eb5cb4800e6d2587 Mon Sep 17 00:00:00 2001
+From: Qingsong Chen <changxian.cqs@antgroup.com>
+Date: Wed, 25 Mar 2026 05:17:40 +0000
+Subject: [PATCH 75/97] Enable LTP openat04 case
+
+---
+ kernel/src/fs/fs_impls/procfs/pid/task/fd.rs  | 30 ++++++++++++----
+ kernel/src/fs/fs_impls/ramfs/fs.rs            | 10 +++++-
+ .../src/syscall/ltp/debug/family-openat-04.md | 35 +++++++++++++++++++
+ .../src/syscall/ltp/testcases/all.txt         |  2 +-
+ 4 files changed, 69 insertions(+), 8 deletions(-)
+ create mode 100644 test/initramfs/src/syscall/ltp/debug/family-openat-04.md
+
+diff --git a/kernel/src/fs/fs_impls/procfs/pid/task/fd.rs b/kernel/src/fs/fs_impls/procfs/pid/task/fd.rs
+index 36875427..ff73ec5f 100644
+--- a/kernel/src/fs/fs_impls/procfs/pid/task/fd.rs
++++ b/kernel/src/fs/fs_impls/procfs/pid/task/fd.rs
+@@ -28,7 +28,7 @@ pub(super) struct FdDirOps<T> {
+ 
+ impl<T: FdOps> FdDirOps<T> {
+     pub fn new_inode(dir: &TidDirOps, parent: Weak<dyn Inode>) -> Arc<dyn Inode> {
+-        ProcDirBuilder::new(
++        let inode = ProcDirBuilder::new(
+             Self {
+                 dir: dir.clone(),
+                 marker: PhantomData,
+@@ -38,7 +38,9 @@ impl<T: FdOps> FdDirOps<T> {
+         )
+         .parent(parent)
+         .build()
+-        .unwrap()
++        .unwrap();
++        set_inode_owner_from_tid_dir(inode.as_ref(), dir);
++        inode
+     }
+ }
+ 
+@@ -189,7 +191,7 @@ impl FdOps for FileSymOps {
+             mode = chmod!(mode, u+wx);
+         }
+ 
+-        ProcSymBuilder::new(
++        let inode = ProcSymBuilder::new(
+             Self {
+                 tid_dir_ops,
+                 file_desc,
+@@ -199,7 +201,10 @@ impl FdOps for FileSymOps {
+         )
+         .parent(parent)
+         .build()
+-        .unwrap()
++        .unwrap();
++        let tid_dir_ops = inode.inner().tid_dir_ops.clone();
++        set_inode_owner_from_tid_dir(inode.as_ref(), &tid_dir_ops);
++        inode
+     }
+ 
+     fn file_desc(&self) -> FileDesc {
+@@ -250,7 +255,7 @@ impl FdOps for FileInfoOps {
+         _access_mode: AccessMode,
+         parent: Weak<dyn Inode>,
+     ) -> Arc<dyn Inode> {
+-        ProcFileBuilder::new(
++        let inode = ProcFileBuilder::new(
+             Self {
+                 tid_dir_ops,
+                 file_desc,
+@@ -260,7 +265,10 @@ impl FdOps for FileInfoOps {
+         )
+         .parent(parent)
+         .build()
+-        .unwrap()
++        .unwrap();
++        let tid_dir_ops = inode.inner().tid_dir_ops.clone();
++        set_inode_owner_from_tid_dir(inode.as_ref(), &tid_dir_ops);
++        inode
+     }
+ 
+     fn file_desc(&self) -> FileDesc {
+@@ -295,3 +303,13 @@ impl FileOps for FileInfoOps {
+         Ok(printer.bytes_written())
+     }
+ }
++
++fn set_inode_owner_from_tid_dir(inode: &dyn Inode, tid_dir_ops: &TidDirOps) {
++    let credentials = tid_dir_ops
++        .thread()
++        .as_posix_thread()
++        .unwrap()
++        .credentials();
++    inode.set_owner(credentials.fsuid()).unwrap();
++    inode.set_group(credentials.fsgid()).unwrap();
++}
+diff --git a/kernel/src/fs/fs_impls/ramfs/fs.rs b/kernel/src/fs/fs_impls/ramfs/fs.rs
+index 4d81a0c4..8d4c817b 100644
+--- a/kernel/src/fs/fs_impls/ramfs/fs.rs
++++ b/kernel/src/fs/fs_impls/ramfs/fs.rs
+@@ -34,7 +34,7 @@ use crate::{
+         },
+     },
+     prelude::*,
+-    process::{Gid, Uid, posix_thread::AsPosixThread},
++    process::{Gid, Uid, credentials::capabilities::CapSet, posix_thread::AsPosixThread},
+     time::clocks::RealTimeCoarseClock,
+     vm::vmo::Vmo,
+ };
+@@ -470,6 +470,14 @@ impl RamInode {
+                 mode |= InodeMode::S_ISGID;
+             }
+         }
++        if inode_type != InodeType::Dir
++            && mode.has_set_gid()
++            && !credentials.effective_capset().contains(CapSet::FSETID)
++            && gid != credentials.fsgid()
++            && !credentials.groups().contains(&gid)
++        {
++            mode -= InodeMode::S_ISGID;
++        }
+ 
+         (mode, credentials.fsuid(), gid)
+     }
+diff --git a/test/initramfs/src/syscall/ltp/debug/family-openat-04.md b/test/initramfs/src/syscall/ltp/debug/family-openat-04.md
+new file mode 100644
+index 00000000..09a9e353
+--- /dev/null
++++ b/test/initramfs/src/syscall/ltp/debug/family-openat-04.md
+@@ -0,0 +1,35 @@
++# openat04
++
++## Goal
++
++Enable `openat04` and make `openat(..., O_TMPFILE, ...)` behave correctly on `/tmp` for a
++non-root user inside a setgid directory.
++
++## Failure
++
++On `/tmp`, `openat04` initially failed in two stages:
++
++- `linkat("/proc/self/fd/<n>", ..., AT_SYMLINK_FOLLOW)` returned `EACCES` after switching to
++  user `nobody`
++- after fixing that, the linked tmpfile still kept `S_ISGID`
++
++## Root Cause
++
++The procfs entries under `/proc/<pid>/fd` were created with owner `root:root` while using modes
++such as `u+rx` and `u+rwx`. After the testcase dropped privileges, the process could no longer
++traverse its own `/proc/self/fd` directory to link the anonymous tmpfile back into the target
++directory.
++
++Separately, `ramfs/tmpfs` inode initialization inherited the parent directory gid for tmpfiles,
++but it did not clear `S_ISGID` on non-directory creations when the caller lacked `CAP_FSETID` and
++was not a member of the inherited group.
++
++## Fix
++
++- Set procfs `fd` / `fdinfo` entries and `fd` symlinks to the traced task's `fsuid/fsgid`.
++- In `ramfs/tmpfs` creation attributes, strip `S_ISGID` from non-directory creations unless the
++  caller has `CAP_FSETID` or belongs to the target group.
++
++## Validation
++
++- `make run_kernel AUTO_TEST=syscall SYSCALL_TEST_SUITE=ltp LTP_CASES=openat04`
+diff --git a/test/initramfs/src/syscall/ltp/testcases/all.txt b/test/initramfs/src/syscall/ltp/testcases/all.txt
+index 163899e5..2753ad66 100644
+--- a/test/initramfs/src/syscall/ltp/testcases/all.txt
++++ b/test/initramfs/src/syscall/ltp/testcases/all.txt
+@@ -1001,7 +1001,7 @@ open15
+ openat01
+ openat02
+ openat03
+-# openat04
++openat04
+ 
+ # openat201
+ # openat202
+-- 
+2.43.0
+

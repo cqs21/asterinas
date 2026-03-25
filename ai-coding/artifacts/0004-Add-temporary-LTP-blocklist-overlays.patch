@@ -1,0 +1,125 @@
+From fe9789d9ee304680ee18f47b29a632650c77a622 Mon Sep 17 00:00:00 2001
+From: Qingsong Chen <changxian.cqs@antgroup.com>
+Date: Tue, 24 Mar 2026 06:07:20 +0000
+Subject: [PATCH 04/97] Add temporary LTP blocklist overlays
+
+---
+ test/initramfs/src/syscall/ltp/Makefile       | 45 +++++++++++++++++--
+ .../ltp/debug/task-1.3-extra-blocklists.md    | 30 +++++++++++++
+ 2 files changed, 72 insertions(+), 3 deletions(-)
+ create mode 100644 test/initramfs/src/syscall/ltp/debug/task-1.3-extra-blocklists.md
+
+diff --git a/test/initramfs/src/syscall/ltp/Makefile b/test/initramfs/src/syscall/ltp/Makefile
+index f63b7843..50565c86 100644
+--- a/test/initramfs/src/syscall/ltp/Makefile
++++ b/test/initramfs/src/syscall/ltp/Makefile
+@@ -26,6 +26,44 @@ $(TARGET_DIR): $(RUN_BASH) $(ALL_TESTS) $(EXT2_BLOCKLIST) $(EXFAT_BLOCKLIST)
+ 	else \
+ 		cp -f $@/all.txt $@/fs_filtered.txt; \
+ 	fi;
++	@cp -f $@/fs_filtered.txt $@/extra_filtered.txt
++	@if [ -n "$(EXTRA_BLOCKLISTS_DIRS)" ] && [ "$(EXTRA_BLOCKLISTS_DIRS)" != "\"\"" ] && [ "$(EXTRA_BLOCKLISTS_DIRS)" != "''" ]; then \
++		for extra_dir in $(EXTRA_BLOCKLISTS_DIRS); do \
++			if [ -z "$$extra_dir" ] || [ "$$extra_dir" = "\"\"" ] || [ "$$extra_dir" = "''" ]; then \
++				continue; \
++			fi; \
++			case "$$extra_dir" in \
++				/*) extra_dir_path="$$extra_dir" ;; \
++				*) extra_dir_path="$(CUR_DIR)/$$extra_dir" ;; \
++			esac; \
++			if [ ! -d "$$extra_dir_path" ]; then \
++				echo "Error: EXTRA_BLOCKLISTS_DIRS entry is not a directory: $$extra_dir" >&2; \
++				exit 1; \
++			fi; \
++			for blocklist_file in "$$extra_dir_path/all.txt"; do \
++				if [ -f "$$blocklist_file" ]; then \
++					awk '!/^#/ && NF { print $$1 }' "$$blocklist_file" > $@/extra_blocklist.txt; \
++					if [ -s $@/extra_blocklist.txt ]; then \
++						grep -vxF -f $@/extra_blocklist.txt $@/extra_filtered.txt > $@/extra_filtered.next || true; \
++						mv $@/extra_filtered.next $@/extra_filtered.txt; \
++					fi; \
++				fi; \
++			done; \
++			if [ "$(SYSCALL_TEST_WORKDIR)" = "/ext2" ] && [ -f "$$extra_dir_path/ext2.txt" ]; then \
++				awk '!/^#/ && NF { print $$1 }' "$$extra_dir_path/ext2.txt" > $@/extra_blocklist.txt; \
++				if [ -s $@/extra_blocklist.txt ]; then \
++					grep -vxF -f $@/extra_blocklist.txt $@/extra_filtered.txt > $@/extra_filtered.next || true; \
++					mv $@/extra_filtered.next $@/extra_filtered.txt; \
++				fi; \
++			elif [ "$(SYSCALL_TEST_WORKDIR)" = "/exfat" ] && [ -f "$$extra_dir_path/exfat.txt" ]; then \
++				awk '!/^#/ && NF { print $$1 }' "$$extra_dir_path/exfat.txt" > $@/extra_blocklist.txt; \
++				if [ -s $@/extra_blocklist.txt ]; then \
++					grep -vxF -f $@/extra_blocklist.txt $@/extra_filtered.txt > $@/extra_filtered.next || true; \
++					mv $@/extra_filtered.next $@/extra_filtered.txt; \
++				fi; \
++			fi; \
++		done; \
++	fi;
+ 	@if [ -n "$(LTP_CASES)" ] || [ -n "$(LTP_CASE_FILE)" ]; then \
+ 		: > $@/selected.txt; \
+ 		if [ -n "$(LTP_CASES)" ]; then \
+@@ -43,13 +81,13 @@ $(TARGET_DIR): $(RUN_BASH) $(ALL_TESTS) $(EXT2_BLOCKLIST) $(EXFAT_BLOCKLIST)
+ 			echo "Error: no testcases selected from LTP_CASES/LTP_CASE_FILE." >&2; \
+ 			exit 1; \
+ 		fi; \
+-		grep -xF -f $@/selected.txt $@/fs_filtered.txt > $@/filtered.txt || true; \
++		grep -xF -f $@/selected.txt $@/extra_filtered.txt > $@/filtered.txt || true; \
+ 		if [ ! -s $@/filtered.txt ]; then \
+ 			echo "Error: selected LTP cases are not enabled after blocklist filtering." >&2; \
+ 			exit 1; \
+ 		fi; \
+ 	else \
+-		cp -f $@/fs_filtered.txt $@/filtered.txt; \
++		cp -f $@/extra_filtered.txt $@/filtered.txt; \
+ 	fi;
+ 	@# Process syscall testcases and copy binaries
+ 	@while read -r syscall binary params; do \
+@@ -63,7 +101,8 @@ $(TARGET_DIR): $(RUN_BASH) $(ALL_TESTS) $(EXT2_BLOCKLIST) $(EXFAT_BLOCKLIST)
+ 		fi; \
+ 	done < $(LTP_PREBUILT_DIR)/runtest/syscalls
+ 	@# Remove intermediate files
+-	@rm -f $@/all.txt $@/fs_filtered.txt $@/filtered.txt $@/selected.txt
++	@rm -f $@/all.txt $@/fs_filtered.txt $@/extra_filtered.txt $@/extra_filtered.next \
++		$@/filtered.txt $@/selected.txt $@/extra_blocklist.txt
+ 	@# Copy bash scripts
+ 	@cp -r $(LTP_PREBUILT_DIR)/bin $@
+ 	@cp -f $(LTP_PREBUILT_DIR)/runltp $@
+diff --git a/test/initramfs/src/syscall/ltp/debug/task-1.3-extra-blocklists.md b/test/initramfs/src/syscall/ltp/debug/task-1.3-extra-blocklists.md
+new file mode 100644
+index 00000000..9ab026d8
+--- /dev/null
++++ b/test/initramfs/src/syscall/ltp/debug/task-1.3-extra-blocklists.md
+@@ -0,0 +1,30 @@
++# Task 1.3: Temporary Extra Blocklists
++
++## Goal
++
++Allow local LTP triage runs to inject temporary blocklists through
++`EXTRA_BLOCKLISTS_DIRS` without editing the repository's persistent enable list
++or filesystem blocklists.
++
++## Problem Cause
++
++Before this change, LTP packaging only knew about `testcases/all.txt` and the
++built-in `/ext2` and `/exfat` exclusions. Developers had no low-friction way to
++quarantine unstable cases locally, so ad hoc debugging either required editing
++tracked files or running the whole batch.
++
++## Solution
++
++Extended [`Makefile`](../Makefile) so LTP packaging can consume a
++whitespace-separated list of extra blocklist directories via
++`EXTRA_BLOCKLISTS_DIRS`.
++
++For each directory, packaging now applies:
++
++- `all.txt` to every run target.
++- `ext2.txt` only for `/ext2`.
++- `exfat.txt` only for `/exfat`.
++
++Entries can be absolute paths or paths relative to the LTP source directory.
++The extra blocklists are layered on top of the built-in filters before the
++final `runtest/syscalls` file is generated.
+-- 
+2.43.0
+

@@ -1,0 +1,81 @@
+From 42c9be1aa24e8a3b0def42ec86033c7a5ab2645f Mon Sep 17 00:00:00 2001
+From: Qingsong Chen <changxian.cqs@antgroup.com>
+Date: Tue, 24 Mar 2026 09:09:24 +0000
+Subject: [PATCH 17/97] Enable LTP epoll_ctl05
+
+---
+ .../src/syscall/ltp/debug/family-epoll-07.md  | 48 +++++++++++++++++++
+ .../src/syscall/ltp/testcases/all.txt         |  2 +-
+ 2 files changed, 49 insertions(+), 1 deletion(-)
+ create mode 100644 test/initramfs/src/syscall/ltp/debug/family-epoll-07.md
+
+diff --git a/test/initramfs/src/syscall/ltp/debug/family-epoll-07.md b/test/initramfs/src/syscall/ltp/debug/family-epoll-07.md
+new file mode 100644
+index 00000000..839517cc
+--- /dev/null
++++ b/test/initramfs/src/syscall/ltp/debug/family-epoll-07.md
+@@ -0,0 +1,48 @@
++# `epoll_ctl05`
++
++## Goal
++
++Re-enable `epoll_ctl05` in Phase 3 and verify that the nested-epoll loop check
++works consistently on `/tmp`, `/ext2`, and `/exfat`.
++
++## Root cause
++
++`epoll_ctl05` is a follow-up coverage case for nested epoll topologies. It
++builds an epoll chain, removes the first edge, and then tries to add the tail
++epoll back to the head. Linux must reject that final `EPOLL_CTL_ADD` with
++`ELOOP` because it would recreate an epoll cycle.
++
++After the earlier `epoll_ctl04` fix, Asterinas already had the required graph
++walk and loop detection in `EpollFile::check_nested_epoll()`. So `epoll_ctl05`
++was not blocked by a new kernel bug; it was simply still commented out in the
++LTP testcase list and had not been revalidated end-to-end.
++
++## Solution
++
++- Re-run `epoll_ctl05` on `/tmp`, `/ext2`, and `/exfat`.
++- Confirm that all three workdirs return `ELOOP` at the expected add step.
++- Re-enable `epoll_ctl05` in `testcases/all.txt`.
++
++## Validation
++
++```bash
++make run_kernel AUTO_TEST=syscall SYSCALL_TEST_SUITE=ltp LTP_CASES=epoll_ctl05
++make run_kernel AUTO_TEST=syscall SYSCALL_TEST_SUITE=ltp \
++  SYSCALL_TEST_WORKDIR=/ext2 LTP_CASES=epoll_ctl05
++make run_kernel AUTO_TEST=syscall SYSCALL_TEST_SUITE=ltp \
++  SYSCALL_TEST_WORKDIR=/exfat LTP_CASES=epoll_ctl05
++```
++
++Observed result on all three workdirs:
++
++- `epoll_ctl(..., EPOLL_CTL_ADD, ...) : ELOOP (40)`
++
++Each run finished with `PASS`.
++
++## Impact / Residual risk
++
++- No kernel code changes were needed for this testcase; the earlier nested
++  epoll fix already covered the required behavior.
++- This re-enable primarily increases confidence that both the depth-limit case
++  (`epoll_ctl04`) and the explicit loop case (`epoll_ctl05`) stay covered by
++  LTP.
+diff --git a/test/initramfs/src/syscall/ltp/testcases/all.txt b/test/initramfs/src/syscall/ltp/testcases/all.txt
+index b6603e70..f16d561f 100644
+--- a/test/initramfs/src/syscall/ltp/testcases/all.txt
++++ b/test/initramfs/src/syscall/ltp/testcases/all.txt
+@@ -180,7 +180,7 @@ epoll_ctl01
+ epoll_ctl02
+ epoll_ctl03
+ epoll_ctl04
+-# epoll_ctl05
++epoll_ctl05
+ epoll_wait01
+ epoll_wait02
+ epoll_wait03
+-- 
+2.43.0
+

@@ -1,0 +1,183 @@
+From 6a5e1b6c646313b280f6ddd8d919c9fd95a51c39 Mon Sep 17 00:00:00 2001
+From: Qingsong Chen <changxian.cqs@antgroup.com>
+Date: Wed, 25 Mar 2026 04:53:12 +0000
+Subject: [PATCH 70/97] Enable LTP open12 case
+
+---
+ .../fs/fs_impls/ext2/impl_for_vfs/inode.rs    |  4 +--
+ kernel/src/fs/fs_impls/ext2/inode.rs          | 24 +++++++++++---
+ kernel/src/fs/fs_impls/ramfs/fs.rs            |  4 +--
+ test/initramfs/src/syscall/ltp/Makefile       |  5 +++
+ .../src/syscall/ltp/debug/family-open-12.md   | 32 +++++++++++++++++++
+ .../src/syscall/ltp/testcases/all.txt         |  2 +-
+ 6 files changed, 61 insertions(+), 10 deletions(-)
+ create mode 100644 test/initramfs/src/syscall/ltp/debug/family-open-12.md
+
+diff --git a/kernel/src/fs/fs_impls/ext2/impl_for_vfs/inode.rs b/kernel/src/fs/fs_impls/ext2/impl_for_vfs/inode.rs
+index ce4f981c..791b89ef 100644
+--- a/kernel/src/fs/fs_impls/ext2/impl_for_vfs/inode.rs
++++ b/kernel/src/fs/fs_impls/ext2/impl_for_vfs/inode.rs
+@@ -29,9 +29,9 @@ impl InodeIo for Ext2Inode {
+         status_flags: StatusFlags,
+     ) -> Result<usize> {
+         if status_flags.contains(StatusFlags::O_DIRECT) {
+-            self.read_direct_at(offset, writer)
++            self.read_direct_at_with_flags(offset, writer, status_flags)
+         } else {
+-            self.read_at(offset, writer)
++            self.read_at_with_flags(offset, writer, status_flags)
+         }
+     }
+ 
+diff --git a/kernel/src/fs/fs_impls/ext2/inode.rs b/kernel/src/fs/fs_impls/ext2/inode.rs
+index 29605f43..b3433230 100644
+--- a/kernel/src/fs/fs_impls/ext2/inode.rs
++++ b/kernel/src/fs/fs_impls/ext2/inode.rs
+@@ -21,7 +21,7 @@ use super::{
+ };
+ use crate::{
+     fs::{
+-        file::{InodeMode, Permission},
++        file::{InodeMode, Permission, StatusFlags},
+         pipe::Pipe,
+         vfs::{
+             inode::{Extension, FallocMode, Inode as _, Metadata},
+@@ -712,20 +712,32 @@ impl Inode {
+         inner.device_id()
+     }
+ 
+-    pub fn read_at(&self, offset: usize, writer: &mut VmWriter) -> Result<usize> {
++    pub fn read_at_with_flags(
++        &self,
++        offset: usize,
++        writer: &mut VmWriter,
++        status_flags: StatusFlags,
++    ) -> Result<usize> {
+         if self.type_ != InodeType::File {
+             return_errno!(Errno::EISDIR);
+         }
+ 
+         let bytes_read = self.inner.read().read_at(offset, writer)?;
+ 
+-        self.set_atime(now());
++        if !status_flags.contains(StatusFlags::O_NOATIME) {
++            self.set_atime(now());
++        }
+ 
+         Ok(bytes_read)
+     }
+ 
+     // The offset and the length of buffer must be multiples of the block size.
+-    pub fn read_direct_at(&self, offset: usize, writer: &mut VmWriter) -> Result<usize> {
++    pub fn read_direct_at_with_flags(
++        &self,
++        offset: usize,
++        writer: &mut VmWriter,
++        status_flags: StatusFlags,
++    ) -> Result<usize> {
+         if self.type_ != InodeType::File {
+             return_errno!(Errno::EISDIR);
+         }
+@@ -735,7 +747,9 @@ impl Inode {
+ 
+         let bytes_read = self.inner.read().read_direct_at(offset, writer)?;
+ 
+-        self.set_atime(now());
++        if !status_flags.contains(StatusFlags::O_NOATIME) {
++            self.set_atime(now());
++        }
+ 
+         Ok(bytes_read)
+     }
+diff --git a/kernel/src/fs/fs_impls/ramfs/fs.rs b/kernel/src/fs/fs_impls/ramfs/fs.rs
+index 9e10fb6d..ea319a11 100644
+--- a/kernel/src/fs/fs_impls/ramfs/fs.rs
++++ b/kernel/src/fs/fs_impls/ramfs/fs.rs
+@@ -635,7 +635,7 @@ impl InodeIo for RamInode {
+         &self,
+         offset: usize,
+         writer: &mut VmWriter,
+-        _status_flags: StatusFlags,
++        status_flags: StatusFlags,
+     ) -> Result<usize> {
+         let read_len = match &self.inner {
+             Inner::File(page_cache) => {
+@@ -651,7 +651,7 @@ impl InodeIo for RamInode {
+             _ => return_errno_with_message!(Errno::EISDIR, "read is not supported"),
+         };
+ 
+-        if self.typ == InodeType::File {
++        if self.typ == InodeType::File && !status_flags.contains(StatusFlags::O_NOATIME) {
+             self.set_atime(now());
+         }
+         Ok(read_len)
+diff --git a/test/initramfs/src/syscall/ltp/Makefile b/test/initramfs/src/syscall/ltp/Makefile
+index 8e8afeb1..90aa7a51 100644
+--- a/test/initramfs/src/syscall/ltp/Makefile
++++ b/test/initramfs/src/syscall/ltp/Makefile
+@@ -95,6 +95,11 @@ $(TARGET_DIR): $(RUN_BASH) $(KCONFIG_TEMPLATE) $(ALL_TESTS) $(EXT2_BLOCKLIST) $(
+ 		fi; \
+ 			if [ -f $(LTP_PREBUILT_DIR)/testcases/bin/$$binary ]; then \
+ 				cp -f $(LTP_PREBUILT_DIR)/testcases/bin/$$binary $@/testcases/bin; \
++				for helper in $(LTP_PREBUILT_DIR)/testcases/bin/$$binary\_*; do \
++					if [ -f "$$helper" ]; then \
++						cp -f "$$helper" $@/testcases/bin; \
++					fi; \
++				done; \
+ 				echo "$$syscall $$binary $$params" >> $@/runtest/syscalls; \
+ 				echo "$$syscall" >> $@/matched.txt; \
+ 			else \
+diff --git a/test/initramfs/src/syscall/ltp/debug/family-open-12.md b/test/initramfs/src/syscall/ltp/debug/family-open-12.md
+new file mode 100644
+index 00000000..50395499
+--- /dev/null
++++ b/test/initramfs/src/syscall/ltp/debug/family-open-12.md
+@@ -0,0 +1,32 @@
++# open12
++
++## Goal
++
++Enable `open12` and make the `open()` flag coverage for `O_APPEND`, `O_NOATIME`, `O_CLOEXEC`,
++and `O_LARGEFILE` pass in the LTP environment.
++
++## Failure
++
++On `/tmp`, `open12` initially failed in two places:
++
++- `O_NOATIME` still changed `st_atime`
++- the `O_CLOEXEC` subtest hit `TBROK` because `execlp("open12_child", ...)` failed
++
++## Root Cause
++
++The kernel-side read paths in `ramfs/tmpfs` and `ext2` updated atime unconditionally and ignored
++`O_NOATIME`.
++
++Separately, the initramfs LTP packaging logic only copied the primary testcase binaries listed in
++`runtest/syscalls`. Helper binaries such as `open12_child` were omitted, so the exec-based
++close-on-exec check could not start.
++
++## Fix
++
++- Respect `StatusFlags::O_NOATIME` in the `ramfs/tmpfs` and `ext2` read paths.
++- Extend the LTP initramfs packaging step to copy companion helper binaries matching the selected
++  testcase binary prefix, such as `open12_child`.
++
++## Validation
++
++- `make run_kernel AUTO_TEST=syscall SYSCALL_TEST_SUITE=ltp LTP_CASES=open12`
+diff --git a/test/initramfs/src/syscall/ltp/testcases/all.txt b/test/initramfs/src/syscall/ltp/testcases/all.txt
+index a0f3f63c..4ee05d44 100644
+--- a/test/initramfs/src/syscall/ltp/testcases/all.txt
++++ b/test/initramfs/src/syscall/ltp/testcases/all.txt
+@@ -993,7 +993,7 @@ open08
+ open09
+ open10
+ open11
+-# open12
++open12
+ # open13
+ # open14
+ open15
+-- 
+2.43.0
+

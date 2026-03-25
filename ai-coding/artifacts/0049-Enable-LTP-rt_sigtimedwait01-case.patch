@@ -1,0 +1,99 @@
+From f8c7c4faa54bed52bd0c1c7110d038b705b3cef3 Mon Sep 17 00:00:00 2001
+From: Qingsong Chen <changxian.cqs@antgroup.com>
+Date: Wed, 25 Mar 2026 01:53:24 +0000
+Subject: [PATCH 49/97] Enable LTP rt_sigtimedwait01 case
+
+---
+ .../ltp/debug/family-rt-sigtimedwait-01.md    | 66 +++++++++++++++++++
+ .../src/syscall/ltp/testcases/all.txt         |  2 +-
+ 2 files changed, 67 insertions(+), 1 deletion(-)
+ create mode 100644 test/initramfs/src/syscall/ltp/debug/family-rt-sigtimedwait-01.md
+
+diff --git a/test/initramfs/src/syscall/ltp/debug/family-rt-sigtimedwait-01.md b/test/initramfs/src/syscall/ltp/debug/family-rt-sigtimedwait-01.md
+new file mode 100644
+index 00000000..2a7b1764
+--- /dev/null
++++ b/test/initramfs/src/syscall/ltp/debug/family-rt-sigtimedwait-01.md
+@@ -0,0 +1,66 @@
++# `rt_sigtimedwait01`
++
++## Goal
++
++Re-enable `rt_sigtimedwait01` in Phase 3 and verify that it passes on `/tmp`,
++`/ext2`, and `/exfat`.
++
++## Root Cause
++
++There was no remaining kernel defect in this case. `rt_sigtimedwait01` checks
++the core realtime signal wait path, including successful wakeup on matching
++signals, timeout handling, `siginfo_t` contents, restoration of the signal
++mask, and `EFAULT` on bad user pointers.
++
++The current `rt_sigtimedwait` implementation already satisfies those
++expectations on all tested workdirs. The testcase had simply remained disabled
++in `testcases/all.txt`.
++
++## Solution
++
++- Re-ran `rt_sigtimedwait01` on `/tmp`, `/ext2`, and `/exfat`.
++- Confirmed that the existing implementation already matches the expected
++  Linux-compatible behavior.
++- Re-enabled `rt_sigtimedwait01` in `testcases/all.txt`.
++
++## Validation
++
++```bash
++SSH_PORT=43022 NGINX_PORT=49080 REDIS_PORT=47379 IPERF_PORT=46201 \
++LMBENCH_TCP_LAT_PORT=42234 LMBENCH_TCP_BW_PORT=42236 MEMCACHED_PORT=42211 \
++make run_kernel AUTO_TEST=syscall SYSCALL_TEST_SUITE=ltp \
++  LTP_CASES=rt_sigtimedwait01
++
++SSH_PORT=43022 NGINX_PORT=49080 REDIS_PORT=47379 IPERF_PORT=46201 \
++LMBENCH_TCP_LAT_PORT=42234 LMBENCH_TCP_BW_PORT=42236 MEMCACHED_PORT=42211 \
++make run_kernel AUTO_TEST=syscall SYSCALL_TEST_SUITE=ltp \
++  SYSCALL_TEST_WORKDIR=/ext2 \
++  LTP_CASES=rt_sigtimedwait01
++
++SSH_PORT=43022 NGINX_PORT=49080 REDIS_PORT=47379 IPERF_PORT=46201 \
++LMBENCH_TCP_LAT_PORT=42234 LMBENCH_TCP_BW_PORT=42236 MEMCACHED_PORT=42211 \
++make run_kernel AUTO_TEST=syscall SYSCALL_TEST_SUITE=ltp \
++  SYSCALL_TEST_WORKDIR=/exfat \
++  LTP_CASES=rt_sigtimedwait01
++```
++
++Observed results:
++
++- `/tmp`: `PASS`
++- `/ext2`: `PASS`
++- `/exfat`: `PASS`
++
++Observed behavior on all three runs:
++
++- matching signals woke the waiter correctly
++- timeout paths returned as expected
++- `siginfo_t` contents matched LTP's checks
++- bad user pointers returned `EFAULT`
++- the original signal mask was restored after the wait
++
++## Impact / Residual Risk
++
++- This extends active realtime-signal wait coverage without a kernel code
++  change.
++- The remaining disabled realtime-signal work in this family is centered on
++  `rt_sigqueueinfo`, which currently lacks syscall table support.
+diff --git a/test/initramfs/src/syscall/ltp/testcases/all.txt b/test/initramfs/src/syscall/ltp/testcases/all.txt
+index 8988cfd9..545e12b8 100644
+--- a/test/initramfs/src/syscall/ltp/testcases/all.txt
++++ b/test/initramfs/src/syscall/ltp/testcases/all.txt
+@@ -1267,7 +1267,7 @@ rt_sigprocmask02
+ # rt_sigqueueinfo01
+ # rt_sigqueueinfo02
+ rt_sigsuspend01
+-# rt_sigtimedwait01
++rt_sigtimedwait01
+ # rt_tgsigqueueinfo01
+ 
+ sbrk01
+-- 
+2.43.0
+

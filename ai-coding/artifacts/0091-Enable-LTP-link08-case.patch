@@ -1,0 +1,107 @@
+From 9b82a46c7714eeba05f46808919d5c35c5ad8598 Mon Sep 17 00:00:00 2001
+From: Qingsong Chen <changxian.cqs@antgroup.com>
+Date: Wed, 25 Mar 2026 07:04:49 +0000
+Subject: [PATCH 91/97] Enable LTP link08 case
+
+---
+ kernel/src/fs/vfs/path/mod.rs                 | 13 +++++++++
+ .../src/syscall/ltp/debug/family-link-08.md   | 28 +++++++++++++++++++
+ .../src/syscall/ltp/testcases/all.txt         |  2 +-
+ 3 files changed, 42 insertions(+), 1 deletion(-)
+ create mode 100644 test/initramfs/src/syscall/ltp/debug/family-link-08.md
+
+diff --git a/kernel/src/fs/vfs/path/mod.rs b/kernel/src/fs/vfs/path/mod.rs
+index 5a627e58..76a99dfe 100644
+--- a/kernel/src/fs/vfs/path/mod.rs
++++ b/kernel/src/fs/vfs/path/mod.rs
+@@ -55,6 +55,16 @@ impl PartialEq for Path {
+ impl Eq for Path {}
+ 
+ impl Path {
++    fn check_writable_mount(&self) -> Result<()> {
++        if self.mount.flags().contains(PerMountFlags::RDONLY)
++            || self.mount.fs().flags().contains(FsFlags::RDONLY)
++        {
++            return_errno_with_message!(Errno::EROFS, "the mount is read-only");
++        }
++
++        Ok(())
++    }
++
+     /// Creates a new `Path` to represent the root directory of a file system.
+     pub fn new_fs_root(mount: Arc<Mount>) -> Self {
+         let inner = mount.root_dentry().clone();
+@@ -63,6 +73,7 @@ impl Path {
+ 
+     /// Creates a new `Path` to represent the child directory of a file system.
+     pub fn new_fs_child(&self, name: &str, type_: InodeType, mode: InodeMode) -> Result<Self> {
++        self.check_writable_mount()?;
+         if self
+             .inode()
+             .check_permission(Permission::MAY_WRITE)
+@@ -169,6 +180,7 @@ impl Path {
+             return_errno_with_message!(Errno::EINVAL, "O_TMPFILE cannot be used with O_PATH");
+         }
+ 
++        self.check_writable_mount()?;
+         self.inode().check_permission(Permission::MAY_WRITE)?;
+ 
+         let inode = self.inode().create_tmpfile(open_args.inode_mode)?;
+@@ -528,6 +540,7 @@ impl Path {
+     pub fn type_(&self) -> InodeType;
+ 
+     fn check_dir_modification_permission(&self) -> Result<()> {
++        self.check_writable_mount()?;
+         self.inode()
+             .check_permission(Permission::MAY_WRITE | Permission::MAY_EXEC)
+     }
+diff --git a/test/initramfs/src/syscall/ltp/debug/family-link-08.md b/test/initramfs/src/syscall/ltp/debug/family-link-08.md
+new file mode 100644
+index 00000000..4662c36f
+--- /dev/null
++++ b/test/initramfs/src/syscall/ltp/debug/family-link-08.md
+@@ -0,0 +1,28 @@
++# link08
++
++## Goal
++
++Enable `link08` on `/tmp`.
++
++## Failure
++
++`link08` checks several hard-link error cases, including creating a hard link on a read-only
++mount. On `/tmp`, the read-only-mount subcase unexpectedly succeeded instead of returning `EROFS`.
++
++## Root Cause
++
++The VFS path mutation entry points only enforced permission checks on directory inodes. They did
++not reject mutations on mounts or superblocks marked read-only, so `link()` could still create a
++new directory entry after the mount had been remounted `MS_RDONLY`.
++
++## Fix
++
++- Added a shared read-only mount check in `Path`.
++- Reused that check before creating new filesystem children, creating `O_TMPFILE` inodes, and
++  before all directory mutation helpers reached `mknod()`, `link()`, `unlink()`, `rmdir()`, and
++  `rename()`.
++- Enabled `link08` in `testcases/all.txt`.
++
++## Validation
++
++- `make run_kernel AUTO_TEST=syscall SYSCALL_TEST_SUITE=ltp LTP_CASES=link08`
+diff --git a/test/initramfs/src/syscall/ltp/testcases/all.txt b/test/initramfs/src/syscall/ltp/testcases/all.txt
+index 466132f4..c538770d 100644
+--- a/test/initramfs/src/syscall/ltp/testcases/all.txt
++++ b/test/initramfs/src/syscall/ltp/testcases/all.txt
+@@ -740,7 +740,7 @@ lchown01
+ link02
+ link04
+ link05
+-# link08
++link08
+ 
+ #linkat test cases
+ linkat01
+-- 
+2.43.0
+

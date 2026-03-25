@@ -1,0 +1,49 @@
+From 0090b6f7983f5262e422dfd3eeeec8a16335f3a1 Mon Sep 17 00:00:00 2001
+From: Qingsong Chen <changxian.cqs@antgroup.com>
+Date: Wed, 25 Mar 2026 06:35:12 +0000
+Subject: [PATCH 83/97] Document LTP rename11 blocker
+
+---
+ .../src/syscall/ltp/debug/family-rename-11.md | 30 +++++++++++++++++++
+ 1 file changed, 30 insertions(+)
+ create mode 100644 test/initramfs/src/syscall/ltp/debug/family-rename-11.md
+
+diff --git a/test/initramfs/src/syscall/ltp/debug/family-rename-11.md b/test/initramfs/src/syscall/ltp/debug/family-rename-11.md
+new file mode 100644
+index 00000000..edbff679
+--- /dev/null
++++ b/test/initramfs/src/syscall/ltp/debug/family-rename-11.md
+@@ -0,0 +1,30 @@
++# rename11
++
++## Goal
++
++Assess whether `rename11` needs a `/tmp`-side kernel fix before enabling it in the Priority A
++set.
++
++## Failure
++
++`rename11` did not reach the rename assertions on `/tmp`. The testcase tried to prepare an ext2
++test device and failed during formatting:
++
++- `mkfs.ext2: lseek(0, 2): Invalid argument`
++- `rename11.c:107: mkfs.ext2 failed with exit code 1`
++
++## Root Cause
++
++This case is currently blocked in the ext2-device setup path rather than by `/tmp` rename
++semantics. The failure happens before the testcase exercises the target rename behavior, so there
++is no `/tmp` VFS regression to fix for this item.
++
++## Resolution
++
++- Left `rename11` disabled in `testcases/all.txt`.
++- Recorded the blocker instead of changing ext2-specific behavior, per the current priority to
++  finish `/tmp` coverage first.
++
++## Validation
++
++- `make run_kernel AUTO_TEST=syscall SYSCALL_TEST_SUITE=ltp LTP_CASES=rename11`
+-- 
+2.43.0
+

@@ -1,0 +1,87 @@
+From 2737759a93350eb737ebd7ded092da3804498496 Mon Sep 17 00:00:00 2001
+From: Qingsong Chen <changxian.cqs@antgroup.com>
+Date: Tue, 24 Mar 2026 17:40:54 +0000
+Subject: [PATCH 46/97] Enable LTP rename05 case
+
+---
+ .../src/syscall/ltp/debug/family-rename-05.md | 54 +++++++++++++++++++
+ .../src/syscall/ltp/testcases/all.txt         |  2 +-
+ 2 files changed, 55 insertions(+), 1 deletion(-)
+ create mode 100644 test/initramfs/src/syscall/ltp/debug/family-rename-05.md
+
+diff --git a/test/initramfs/src/syscall/ltp/debug/family-rename-05.md b/test/initramfs/src/syscall/ltp/debug/family-rename-05.md
+new file mode 100644
+index 00000000..87169825
+--- /dev/null
++++ b/test/initramfs/src/syscall/ltp/debug/family-rename-05.md
+@@ -0,0 +1,54 @@
++# `rename05`
++
++## Goal
++
++Re-enable `rename05` in Phase 3 and verify that it passes on `/tmp`, `/ext2`,
++and `/exfat`.
++
++## Root Cause
++
++There was no remaining kernel defect in this case. `rename05` checks the
++negative path where `rename(file, existing_dir)` must fail with `EISDIR`.
++
++The current VFS path already returns Linux-compatible `EISDIR` on all tested
++targets. The testcase had simply remained disabled in
++`testcases/all.txt`.
++
++## Solution
++
++- Re-ran `rename05` on `/tmp`, `/ext2`, and `/exfat`.
++- Confirmed that the existing implementation already returns the expected
++  `EISDIR` errno.
++- Re-enabled `rename05` in `testcases/all.txt`.
++
++## Validation
++
++```bash
++make run_kernel AUTO_TEST=syscall SYSCALL_TEST_SUITE=ltp \
++  LTP_CASES=rename05
++
++make run_kernel AUTO_TEST=syscall SYSCALL_TEST_SUITE=ltp \
++  SYSCALL_TEST_WORKDIR=/ext2 \
++  LTP_CASES=rename05
++
++make run_kernel AUTO_TEST=syscall SYSCALL_TEST_SUITE=ltp \
++  SYSCALL_TEST_WORKDIR=/exfat \
++  LTP_CASES=rename05
++```
++
++Observed results:
++
++- `/tmp`: `PASS`
++- `/ext2`: `PASS`
++- `/exfat`: `PASS`
++
++Observed errno on all three runs:
++
++- `rename()` rejected the operation with `EISDIR`
++
++## Impact / Residual Risk
++
++- This extends active rename-family negative-path coverage without a kernel
++  code change.
++- The remaining Priority A rename todo is `rename06`, which checks rejecting
++  renaming a directory into its own subdirectory.
+diff --git a/test/initramfs/src/syscall/ltp/testcases/all.txt b/test/initramfs/src/syscall/ltp/testcases/all.txt
+index 018a4bb1..cb74d801 100644
+--- a/test/initramfs/src/syscall/ltp/testcases/all.txt
++++ b/test/initramfs/src/syscall/ltp/testcases/all.txt
+@@ -1230,7 +1230,7 @@ removexattr01
+ rename01
+ rename03
+ rename04
+-# rename05
++rename05
+ # rename06
+ # rename07
+ # rename08
+-- 
+2.43.0
+

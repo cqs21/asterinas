@@ -1,0 +1,95 @@
+From 8d9c1102b0980d7a60a93a676d0c728c8d21a9e0 Mon Sep 17 00:00:00 2001
+From: Qingsong Chen <changxian.cqs@antgroup.com>
+Date: Wed, 25 Mar 2026 02:22:53 +0000
+Subject: [PATCH 54/97] Enable LTP sched_rr_get_interval02 case
+
+---
+ .../debug/family-sched-rr-get-interval-02.md  | 62 +++++++++++++++++++
+ .../src/syscall/ltp/testcases/all.txt         |  2 +-
+ 2 files changed, 63 insertions(+), 1 deletion(-)
+ create mode 100644 test/initramfs/src/syscall/ltp/debug/family-sched-rr-get-interval-02.md
+
+diff --git a/test/initramfs/src/syscall/ltp/debug/family-sched-rr-get-interval-02.md b/test/initramfs/src/syscall/ltp/debug/family-sched-rr-get-interval-02.md
+new file mode 100644
+index 00000000..58e62782
+--- /dev/null
++++ b/test/initramfs/src/syscall/ltp/debug/family-sched-rr-get-interval-02.md
+@@ -0,0 +1,62 @@
++# `sched_rr_get_interval02`
++
++## Goal
++
++Re-enable `sched_rr_get_interval02` in Phase 3 and verify that it passes on
++`/tmp`, `/ext2`, and `/exfat`.
++
++## Root Cause
++
++There was no additional kernel defect beyond the `sched_rr_get_interval`
++compatibility gap already fixed for `sched_rr_get_interval01`.
++
++Once the syscall was wired into the dispatch tables and started returning a
++Linux-compatible interval, `sched_rr_get_interval02` passed unchanged on all
++three workdirs. This testcase had simply remained disabled in
++`testcases/all.txt`.
++
++## Solution
++
++- Re-ran `sched_rr_get_interval02` on `/tmp`, `/ext2`, and `/exfat`.
++- Confirmed that the existing `sched_rr_get_interval` implementation added for
++  `sched_rr_get_interval01` already satisfies this testcase.
++- Re-enabled `sched_rr_get_interval02` in `testcases/all.txt`.
++
++## Validation
++
++```bash
++SSH_PORT=46033 NGINX_PORT=52091 REDIS_PORT=50390 IPERF_PORT=49212 \
++LMBENCH_TCP_LAT_PORT=45344 LMBENCH_TCP_BW_PORT=45346 MEMCACHED_PORT=45321 \
++make run_kernel AUTO_TEST=syscall SYSCALL_TEST_SUITE=ltp \
++  LTP_CASES=sched_rr_get_interval02
++
++SSH_PORT=46034 NGINX_PORT=52092 REDIS_PORT=50391 IPERF_PORT=49213 \
++LMBENCH_TCP_LAT_PORT=45354 LMBENCH_TCP_BW_PORT=45356 MEMCACHED_PORT=45331 \
++make run_kernel AUTO_TEST=syscall SYSCALL_TEST_SUITE=ltp \
++  SYSCALL_TEST_WORKDIR=/ext2 \
++  LTP_CASES=sched_rr_get_interval02
++
++SSH_PORT=46035 NGINX_PORT=52093 REDIS_PORT=50392 IPERF_PORT=49214 \
++LMBENCH_TCP_LAT_PORT=45364 LMBENCH_TCP_BW_PORT=45366 MEMCACHED_PORT=45341 \
++make run_kernel AUTO_TEST=syscall SYSCALL_TEST_SUITE=ltp \
++  SYSCALL_TEST_WORKDIR=/exfat \
++  LTP_CASES=sched_rr_get_interval02
++```
++
++Observed results:
++
++- `/tmp`: `PASS`
++- `/ext2`: `PASS`
++- `/exfat`: `PASS`
++
++Observed behavior on all three runs:
++
++- the libc path succeeded
++- the old-kernel-spec raw syscall path succeeded
++
++## Impact / Residual Risk
++
++- This extends active `sched_rr_get_interval*` coverage without another kernel
++  code change.
++- The remaining disabled testcase in this trio is `sched_rr_get_interval03`,
++  which should be triaged next against the same syscall implementation.
+diff --git a/test/initramfs/src/syscall/ltp/testcases/all.txt b/test/initramfs/src/syscall/ltp/testcases/all.txt
+index 9aacac81..290224a4 100644
+--- a/test/initramfs/src/syscall/ltp/testcases/all.txt
++++ b/test/initramfs/src/syscall/ltp/testcases/all.txt
+@@ -1284,7 +1284,7 @@ sched_getparam01
+ sched_getparam03
+ 
+ sched_rr_get_interval01
+-# sched_rr_get_interval02
++sched_rr_get_interval02
+ # sched_rr_get_interval03
+ 
+ sched_setparam01
+-- 
+2.43.0
+

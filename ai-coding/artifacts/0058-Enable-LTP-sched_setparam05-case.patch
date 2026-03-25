@@ -1,0 +1,227 @@
+From 745dd36cb3b372023fce10cabe89675b1b007318 Mon Sep 17 00:00:00 2001
+From: Qingsong Chen <changxian.cqs@antgroup.com>
+Date: Wed, 25 Mar 2026 02:47:33 +0000
+Subject: [PATCH 58/97] Enable LTP sched_setparam05 case
+
+---
+ kernel/src/syscall/sched_setparam.rs          | 42 +++++-----
+ kernel/src/syscall/sched_setscheduler.rs      | 14 ++--
+ .../ltp/debug/family-sched-setparam-05.md     | 77 +++++++++++++++++++
+ .../src/syscall/ltp/testcases/all.txt         |  2 +-
+ 4 files changed, 108 insertions(+), 27 deletions(-)
+ create mode 100644 test/initramfs/src/syscall/ltp/debug/family-sched-setparam-05.md
+
+diff --git a/kernel/src/syscall/sched_setparam.rs b/kernel/src/syscall/sched_setparam.rs
+index 85588274..f03163eb 100644
+--- a/kernel/src/syscall/sched_setparam.rs
++++ b/kernel/src/syscall/sched_setparam.rs
+@@ -2,7 +2,10 @@
+ 
+ use ostd::mm::VmIo;
+ 
+-use super::{SyscallReturn, sched_getattr::access_sched_attr_with};
++use super::{
++    SyscallReturn,
++    sched_setscheduler::{check_sched_change_perm, get_sched_target_info},
++};
+ use crate::{prelude::*, sched::SchedPolicy, thread::Tid};
+ 
+ pub fn sys_sched_setparam(tid: Tid, addr: Vaddr, ctx: &Context) -> Result<SyscallReturn> {
+@@ -11,25 +14,28 @@ pub fn sys_sched_setparam(tid: Tid, addr: Vaddr, ctx: &Context) -> Result<Syscal
+     }
+ 
+     let prio: i32 = ctx.user_space().read_val(addr)?;
+-
+-    let update = |policy: &mut SchedPolicy| {
+-        match policy {
+-            SchedPolicy::RealTime { rt_prio, .. } => {
+-                *rt_prio = u8::try_from(prio)
+-                    .ok()
+-                    .and_then(|p| p.try_into().ok())
+-                    .ok_or_else(|| {
+-                        Error::with_message(Errno::EINVAL, "invalid scheduling priority")
+-                    })?;
+-            }
+-            _ if prio != 0 => {
+-                return_errno_with_message!(Errno::EINVAL, "invalid scheduling priority")
+-            }
+-            _ => {}
++    let target_info = get_sched_target_info(tid, ctx)?;
++    let new_policy = match target_info.old_policy {
++        SchedPolicy::RealTime { rt_policy, .. } => SchedPolicy::RealTime {
++            rt_prio: u8::try_from(prio)
++                .ok()
++                .and_then(|p| p.try_into().ok())
++                .ok_or_else(|| Error::with_message(Errno::EINVAL, "invalid scheduling priority"))?,
++            rt_policy,
++        },
++        _ if prio != 0 => {
++            return_errno_with_message!(Errno::EINVAL, "invalid scheduling priority")
+         }
+-        Ok(())
++        policy => policy,
+     };
+-    access_sched_attr_with(tid, ctx, |attr| attr.update_policy(update))?;
++    check_sched_change_perm(target_info, new_policy)?;
++    if tid == 0 {
++        ctx.thread.sched_attr().set_policy(new_policy);
++    } else {
++        let thread = crate::process::posix_thread::thread_table::get_thread(tid)
++            .ok_or_else(|| Error::with_message(Errno::ESRCH, "the target thread does not exist"))?;
++        thread.sched_attr().set_policy(new_policy);
++    }
+ 
+     Ok(SyscallReturn::Return(0))
+ }
+diff --git a/kernel/src/syscall/sched_setscheduler.rs b/kernel/src/syscall/sched_setscheduler.rs
+index 38176add..e0e4576c 100644
+--- a/kernel/src/syscall/sched_setscheduler.rs
++++ b/kernel/src/syscall/sched_setscheduler.rs
+@@ -19,8 +19,8 @@ use crate::{
+ };
+ 
+ #[derive(Clone, Copy)]
+-struct SchedTargetInfo {
+-    old_policy: SchedPolicy,
++pub(super) struct SchedTargetInfo {
++    pub(super) old_policy: SchedPolicy,
+     rtprio_limit: u64,
+     same_owner: bool,
+     has_sys_nice: bool,
+@@ -46,7 +46,7 @@ pub fn sys_sched_setscheduler(
+     };
+ 
+     let policy = attr.try_into()?;
+-    check_sched_setscheduler_perm(target_info, policy)?;
++    check_sched_change_perm(target_info, policy)?;
+     access_sched_attr_with(tid, ctx, |attr| {
+         attr.set_policy(policy);
+         Ok(())
+@@ -55,7 +55,7 @@ pub fn sys_sched_setscheduler(
+     Ok(SyscallReturn::Return(0))
+ }
+ 
+-fn get_sched_target_info(tid: Tid, ctx: &Context) -> Result<SchedTargetInfo> {
++pub(super) fn get_sched_target_info(tid: Tid, ctx: &Context) -> Result<SchedTargetInfo> {
+     if tid.cast_signed() < 0 {
+         return_errno_with_message!(Errno::EINVAL, "all negative TIDs are not valid");
+     }
+@@ -94,9 +94,7 @@ fn get_sched_target_info(tid: Tid, ctx: &Context) -> Result<SchedTargetInfo> {
+             .get_rlimit(ResourceType::RLIMIT_RTPRIO)
+             .get_cur(),
+         same_owner: current_cred.euid() == target_cred.ruid()
+-            || current_cred.euid() == target_cred.euid()
+-            || current_cred.ruid() == target_cred.ruid()
+-            || current_cred.ruid() == target_cred.euid(),
++            || current_cred.euid() == target_cred.euid(),
+         has_sys_nice: target_process
+             .user_ns()
+             .lock()
+@@ -105,7 +103,7 @@ fn get_sched_target_info(tid: Tid, ctx: &Context) -> Result<SchedTargetInfo> {
+     })
+ }
+ 
+-fn check_sched_setscheduler_perm(
++pub(super) fn check_sched_change_perm(
+     target_info: SchedTargetInfo,
+     new_policy: SchedPolicy,
+ ) -> Result<()> {
+diff --git a/test/initramfs/src/syscall/ltp/debug/family-sched-setparam-05.md b/test/initramfs/src/syscall/ltp/debug/family-sched-setparam-05.md
+new file mode 100644
+index 00000000..9fd45afa
+--- /dev/null
++++ b/test/initramfs/src/syscall/ltp/debug/family-sched-setparam-05.md
+@@ -0,0 +1,77 @@
++# `sched_setparam05`
++
++## Goal
++
++Re-enable `sched_setparam05` in Phase 3 and verify that it passes on `/tmp`,
++`/ext2`, and `/exfat`.
++
++## Root Cause
++
++The kernel accepted scheduler parameter changes that Linux rejects with
++`EPERM`.
++
++Two permission bugs were involved:
++
++- `sys_sched_setparam()` changed the target thread priority without reusing the
++  permission gate already present in `sched_setscheduler`.
++- The shared scheduler ownership check was too permissive and treated a match
++  on the caller's real UID as sufficient. For this LTP case, Linux permission
++  semantics are based on the caller's effective UID matching the target's real
++  or effective UID.
++
++Because of that, unprivileged `sched_setparam()` calls on another thread
++incorrectly succeeded instead of failing with `EPERM`.
++
++## Solution
++
++- Reused the `sched_setscheduler` target lookup and permission check from
++  `sys_sched_setparam()`.
++- Built the new scheduling policy from the target thread's existing policy
++  before applying the permission gate, so real-time priority changes go through
++  the same Linux-compatible validation path.
++- Narrowed `same_owner` in the shared scheduler permission helper to compare the
++  caller effective UID against the target real/effective UID.
++- Re-enabled `sched_setparam05` in `testcases/all.txt`.
++
++## Validation
++
++```bash
++SSH_PORT=46046 NGINX_PORT=52104 REDIS_PORT=50403 IPERF_PORT=49225 \
++LMBENCH_TCP_LAT_PORT=45474 LMBENCH_TCP_BW_PORT=45476 MEMCACHED_PORT=45451 \
++make run_kernel AUTO_TEST=syscall SYSCALL_TEST_SUITE=ltp \
++  LTP_CASES=sched_setparam05
++
++SSH_PORT=46048 NGINX_PORT=52106 REDIS_PORT=50405 IPERF_PORT=49227 \
++LMBENCH_TCP_LAT_PORT=45494 LMBENCH_TCP_BW_PORT=45496 MEMCACHED_PORT=45471 \
++make run_kernel AUTO_TEST=syscall SYSCALL_TEST_SUITE=ltp \
++  SYSCALL_TEST_WORKDIR=/ext2 \
++  LTP_CASES=sched_setparam05
++
++SSH_PORT=46049 NGINX_PORT=52107 REDIS_PORT=50406 IPERF_PORT=49228 \
++LMBENCH_TCP_LAT_PORT=45504 LMBENCH_TCP_BW_PORT=45506 MEMCACHED_PORT=45481 \
++make run_kernel AUTO_TEST=syscall SYSCALL_TEST_SUITE=ltp \
++  SYSCALL_TEST_WORKDIR=/exfat \
++  LTP_CASES=sched_setparam05
++```
++
++Observed results:
++
++- `/tmp`: `PASS`
++- `/ext2`: `PASS`
++- `/exfat`: `PASS`
++
++Observed behavior:
++
++- before the fix, LTP reported successful `sched_setparam(..., 0)` calls where
++  it expected `EPERM`
++- after the fix, both the libc wrapper and raw syscall path returned `EPERM`
++  for the unprivileged cross-thread priority changes checked by the testcase
++
++## Impact / Residual Risk
++
++- This fixes a real Linux-compatibility bug in scheduler permission handling.
++- The change also aligns `sched_setparam()` with the existing
++  `sched_setscheduler()` permission model, reducing the risk of the two syscalls
++  diverging again.
++- Remaining disabled Priority A scheduler work is now the affinity and
++  `sched_{set,get}attr*` cases.
+diff --git a/test/initramfs/src/syscall/ltp/testcases/all.txt b/test/initramfs/src/syscall/ltp/testcases/all.txt
+index 0531c6c1..2d0b6cba 100644
+--- a/test/initramfs/src/syscall/ltp/testcases/all.txt
++++ b/test/initramfs/src/syscall/ltp/testcases/all.txt
+@@ -1291,7 +1291,7 @@ sched_setparam01
+ sched_setparam02
+ sched_setparam03
+ sched_setparam04
+-# sched_setparam05
++sched_setparam05
+ 
+ sched_getscheduler01
+ sched_getscheduler02
+-- 
+2.43.0
+

@@ -1,0 +1,82 @@
+From 1dc86a3e7060527e6b2a3e1c0ae3b8b2f6d9db5b Mon Sep 17 00:00:00 2001
+From: Qingsong Chen <changxian.cqs@antgroup.com>
+Date: Tue, 24 Mar 2026 13:56:11 +0000
+Subject: [PATCH 27/97] Enable LTP fcntl26 cases
+
+---
+ .../src/syscall/ltp/debug/family-fcntl-11.md  | 47 +++++++++++++++++++
+ .../src/syscall/ltp/testcases/all.txt         |  4 +-
+ 2 files changed, 49 insertions(+), 2 deletions(-)
+ create mode 100644 test/initramfs/src/syscall/ltp/debug/family-fcntl-11.md
+
+diff --git a/test/initramfs/src/syscall/ltp/debug/family-fcntl-11.md b/test/initramfs/src/syscall/ltp/debug/family-fcntl-11.md
+new file mode 100644
+index 00000000..e1d030ed
+--- /dev/null
++++ b/test/initramfs/src/syscall/ltp/debug/family-fcntl-11.md
+@@ -0,0 +1,47 @@
++# Fcntl Family Batch 11
++
++## Goal
++
++Re-enable `fcntl26` and `fcntl26_64` in Phase 3, checking `/tmp` first and
++then validating `/ext2` and `/exfat` serially.
++
++## Problem Cause
++
++`fcntl26*` stayed disabled while the earlier file-lease support work was still
++in progress. With the recent `F_SETLEASE` support in place, these cases are no
++longer blocked by a kernel bug.
++
++On `/tmp`, upstream LTP intentionally reports these cases as `TCONF` on ramfs,
++so the expected result there is a configuration skip rather than `PASS`.
++
++## Solution
++
++- Re-validate `fcntl26` and `fcntl26_64` on `/tmp`, `/ext2`, and `/exfat`.
++- Confirm `/tmp` produces the expected ramfs `TCONF`.
++- Confirm `/ext2` and `/exfat` both pass.
++- Re-enable `fcntl26` and `fcntl26_64` in `testcases/all.txt`.
++
++No additional kernel code change was required in this batch.
++
++## Validation Results
++
++Representative commands:
++
++```bash
++make run_kernel AUTO_TEST=syscall SYSCALL_TEST_SUITE=ltp \
++  LTP_CASES=fcntl26,fcntl26_64
++
++make run_kernel AUTO_TEST=syscall SYSCALL_TEST_SUITE=ltp \
++  SYSCALL_TEST_WORKDIR=/ext2 \
++  LTP_CASES=fcntl26,fcntl26_64
++
++make run_kernel AUTO_TEST=syscall SYSCALL_TEST_SUITE=ltp \
++  SYSCALL_TEST_WORKDIR=/exfat \
++  LTP_CASES=fcntl26,fcntl26_64
++```
++
++Observed results:
++
++- `/tmp`: both cases `TCONF` (expected on ramfs), no failures.
++- `/ext2`: both cases `PASS`.
++- `/exfat`: both cases `PASS`.
+diff --git a/test/initramfs/src/syscall/ltp/testcases/all.txt b/test/initramfs/src/syscall/ltp/testcases/all.txt
+index 5b7c6441..a69fa7c5 100644
+--- a/test/initramfs/src/syscall/ltp/testcases/all.txt
++++ b/test/initramfs/src/syscall/ltp/testcases/all.txt
+@@ -343,8 +343,8 @@ fcntl24
+ fcntl24_64
+ fcntl25
+ fcntl25_64
+-# fcntl26
+-# fcntl26_64
++fcntl26
++fcntl26_64
+ # fcntl27
+ # fcntl27_64
+ fcntl29
+-- 
+2.43.0
+

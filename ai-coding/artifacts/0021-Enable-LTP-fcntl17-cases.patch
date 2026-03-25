@@ -1,0 +1,241 @@
+From 7f23b194b6a24c114785a8e448693dac4fad4bea Mon Sep 17 00:00:00 2001
+From: Qingsong Chen <changxian.cqs@antgroup.com>
+Date: Tue, 24 Mar 2026 09:55:26 +0000
+Subject: [PATCH 21/97] Enable LTP fcntl17 cases
+
+---
+ kernel/src/fs/file/file_table.rs              |  9 +++
+ kernel/src/fs/vfs/range_lock/mod.rs           | 73 +++++++++++++++++--
+ .../src/syscall/ltp/debug/family-fcntl-05.md  | 63 ++++++++++++++++
+ .../src/syscall/ltp/testcases/all.txt         |  4 +-
+ 4 files changed, 140 insertions(+), 9 deletions(-)
+ create mode 100644 test/initramfs/src/syscall/ltp/debug/family-fcntl-05.md
+
+diff --git a/kernel/src/fs/file/file_table.rs b/kernel/src/fs/file/file_table.rs
+index e474b9a1..af4b9df6 100644
+--- a/kernel/src/fs/file/file_table.rs
++++ b/kernel/src/fs/file/file_table.rs
+@@ -192,6 +192,15 @@ impl Default for FileTable {
+     }
+ }
+ 
++impl Drop for FileTable {
++    fn drop(&mut self) {
++        // Exit paths may drop the whole file table directly instead of closing file
++        // descriptors one by one. Reuse the normal close path so process-associated
++        // record locks are released before the table disappears.
++        self.close_files(|_| true);
++    }
++}
++
+ /// A helper trait that provides methods to operate the file table.
+ pub trait WithFileTable {
+     /// Calls `f` with the file table.
+diff --git a/kernel/src/fs/vfs/range_lock/mod.rs b/kernel/src/fs/vfs/range_lock/mod.rs
+index b4a7b1d9..253eeb3c 100644
+--- a/kernel/src/fs/vfs/range_lock/mod.rs
++++ b/kernel/src/fs/vfs/range_lock/mod.rs
+@@ -1,5 +1,6 @@
+ // SPDX-License-Identifier: MPL-2.0
+ 
++use alloc::collections::{BTreeMap, BTreeSet};
+ use core::fmt;
+ 
+ use ostd::sync::{RwMutexWriteGuard, WaitQueue, Waiter, Waker};
+@@ -186,12 +187,14 @@ impl Clone for RangeLockItem {
+ /// if they have same owner.
+ pub struct RangeLockList {
+     inner: RwMutex<Vec<RangeLockItem>>,
++    waiting_owners: Mutex<BTreeMap<Pid, Vec<Pid>>>,
+ }
+ 
+ impl RangeLockList {
+     pub fn new() -> Self {
+         Self {
+             inner: RwMutex::new(Vec::new()),
++            waiting_owners: Mutex::new(BTreeMap::new()),
+         }
+     }
+ 
+@@ -223,15 +226,40 @@ impl RangeLockList {
+     /// - If waker is `None`, the function returns `EAGAIN`.
+     fn try_set_lock(&self, req_lock: &RangeLockItem, waker: Option<&Arc<Waker>>) -> Result<()> {
+         let mut list = self.inner.write();
+-        if let Some(conflict_lock) = list.iter().find(|l| req_lock.conflict_with(l)) {
+-            if let Some(waker) = waker {
+-                conflict_lock.waitqueue.enqueue(waker.clone());
++        let requester = req_lock.owner();
++        let mut conflicting_waitqueues = Vec::new();
++        let mut conflicting_owners = BTreeSet::new();
++        for lock in list.iter() {
++            if !req_lock.conflict_with(lock) {
++                continue;
+             }
+-            return_errno_with_message!(Errno::EAGAIN, "the file is locked");
+-        } else {
++            conflicting_owners.insert(lock.owner());
++            conflicting_waitqueues.push(lock.waitqueue.clone());
++        }
++
++        if conflicting_owners.is_empty() {
+             Self::insert_lock_into_list(&mut list, req_lock);
+-            Ok(())
++            self.waiting_owners.lock().remove(&requester);
++            return Ok(());
++        }
++
++        if let Some(waker) = waker {
++            let mut waiting_owners = self.waiting_owners.lock();
++            if Self::would_deadlock(&waiting_owners, requester, &conflicting_owners) {
++                waiting_owners.remove(&requester);
++                return_errno_with_message!(Errno::EDEADLK, "the requested lock would deadlock");
++            }
++            waiting_owners.insert(requester, conflicting_owners.into_iter().collect());
++            drop(waiting_owners);
++
++            for waitqueue in conflicting_waitqueues {
++                waitqueue.enqueue(waker.clone());
++            }
++        } else {
++            self.waiting_owners.lock().remove(&requester);
+         }
++
++        return_errno_with_message!(Errno::EAGAIN, "the file is locked");
+     }
+ 
+     /// Sets a lock on the file.
+@@ -243,7 +271,8 @@ impl RangeLockList {
+             "set_lock with RangeLock: {:?}, is_nonblocking: {}",
+             req_lock, is_nonblocking
+         );
+-        if is_nonblocking {
++        let requester = req_lock.owner();
++        let result = if is_nonblocking {
+             self.try_set_lock(req_lock, None)
+         } else {
+             let (waiter, waker) = Waiter::new_pair();
+@@ -255,7 +284,37 @@ impl RangeLockList {
+                     Some(result)
+                 }
+             })?
++        };
++        self.waiting_owners.lock().remove(&requester);
++        result
++    }
++
++    /// Returns `true` if adding wait edges `requester -> conflicting_owners` creates a cycle.
++    fn would_deadlock(
++        waiting_owners: &BTreeMap<Pid, Vec<Pid>>,
++        requester: Pid,
++        conflicting_owners: &BTreeSet<Pid>,
++    ) -> bool {
++        conflicting_owners.iter().copied().any(|owner| {
++            owner == requester || Self::has_wait_path(waiting_owners, owner, requester)
++        })
++    }
++
++    fn has_wait_path(waiting_owners: &BTreeMap<Pid, Vec<Pid>>, start: Pid, target: Pid) -> bool {
++        let mut stack = vec![start];
++        let mut visited = BTreeSet::new();
++        while let Some(owner) = stack.pop() {
++            if owner == target {
++                return true;
++            }
++            if !visited.insert(owner) {
++                continue;
++            }
++            if let Some(next_owners) = waiting_owners.get(&owner) {
++                stack.extend(next_owners.iter().copied());
++            }
+         }
++        false
+     }
+ 
+     /// Insert a lock into the list.
+diff --git a/test/initramfs/src/syscall/ltp/debug/family-fcntl-05.md b/test/initramfs/src/syscall/ltp/debug/family-fcntl-05.md
+new file mode 100644
+index 00000000..ecbb4618
+--- /dev/null
++++ b/test/initramfs/src/syscall/ltp/debug/family-fcntl-05.md
+@@ -0,0 +1,63 @@
++# Fcntl Family Batch 05
++
++## Goal
++
++Re-enable `fcntl17` and `fcntl17_64` in Phase 3 by making the `/tmp` lock
++semantics Linux-compatible first, then validating the same behavior on `/ext2`
++and `/exfat`.
++
++## Problem Cause
++
++`fcntl17*` exercises a three-process `F_SETLKW` deadlock scenario.
++
++- One waiter must see `EDEADLK` when adding its blocking lock request would
++  close a wait cycle.
++- After that process exits, the remaining waiter must acquire the lock because
++  the exiting process should release its record locks.
++
++Two kernel gaps broke that sequence:
++
++- `RangeLockList` only queued blocking waiters and never detected wait-for
++  cycles, so the test hit its alarm instead of returning `EDEADLK`.
++- Process exit could drop `FileTable` directly without walking the normal
++  close path, so process-associated record locks stayed behind and the other
++  waiter remained blocked.
++
++## Solution
++
++- Add owner-level wait tracking in `RangeLockList` and reject blocking lock
++  requests with `EDEADLK` when the new wait edges would create a cycle.
++- Reuse `FileTable::close_files()` from `Drop for FileTable` so exit-time file
++  table teardown releases record locks through the same path as explicit
++  descriptor closes.
++- Re-enable `fcntl17` and `fcntl17_64` in `testcases/all.txt` after validating
++  the fix on all supported workdirs.
++
++## Validation Results
++
++Representative commands:
++
++```bash
++make run_kernel AUTO_TEST=syscall SYSCALL_TEST_SUITE=ltp \
++  LTP_CASES=fcntl17,fcntl17_64
++
++make run_kernel AUTO_TEST=syscall SYSCALL_TEST_SUITE=ltp \
++  SYSCALL_TEST_WORKDIR=/ext2 \
++  LTP_CASES=fcntl17,fcntl17_64
++
++make run_kernel AUTO_TEST=syscall SYSCALL_TEST_SUITE=ltp \
++  SYSCALL_TEST_WORKDIR=/exfat \
++  LTP_CASES=fcntl17,fcntl17_64
++```
++
++Observed results:
++
++- `/tmp`: `fcntl17` and `fcntl17_64` both `PASS`.
++- `/ext2`: `fcntl17` and `fcntl17_64` both `PASS`.
++- `/exfat`: `fcntl17` and `fcntl17_64` both `PASS`.
++
++Representative success signal after the fix:
++
++- One child reports `lockw err 35` (`EDEADLK`).
++- The remaining waiter later reports `lockw locked`.
++- LTP reports `Block 1 PASSED`.
+diff --git a/test/initramfs/src/syscall/ltp/testcases/all.txt b/test/initramfs/src/syscall/ltp/testcases/all.txt
+index b62a2199..39f876a3 100644
+--- a/test/initramfs/src/syscall/ltp/testcases/all.txt
++++ b/test/initramfs/src/syscall/ltp/testcases/all.txt
+@@ -325,8 +325,8 @@ fcntl15
+ fcntl15_64
+ fcntl16
+ fcntl16_64
+-# fcntl17
+-# fcntl17_64
++fcntl17
++fcntl17_64
+ fcntl18
+ fcntl18_64
+ fcntl19
+-- 
+2.43.0
+

@@ -1,0 +1,175 @@
+From f099849c197a561fe4b9a97b731b827b36a4421d Mon Sep 17 00:00:00 2001
+From: Qingsong Chen <changxian.cqs@antgroup.com>
+Date: Tue, 24 Mar 2026 17:29:46 +0000
+Subject: [PATCH 42/97] Document blocked LTP statx05-07 cases
+
+---
+ .../src/syscall/ltp/debug/family-statx-05.md  | 49 +++++++++++++++++++
+ .../src/syscall/ltp/debug/family-statx-06.md  | 47 ++++++++++++++++++
+ .../src/syscall/ltp/debug/family-statx-07.md  | 44 +++++++++++++++++
+ 3 files changed, 140 insertions(+)
+ create mode 100644 test/initramfs/src/syscall/ltp/debug/family-statx-05.md
+ create mode 100644 test/initramfs/src/syscall/ltp/debug/family-statx-06.md
+ create mode 100644 test/initramfs/src/syscall/ltp/debug/family-statx-07.md
+
+diff --git a/test/initramfs/src/syscall/ltp/debug/family-statx-05.md b/test/initramfs/src/syscall/ltp/debug/family-statx-05.md
+new file mode 100644
+index 00000000..5b1a9404
+--- /dev/null
++++ b/test/initramfs/src/syscall/ltp/debug/family-statx-05.md
+@@ -0,0 +1,49 @@
++# `statx05`
++
++## Goal
++
++Evaluate whether `statx05` can be re-enabled for Phase 3 and pass on `/tmp`,
++then continue to `/ext2` and `/exfat` if the testcase is generically
++applicable.
++
++## Root Cause
++
++`statx05` is not a generic `/tmp` coverage testcase. Upstream LTP defines it as
++an `ext4`-only test that:
++
++- formats a fresh device with `mkfs.ext4 -O encrypt`
++- requires `e4crypt`
++- verifies `STATX_ATTR_ENCRYPTED`
++
++In the Asterinas guest, the run stops immediately with `TCONF` because
++`mkfs.ext4` is not present in `$PATH`. The guest also does not expose `ext4` in
++`/proc/filesystems`, so adding the user-space tool alone would still not make
++the testcase runnable.
++
++## Solution
++
++- Kept `statx05` disabled in `testcases/all.txt`.
++- Recorded the case as an environment and feature-gap item rather than a
++  `/tmp` `statx()` regression.
++
++## Validation
++
++```bash
++make run_kernel AUTO_TEST=syscall SYSCALL_TEST_SUITE=ltp \
++  LTP_CASES=statx05
++```
++
++Observed result:
++
++- `/tmp`: `CONF` with `Couldn't find 'mkfs.ext4' in $PATH`
++
++`/ext2` and `/exfat` were not run because the testcase is explicitly `ext4`
++only and already exits in setup before reaching any generic `/tmp`-vs-filesystem
++behavior.
++
++## Impact / Residual Risk
++
++- Leaving `statx05` disabled does not hide a known `/tmp` compatibility bug.
++- Re-enabling it would require a larger enablement effort: guest `ext4`
++  support, `mkfs.ext4`, and `e4crypt`, plus any kernel support needed for the
++  encrypted attribute path.
+diff --git a/test/initramfs/src/syscall/ltp/debug/family-statx-06.md b/test/initramfs/src/syscall/ltp/debug/family-statx-06.md
+new file mode 100644
+index 00000000..1c2cf798
+--- /dev/null
++++ b/test/initramfs/src/syscall/ltp/debug/family-statx-06.md
+@@ -0,0 +1,47 @@
++# `statx06`
++
++## Goal
++
++Evaluate whether `statx06` can be re-enabled for Phase 3 and pass on `/tmp`,
++then continue to `/ext2` and `/exfat` if the testcase targets generic
++`statx()` semantics.
++
++## Root Cause
++
++`statx06` is also not a generic `/tmp` testcase. Upstream LTP marks it as an
++`ext4` device test that reformats a block device and checks timestamp fields on
++that mounted filesystem.
++
++The Asterinas guest reaches the testcase, selects the scratch disk as
++`LTP_DEV=/dev/vdc`, and then exits with `TCONF` because `mkfs.ext4` is missing
++from `$PATH`. As with `statx05`, the guest does not currently advertise `ext4`
++support in `/proc/filesystems`, so this is not a `/tmp` syscall regression that
++can be fixed by adjusting `statx()` alone.
++
++## Solution
++
++- Kept `statx06` disabled in `testcases/all.txt`.
++- Classified the testcase as blocked on guest `ext4` runtime support instead of
++  a bug in the current `/tmp` `statx()` implementation.
++
++## Validation
++
++```bash
++make clean
++make run_kernel AUTO_TEST=syscall SYSCALL_TEST_SUITE=ltp \
++  LTP_CASES=statx06
++```
++
++Observed result:
++
++- `/tmp`: `CONF` with `Couldn't find 'mkfs.ext4' in $PATH`
++
++`/ext2` and `/exfat` were not run because the testcase is explicitly tied to an
++`ext4` scratch-device workflow and already fails during environment setup.
++
++## Impact / Residual Risk
++
++- The current `statx06` exclusion is an environment and feature-gap decision,
++  not a known failure of `/tmp`.
++- If `ext4` support is added later, this testcase should be revisited because
++  it exercises timestamp-update semantics on a mounted `ext4` filesystem.
+diff --git a/test/initramfs/src/syscall/ltp/debug/family-statx-07.md b/test/initramfs/src/syscall/ltp/debug/family-statx-07.md
+new file mode 100644
+index 00000000..b543c0fc
+--- /dev/null
++++ b/test/initramfs/src/syscall/ltp/debug/family-statx-07.md
+@@ -0,0 +1,44 @@
++# `statx07`
++
++## Goal
++
++Evaluate whether `statx07` can be re-enabled for Phase 3 and pass on `/tmp`,
++then continue to `/ext2` and `/exfat` if it is a generic `statx()` testcase.
++
++## Root Cause
++
++`statx07` is an NFS-specific testcase. Upstream LTP sets `.filesystems =
++{"nfs"}` and requires the `exportfs` command to create a local NFS
++server/client setup before checking `AT_STATX_FORCE_SYNC` and
++`AT_STATX_DONT_SYNC`.
++
++In the Asterinas guest, the testcase exits with `TCONF` immediately because
++`exportfs` is not present in `$PATH`. The guest also does not advertise `nfs` in
++`/proc/filesystems`, so this is outside the current `/tmp` compatibility scope.
++
++## Solution
++
++- Kept `statx07` disabled in `testcases/all.txt`.
++- Recorded the testcase as blocked on missing NFS environment and filesystem
++  support rather than a bug in core `statx()` behavior on `/tmp`.
++
++## Validation
++
++```bash
++make run_kernel AUTO_TEST=syscall SYSCALL_TEST_SUITE=ltp \
++  LTP_CASES=statx07
++```
++
++Observed result:
++
++- `/tmp`: `CONF` with `Couldn't find 'exportfs' in $PATH`
++
++`/ext2` and `/exfat` were not run because the testcase only targets an NFS
++mount workflow and never reaches generic local-filesystem behavior.
++
++## Impact / Residual Risk
++
++- Leaving `statx07` disabled does not block the `/tmp`-first goal for Priority
++  A coverage.
++- Re-enabling it would require an NFS-capable guest environment in addition to
++  any kernel work needed for remote `statx()` cache-synchronization semantics.
+-- 
+2.43.0
+

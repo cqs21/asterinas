@@ -1,0 +1,83 @@
+From fc45cbd3a64b32e61a87002282fe421ceec153fc Mon Sep 17 00:00:00 2001
+From: Qingsong Chen <changxian.cqs@antgroup.com>
+Date: Tue, 24 Mar 2026 13:51:50 +0000
+Subject: [PATCH 26/97] Enable LTP fcntl25 cases
+
+---
+ .../src/syscall/ltp/debug/family-fcntl-10.md  | 48 +++++++++++++++++++
+ .../src/syscall/ltp/testcases/all.txt         |  4 +-
+ 2 files changed, 50 insertions(+), 2 deletions(-)
+ create mode 100644 test/initramfs/src/syscall/ltp/debug/family-fcntl-10.md
+
+diff --git a/test/initramfs/src/syscall/ltp/debug/family-fcntl-10.md b/test/initramfs/src/syscall/ltp/debug/family-fcntl-10.md
+new file mode 100644
+index 00000000..33ce6ab1
+--- /dev/null
++++ b/test/initramfs/src/syscall/ltp/debug/family-fcntl-10.md
+@@ -0,0 +1,48 @@
++# Fcntl Family Batch 10
++
++## Goal
++
++Re-enable `fcntl25` and `fcntl25_64` in Phase 3, prioritizing `/tmp` behavior
++first and then validating `/ext2` and `/exfat` serially.
++
++## Problem Cause
++
++`fcntl25*` had stayed disabled in `all.txt` while lease-related support was
++being brought up in earlier fcntl batches. After the recent lease commits,
++these cases are no longer blocked by a kernel defect.
++
++On `/tmp`, this case is intentionally reported as `TCONF` by upstream LTP
++because the test environment is ramfs and the case explicitly skips that
++filesystem.
++
++## Solution
++
++- Re-validate `fcntl25` and `fcntl25_64` on `/tmp`, `/ext2`, and `/exfat`.
++- Confirm `/tmp` result is expected `TCONF` rather than a failure.
++- Confirm `/ext2` and `/exfat` both pass.
++- Re-enable `fcntl25` and `fcntl25_64` in `testcases/all.txt`.
++
++No kernel code change was required in this batch.
++
++## Validation Results
++
++Representative commands:
++
++```bash
++make run_kernel AUTO_TEST=syscall SYSCALL_TEST_SUITE=ltp \
++  LTP_CASES=fcntl25,fcntl25_64
++
++make run_kernel AUTO_TEST=syscall SYSCALL_TEST_SUITE=ltp \
++  SYSCALL_TEST_WORKDIR=/ext2 \
++  LTP_CASES=fcntl25,fcntl25_64
++
++make run_kernel AUTO_TEST=syscall SYSCALL_TEST_SUITE=ltp \
++  SYSCALL_TEST_WORKDIR=/exfat \
++  LTP_CASES=fcntl25,fcntl25_64
++```
++
++Observed results:
++
++- `/tmp`: both cases `TCONF` (expected on ramfs), no failures.
++- `/ext2`: both cases `PASS`.
++- `/exfat`: both cases `PASS`.
+diff --git a/test/initramfs/src/syscall/ltp/testcases/all.txt b/test/initramfs/src/syscall/ltp/testcases/all.txt
+index e12b5fc8..5b7c6441 100644
+--- a/test/initramfs/src/syscall/ltp/testcases/all.txt
++++ b/test/initramfs/src/syscall/ltp/testcases/all.txt
+@@ -341,8 +341,8 @@ fcntl23
+ fcntl23_64
+ fcntl24
+ fcntl24_64
+-# fcntl25
+-# fcntl25_64
++fcntl25
++fcntl25_64
+ # fcntl26
+ # fcntl26_64
+ # fcntl27
+-- 
+2.43.0
+

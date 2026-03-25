@@ -1,0 +1,222 @@
+From 1da2f7f22a06c31036313bf81152a7ba3f42eef9 Mon Sep 17 00:00:00 2001
+From: Qingsong Chen <changxian.cqs@antgroup.com>
+Date: Wed, 25 Mar 2026 04:41:56 +0000
+Subject: [PATCH 68/97] Enable LTP open10 case
+
+---
+ kernel/src/fs/fs_impls/ext2/inode.rs          | 11 +++-
+ kernel/src/fs/fs_impls/ramfs/fs.rs            | 57 +++++++++++++------
+ .../src/syscall/ltp/debug/family-open-10.md   | 48 ++++++++++++++++
+ .../src/syscall/ltp/testcases/all.txt         |  2 +-
+ 4 files changed, 99 insertions(+), 19 deletions(-)
+ create mode 100644 test/initramfs/src/syscall/ltp/debug/family-open-10.md
+
+diff --git a/kernel/src/fs/fs_impls/ext2/inode.rs b/kernel/src/fs/fs_impls/ext2/inode.rs
+index dfefe135..29605f43 100644
+--- a/kernel/src/fs/fs_impls/ext2/inode.rs
++++ b/kernel/src/fs/fs_impls/ext2/inode.rs
+@@ -156,7 +156,7 @@ impl Inode {
+         &self,
+         name: &str,
+         inode_type: InodeType,
+-        file_perm: FilePerm,
++        mut file_perm: FilePerm,
+     ) -> Result<Arc<Self>> {
+         if name.len() > MAX_FNAME_LEN {
+             return_errno!(Errno::ENAMETOOLONG);
+@@ -170,9 +170,18 @@ impl Inode {
+             return_errno_with_message!(Errno::ENOENT, "dir removed");
+         }
+ 
++        let inherit_parent_gid = inner.file_perm().contains(FilePerm::S_ISGID);
++        let inherited_gid = inherit_parent_gid.then(|| inner.gid());
++        if inherit_parent_gid && inode_type == InodeType::Dir {
++            file_perm |= FilePerm::S_ISGID;
++        }
++
+         let inode = self
+             .fs()
+             .create_inode(self.block_group_idx, inode_type, file_perm)?;
++        if let Some(gid) = inherited_gid {
++            inode.set_gid(gid);
++        }
+         let is_dir = inode_type == InodeType::Dir;
+         if let Err(e) = inode.init(self.ino) {
+             self.fs().free_inode(inode.ino, is_dir).unwrap();
+diff --git a/kernel/src/fs/fs_impls/ramfs/fs.rs b/kernel/src/fs/fs_impls/ramfs/fs.rs
+index e396f49d..9e10fb6d 100644
+--- a/kernel/src/fs/fs_impls/ramfs/fs.rs
++++ b/kernel/src/fs/fs_impls/ramfs/fs.rs
+@@ -13,6 +13,7 @@ use hashbrown::HashMap;
+ use ostd::{
+     mm::{HasSize, io::util::HasVmReaderWriter},
+     sync::{PreemptDisabled, RwLockWriteGuard},
++    task::Task,
+ };
+ 
+ use super::{memfd::MemfdInode, xattr::RamXattr, *};
+@@ -33,7 +34,7 @@ use crate::{
+         },
+     },
+     prelude::*,
+-    process::{Gid, Uid},
++    process::{Gid, Uid, posix_thread::AsPosixThread},
+     time::clocks::RealTimeCoarseClock,
+     vm::vmo::Vmo,
+ };
+@@ -451,6 +452,28 @@ impl DirEntry {
+ }
+ 
+ impl RamInode {
++    fn creation_attributes(&self, inode_type: InodeType, mode: InodeMode) -> (InodeMode, Uid, Gid) {
++        let Some(task) = Task::current() else {
++            return (mode, Uid::new_root(), Gid::new_root());
++        };
++        let Some(thread) = task.as_posix_thread() else {
++            return (mode, Uid::new_root(), Gid::new_root());
++        };
++
++        let credentials = thread.credentials();
++        let mut gid = credentials.fsgid();
++        let mut mode = mode;
++        let parent_meta = self.metadata.lock();
++        if parent_meta.mode.has_set_gid() {
++            gid = parent_meta.gid;
++            if inode_type == InodeType::Dir {
++                mode |= InodeMode::S_ISGID;
++            }
++        }
++
++        (mode, credentials.fsuid(), gid)
++    }
++
+     fn new_dir(
+         fs: &Arc<RamFs>,
+         mode: InodeMode,
+@@ -783,24 +806,27 @@ impl Inode for RamInode {
+             return_errno_with_message!(Errno::EEXIST, "entry exists");
+         }
+ 
++        let inode_type = match type_ {
++            MknodType::NamedPipe => InodeType::NamedPipe,
++            MknodType::CharDevice(_) => InodeType::CharDevice,
++            MknodType::BlockDevice(_) => InodeType::BlockDevice,
++        };
++        let (mode, uid, gid) = self.creation_attributes(inode_type, mode);
+         let new_inode = match type_ {
+             MknodType::CharDevice(dev_id) | MknodType::BlockDevice(dev_id) => {
+                 let dev_type = type_.device_type().unwrap();
+                 RamInode::new_device(
+                     &self.fs.upgrade().unwrap(),
+                     mode,
+-                    Uid::new_root(),
+-                    Gid::new_root(),
++                    uid,
++                    gid,
+                     dev_type,
+                     dev_id,
+                 )
+             }
+-            MknodType::NamedPipe => RamInode::new_named_pipe(
+-                &self.fs.upgrade().unwrap(),
+-                mode,
+-                Uid::new_root(),
+-                Gid::new_root(),
+-            ),
++            MknodType::NamedPipe => {
++                RamInode::new_named_pipe(&self.fs.upgrade().unwrap(), mode, uid, gid)
++            }
+         };
+ 
+         let mut self_dir = self_dir.upgrade();
+@@ -833,15 +859,12 @@ impl Inode for RamInode {
+         }
+ 
+         let fs = self.fs.upgrade().unwrap();
++        let (mode, uid, gid) = self.creation_attributes(type_, mode);
+         let new_inode = match type_ {
+-            InodeType::File => RamInode::new_file(&fs, mode, Uid::new_root(), Gid::new_root()),
+-            InodeType::SymLink => {
+-                RamInode::new_symlink(&fs, mode, Uid::new_root(), Gid::new_root())
+-            }
+-            InodeType::Socket => RamInode::new_socket(&fs, mode, Uid::new_root(), Gid::new_root()),
+-            InodeType::Dir => {
+-                RamInode::new_dir(&fs, mode, Uid::new_root(), Gid::new_root(), &self.this)
+-            }
++            InodeType::File => RamInode::new_file(&fs, mode, uid, gid),
++            InodeType::SymLink => RamInode::new_symlink(&fs, mode, uid, gid),
++            InodeType::Socket => RamInode::new_socket(&fs, mode, uid, gid),
++            InodeType::Dir => RamInode::new_dir(&fs, mode, uid, gid, &self.this),
+             _ => {
+                 panic!("unsupported inode type");
+             }
+diff --git a/test/initramfs/src/syscall/ltp/debug/family-open-10.md b/test/initramfs/src/syscall/ltp/debug/family-open-10.md
+new file mode 100644
+index 00000000..fd66f36a
+--- /dev/null
++++ b/test/initramfs/src/syscall/ltp/debug/family-open-10.md
+@@ -0,0 +1,48 @@
++# open10
++
++## Goal
++
++Enable `open10` and make the `open()` create path honor the expected GID inheritance rules on the
++main filesystems used by the LTP run.
++
++## Failure
++
++`open10` checks that newly created files inherit:
++
++- the caller's GID in a normal directory
++- the parent directory's GID in a directory with `S_ISGID`
++
++On `/tmp`, every created file was owned by group `0`, so the testcase failed immediately on all
++group ownership assertions.
++
++## Root Cause
++
++`tmpfs` is currently backed by `ramfs`, and the ramfs create path initialized every new inode with
++`root:root` ownership. It ignored the current thread's `fsuid/fsgid`, and it also ignored the
++parent directory's `S_ISGID` bit.
++
++`ext2` already used the caller's `fsgid` for new inodes, but it still missed the parent-directory
++`S_ISGID` inheritance rule, so files created inside a setgid directory would not inherit the parent
++group.
++
++## Fix
++
++- Teach `ramfs` inode creation to initialize ownership from the current thread's
++  `fsuid/fsgid`.
++- When the parent directory has `S_ISGID`, inherit the parent `gid` for new children.
++- Propagate `S_ISGID` onto newly created directories when required by the parent directory.
++- Apply the same parent-`gid` inheritance rule in the `ext2` create path.
++
++## Filesystem Notes
++
++`/tmp` and `/ext2` now pass.
++
++`/exfat` still fails before the actual inheritance checks because after `chown(dir_a, nobody,
++free_gid)`, `dir_a` already reports `S_ISGID` set. That is a filesystem-specific metadata semantics
++issue in exfat, not a remaining generic `open()` regression.
++
++## Validation
++
++- `make run_kernel AUTO_TEST=syscall SYSCALL_TEST_SUITE=ltp LTP_CASES=open10`
++- `make run_kernel AUTO_TEST=syscall SYSCALL_TEST_SUITE=ltp SYSCALL_TEST_WORKDIR=/ext2 LTP_CASES=open10`
++- `make run_kernel AUTO_TEST=syscall SYSCALL_TEST_SUITE=ltp SYSCALL_TEST_WORKDIR=/exfat LTP_CASES=open10`
+diff --git a/test/initramfs/src/syscall/ltp/testcases/all.txt b/test/initramfs/src/syscall/ltp/testcases/all.txt
+index cb472c40..9615e4ad 100644
+--- a/test/initramfs/src/syscall/ltp/testcases/all.txt
++++ b/test/initramfs/src/syscall/ltp/testcases/all.txt
+@@ -991,7 +991,7 @@ open06
+ open07
+ open08
+ open09
+-# open10
++open10
+ # open11
+ # open12
+ # open13
+-- 
+2.43.0
+

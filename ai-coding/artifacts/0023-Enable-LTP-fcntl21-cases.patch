@@ -1,0 +1,80 @@
+From 98d5ea6a0d958e783cb29284701931bfc484c905 Mon Sep 17 00:00:00 2001
+From: Qingsong Chen <changxian.cqs@antgroup.com>
+Date: Tue, 24 Mar 2026 10:09:08 +0000
+Subject: [PATCH 23/97] Enable LTP fcntl21 cases
+
+---
+ .../src/syscall/ltp/debug/family-fcntl-07.md  | 45 +++++++++++++++++++
+ .../src/syscall/ltp/testcases/all.txt         |  4 +-
+ 2 files changed, 47 insertions(+), 2 deletions(-)
+ create mode 100644 test/initramfs/src/syscall/ltp/debug/family-fcntl-07.md
+
+diff --git a/test/initramfs/src/syscall/ltp/debug/family-fcntl-07.md b/test/initramfs/src/syscall/ltp/debug/family-fcntl-07.md
+new file mode 100644
+index 00000000..b8899181
+--- /dev/null
++++ b/test/initramfs/src/syscall/ltp/debug/family-fcntl-07.md
+@@ -0,0 +1,45 @@
++# Fcntl Family Batch 07
++
++## Goal
++
++Re-enable `fcntl21` and `fcntl21_64` in Phase 3 after validating the current
++kernel behavior on `/tmp`, `/ext2`, and `/exfat`.
++
++## Problem Cause
++
++This batch was still disabled only because it had not yet been revalidated
++after the earlier `fcntl` bring-up work. The current lock-handling behavior
++already satisfies the eleven `fcntl21*` sub-blocks on all three workdirs.
++
++No new kernel bug or filesystem-specific incompatibility was observed.
++
++## Solution
++
++- Run `fcntl21` and `fcntl21_64` on `/tmp`, `/ext2`, and `/exfat`.
++- Confirm every test block passes on every workdir.
++- Re-enable both cases in `testcases/all.txt`.
++
++No kernel code changes or filesystem blocklist updates were needed.
++
++## Validation Results
++
++Representative commands:
++
++```bash
++make run_kernel AUTO_TEST=syscall SYSCALL_TEST_SUITE=ltp \
++  LTP_CASES=fcntl21,fcntl21_64
++
++make run_kernel AUTO_TEST=syscall SYSCALL_TEST_SUITE=ltp \
++  SYSCALL_TEST_WORKDIR=/ext2 \
++  LTP_CASES=fcntl21,fcntl21_64
++
++make run_kernel AUTO_TEST=syscall SYSCALL_TEST_SUITE=ltp \
++  SYSCALL_TEST_WORKDIR=/exfat \
++  LTP_CASES=fcntl21,fcntl21_64
++```
++
++Observed results:
++
++- `/tmp`: `fcntl21` and `fcntl21_64` both `PASS`.
++- `/ext2`: `fcntl21` and `fcntl21_64` both `PASS`.
++- `/exfat`: `fcntl21` and `fcntl21_64` both `PASS`.
+diff --git a/test/initramfs/src/syscall/ltp/testcases/all.txt b/test/initramfs/src/syscall/ltp/testcases/all.txt
+index bce00db6..e8b46d0e 100644
+--- a/test/initramfs/src/syscall/ltp/testcases/all.txt
++++ b/test/initramfs/src/syscall/ltp/testcases/all.txt
+@@ -333,8 +333,8 @@ fcntl19
+ fcntl19_64
+ fcntl20
+ fcntl20_64
+-# fcntl21
+-# fcntl21_64
++fcntl21
++fcntl21_64
+ fcntl22
+ fcntl22_64
+ # fcntl23
+-- 
+2.43.0
+

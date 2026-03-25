@@ -1,0 +1,96 @@
+From cfe4e26c2c4f43c367b4b67d06f5bcc71cd4f5e2 Mon Sep 17 00:00:00 2001
+From: Qingsong Chen <changxian.cqs@antgroup.com>
+Date: Tue, 24 Mar 2026 17:43:54 +0000
+Subject: [PATCH 47/97] Enable LTP rename06 case
+
+---
+ .../src/syscall/ltp/debug/family-rename-06.md | 63 +++++++++++++++++++
+ .../src/syscall/ltp/testcases/all.txt         |  2 +-
+ 2 files changed, 64 insertions(+), 1 deletion(-)
+ create mode 100644 test/initramfs/src/syscall/ltp/debug/family-rename-06.md
+
+diff --git a/test/initramfs/src/syscall/ltp/debug/family-rename-06.md b/test/initramfs/src/syscall/ltp/debug/family-rename-06.md
+new file mode 100644
+index 00000000..7116e49f
+--- /dev/null
++++ b/test/initramfs/src/syscall/ltp/debug/family-rename-06.md
+@@ -0,0 +1,63 @@
++# `rename06`
++
++## Goal
++
++Re-enable `rename06` in Phase 3 and verify that it passes on `/tmp`, `/ext2`,
++and `/exfat`.
++
++## Root Cause
++
++There was no remaining kernel defect in this case. `rename06` checks the
++negative path where renaming a directory into its own subdirectory must fail
++with `EINVAL`.
++
++The current VFS path already returns Linux-compatible `EINVAL` on all tested
++targets. The testcase had simply remained disabled in
++`testcases/all.txt`.
++
++## Solution
++
++- Re-ran `rename06` on `/tmp`, `/ext2`, and `/exfat`.
++- Confirmed that the existing implementation already returns the expected
++  `EINVAL` errno.
++- Re-enabled `rename06` in `testcases/all.txt`.
++
++## Validation
++
++```bash
++SSH_PORT=42022 NGINX_PORT=48080 REDIS_PORT=46379 IPERF_PORT=45201 \
++LMBENCH_TCP_LAT_PORT=41234 LMBENCH_TCP_BW_PORT=41236 MEMCACHED_PORT=41211 \
++make run_kernel AUTO_TEST=syscall SYSCALL_TEST_SUITE=ltp \
++  LTP_CASES=rename06
++
++SSH_PORT=42022 NGINX_PORT=48080 REDIS_PORT=46379 IPERF_PORT=45201 \
++LMBENCH_TCP_LAT_PORT=41234 LMBENCH_TCP_BW_PORT=41236 MEMCACHED_PORT=41211 \
++make run_kernel AUTO_TEST=syscall SYSCALL_TEST_SUITE=ltp \
++  SYSCALL_TEST_WORKDIR=/ext2 \
++  LTP_CASES=rename06
++
++SSH_PORT=42022 NGINX_PORT=48080 REDIS_PORT=46379 IPERF_PORT=45201 \
++LMBENCH_TCP_LAT_PORT=41234 LMBENCH_TCP_BW_PORT=41236 MEMCACHED_PORT=41211 \
++make run_kernel AUTO_TEST=syscall SYSCALL_TEST_SUITE=ltp \
++  SYSCALL_TEST_WORKDIR=/exfat \
++  LTP_CASES=rename06
++```
++
++Observed results:
++
++- `/tmp`: `PASS`
++- `/ext2`: `PASS`
++- `/exfat`: `PASS`
++
++Observed errno on all three runs:
++
++- `rename()` rejected the operation with `EINVAL`
++
++## Impact / Residual Risk
++
++- This extends active rename-family negative-path coverage without a kernel
++  code change.
++- During validation, QEMU port auto-selection in `tools/qemu_args.sh` hit a
++  duplicate host port once, so the verification commands above pin distinct
++  host ports to avoid a false start unrelated to the testcase itself.
++- The Priority A rename todo list is now empty.
+diff --git a/test/initramfs/src/syscall/ltp/testcases/all.txt b/test/initramfs/src/syscall/ltp/testcases/all.txt
+index cb74d801..dd7c4dba 100644
+--- a/test/initramfs/src/syscall/ltp/testcases/all.txt
++++ b/test/initramfs/src/syscall/ltp/testcases/all.txt
+@@ -1231,7 +1231,7 @@ rename01
+ rename03
+ rename04
+ rename05
+-# rename06
++rename06
+ # rename07
+ # rename08
+ # rename09
+-- 
+2.43.0
+

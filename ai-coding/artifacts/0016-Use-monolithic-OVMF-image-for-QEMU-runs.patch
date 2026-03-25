@@ -1,0 +1,26 @@
+From 65c2fdd0f08ec0092a397ffae9b3e3afda5b116d Mon Sep 17 00:00:00 2001
+From: Qingsong Chen <changxian.cqs@antgroup.com>
+Date: Tue, 24 Mar 2026 09:08:52 +0000
+Subject: [PATCH 16/97] Use monolithic OVMF image for QEMU runs
+
+---
+ tools/qemu_args.sh | 3 +--
+ 1 file changed, 1 insertion(+), 2 deletions(-)
+
+diff --git a/tools/qemu_args.sh b/tools/qemu_args.sh
+index 1be72040..36c34fc5 100755
+--- a/tools/qemu_args.sh
++++ b/tools/qemu_args.sh
+@@ -167,8 +167,7 @@ if [ "$OVMF" = "on" ]; then
+     else
+         OVMF_PATH="/root/ovmf/release"
+         QEMU_ARGS="${QEMU_ARGS} \
+-            -drive if=pflash,format=raw,unit=0,readonly=on,file=$OVMF_PATH/OVMF_CODE.fd \
+-            -drive if=pflash,format=raw,unit=1,file=$OVMF_PATH/OVMF_VARS.fd \
++            -bios $OVMF_PATH/OVMF.fd \
+         "
+     fi
+ fi
+-- 
+2.43.0
+

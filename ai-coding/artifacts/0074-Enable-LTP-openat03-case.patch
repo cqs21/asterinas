@@ -1,0 +1,64 @@
+From b22c4d7fe3c55e4b8dbd7762f3e19d703c623a1a Mon Sep 17 00:00:00 2001
+From: Qingsong Chen <changxian.cqs@antgroup.com>
+Date: Wed, 25 Mar 2026 05:10:27 +0000
+Subject: [PATCH 74/97] Enable LTP openat03 case
+
+---
+ .../src/syscall/ltp/debug/family-openat-03.md | 31 +++++++++++++++++++
+ .../src/syscall/ltp/testcases/all.txt         |  2 +-
+ 2 files changed, 32 insertions(+), 1 deletion(-)
+ create mode 100644 test/initramfs/src/syscall/ltp/debug/family-openat-03.md
+
+diff --git a/test/initramfs/src/syscall/ltp/debug/family-openat-03.md b/test/initramfs/src/syscall/ltp/debug/family-openat-03.md
+new file mode 100644
+index 00000000..128a9b75
+--- /dev/null
++++ b/test/initramfs/src/syscall/ltp/debug/family-openat-03.md
+@@ -0,0 +1,31 @@
++# openat03
++
++## Goal
++
++Enable `openat03` and confirm the `openat(..., O_TMPFILE, ...)` workflow passes on `/tmp`.
++
++## Failure
++
++No separate failure remained after revalidation. `openat03` passed on `/tmp` once the earlier
++`O_TMPFILE` support was in place.
++
++## Root Cause
++
++`openat03` exercises the same core behavior as `open14`, but through `openat()`:
++
++- create unnamed tmpfiles in directories
++- keep directories empty until explicit linking
++- link them back through `/proc/self/fd/<n>`
++- preserve data and file mode semantics
++
++Those requirements were already satisfied by the `open14` fix that added `O_TMPFILE` handling for
++`tmpfs/ramfs`.
++
++## Fix
++
++- No additional kernel code change was required for this testcase.
++- Enable `openat03` in the LTP allowlist after validation.
++
++## Validation
++
++- `make run_kernel AUTO_TEST=syscall SYSCALL_TEST_SUITE=ltp LTP_CASES=openat03`
+diff --git a/test/initramfs/src/syscall/ltp/testcases/all.txt b/test/initramfs/src/syscall/ltp/testcases/all.txt
+index 16a48f5a..163899e5 100644
+--- a/test/initramfs/src/syscall/ltp/testcases/all.txt
++++ b/test/initramfs/src/syscall/ltp/testcases/all.txt
+@@ -1000,7 +1000,7 @@ open15
+ 
+ openat01
+ openat02
+-# openat03
++openat03
+ # openat04
+ 
+ # openat201
+-- 
+2.43.0
+

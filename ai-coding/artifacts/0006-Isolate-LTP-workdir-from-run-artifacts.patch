@@ -1,0 +1,119 @@
+From 9f354bc76db62cc50b590cc283d120dc77b471ea Mon Sep 17 00:00:00 2001
+From: Qingsong Chen <changxian.cqs@antgroup.com>
+Date: Tue, 24 Mar 2026 06:10:19 +0000
+Subject: [PATCH 06/97] Isolate LTP workdir from run artifacts
+
+---
+ .../ltp/debug/task-1.4-cleanup-isolation.md   | 25 ++++++++++
+ .../initramfs/src/syscall/ltp/run_ltp_test.sh | 46 +++++++++++++++----
+ 2 files changed, 63 insertions(+), 8 deletions(-)
+ create mode 100644 test/initramfs/src/syscall/ltp/debug/task-1.4-cleanup-isolation.md
+
+diff --git a/test/initramfs/src/syscall/ltp/debug/task-1.4-cleanup-isolation.md b/test/initramfs/src/syscall/ltp/debug/task-1.4-cleanup-isolation.md
+new file mode 100644
+index 00000000..64ce1cfc
+--- /dev/null
++++ b/test/initramfs/src/syscall/ltp/debug/task-1.4-cleanup-isolation.md
+@@ -0,0 +1,25 @@
++# Task 1.4: Cleanup and Run Isolation
++
++## Goal
++
++Prevent leftover files and directories in `SYSCALL_TEST_WORKDIR` from causing
++false LTP failures across repeated reruns.
++
++## Problem Cause
++
++The runner previously used the syscall work directory both as scratch space and
++as the place where diagnostics lived. That meant stale test artifacts could
++survive across reruns unless the developer cleaned the directory manually.
++
++## Solution
++
++Updated [`run_ltp_test.sh`](../run_ltp_test.sh) to separate scratch data from
++diagnostic artifacts:
++
++- Batch cleanup now runs before and after each `runltp` invocation.
++- Cleanup removes everything in `SYSCALL_TEST_WORKDIR` except `.ltp_logs`.
++- Per-run diagnostics are written to `.ltp_logs/run-<timestamp>-<pid>/`.
++- A stable `.ltp_logs/latest/` copy is refreshed after each run.
++
++This keeps reruns isolated while preserving `result.log`, the summary files,
++and per-case log fragments for later inspection.
+diff --git a/test/initramfs/src/syscall/ltp/run_ltp_test.sh b/test/initramfs/src/syscall/ltp/run_ltp_test.sh
+index c4a23a7a..3a326df3 100755
+--- a/test/initramfs/src/syscall/ltp/run_ltp_test.sh
++++ b/test/initramfs/src/syscall/ltp/run_ltp_test.sh
+@@ -4,17 +4,27 @@
+ 
+ LTP_DIR=$(dirname "$0")
+ TEST_TMP_DIR=${SYSCALL_TEST_WORKDIR:-/tmp}
+-LOG_FILE="$TEST_TMP_DIR/result.log"
+-SUMMARY_FILE="$TEST_TMP_DIR/ltp_summary.json"
+-CASE_STATUS_FILE="$TEST_TMP_DIR/ltp_case_status.tsv"
+-FAILED_CASES_FILE="$TEST_TMP_DIR/ltp_failed_cases.txt"
+-BROKEN_CASES_FILE="$TEST_TMP_DIR/ltp_broken_cases.txt"
+-SKIPPED_CASES_FILE="$TEST_TMP_DIR/ltp_skipped_cases.txt"
+-REPORTED_CASES_FILE="$TEST_TMP_DIR/ltp_reported_cases.txt"
+-CASE_LOG_DIR="$TEST_TMP_DIR/ltp_case_logs"
++ARTIFACTS_ROOT="$TEST_TMP_DIR/.ltp_logs"
++RUN_ID=$(date +%Y%m%d-%H%M%S)-$$
++RUN_ARTIFACT_DIR="$ARTIFACTS_ROOT/run-$RUN_ID"
++LATEST_ARTIFACT_DIR="$ARTIFACTS_ROOT/latest"
++LOG_FILE="$RUN_ARTIFACT_DIR/result.log"
++SUMMARY_FILE="$RUN_ARTIFACT_DIR/ltp_summary.json"
++CASE_STATUS_FILE="$RUN_ARTIFACT_DIR/ltp_case_status.tsv"
++FAILED_CASES_FILE="$RUN_ARTIFACT_DIR/ltp_failed_cases.txt"
++BROKEN_CASES_FILE="$RUN_ARTIFACT_DIR/ltp_broken_cases.txt"
++SKIPPED_CASES_FILE="$RUN_ARTIFACT_DIR/ltp_skipped_cases.txt"
++REPORTED_CASES_FILE="$RUN_ARTIFACT_DIR/ltp_reported_cases.txt"
++CASE_LOG_DIR="$RUN_ARTIFACT_DIR/ltp_case_logs"
+ RESULT=0
+ RUNLTP_EXIT_CODE=0
+ 
++cleanup_workdir() {
++    mkdir -p "$TEST_TMP_DIR"
++    # Keep artifacts under `.ltp_logs` and clear everything else for isolation.
++    find "$TEST_TMP_DIR" -mindepth 1 -maxdepth 1 ! -name ".ltp_logs" -exec rm -rf {} + 2>/dev/null
++}
++
+ count_non_empty_lines() {
+     file_path="$1"
+     if [ ! -s "$file_path" ]; then
+@@ -53,6 +63,9 @@ print_case_bucket() {
+     echo "$bucket_name ($case_count): $case_list"
+ }
+ 
++cleanup_workdir
++mkdir -p "$RUN_ARTIFACT_DIR"
++
+ rm -f \
+     "$LOG_FILE" \
+     "$SUMMARY_FILE" \
+@@ -249,6 +262,23 @@ print_case_bucket "Failed cases" "$FAILED_CASES_FILE"
+ print_case_bucket "Broken cases" "$BROKEN_CASES_FILE"
+ print_case_bucket "Skipped cases" "$SKIPPED_CASES_FILE"
+ 
++rm -rf "$LATEST_ARTIFACT_DIR"
++mkdir -p "$LATEST_ARTIFACT_DIR"
++cp -f "$SUMMARY_FILE" "$LATEST_ARTIFACT_DIR/" 2>/dev/null || true
++cp -f "$LOG_FILE" "$LATEST_ARTIFACT_DIR/" 2>/dev/null || true
++cp -f "$CASE_STATUS_FILE" "$LATEST_ARTIFACT_DIR/" 2>/dev/null || true
++cp -f "$FAILED_CASES_FILE" "$LATEST_ARTIFACT_DIR/" 2>/dev/null || true
++cp -f "$BROKEN_CASES_FILE" "$LATEST_ARTIFACT_DIR/" 2>/dev/null || true
++cp -f "$SKIPPED_CASES_FILE" "$LATEST_ARTIFACT_DIR/" 2>/dev/null || true
++cp -f "$REPORTED_CASES_FILE" "$LATEST_ARTIFACT_DIR/" 2>/dev/null || true
++cp -rf "$CASE_LOG_DIR" "$LATEST_ARTIFACT_DIR/" 2>/dev/null || true
++
++cleanup_workdir
++echo "LTP artifact root: $ARTIFACTS_ROOT"
++echo "LTP latest summary: $LATEST_ARTIFACT_DIR/ltp_summary.json"
++echo "LTP latest raw log: $LATEST_ARTIFACT_DIR/result.log"
++echo "LTP run artifacts: $RUN_ARTIFACT_DIR"
++
+ if [ "$FAILED_COUNT" -gt 0 ] || [ "$BROKEN_COUNT" -gt 0 ]; then
+     RESULT=1
+ fi
+-- 
+2.43.0
+

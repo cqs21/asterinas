@@ -1,0 +1,57 @@
+From 08dde5c2f6ba05d395b03a0b23dd69605f05a20f Mon Sep 17 00:00:00 2001
+From: Qingsong Chen <changxian.cqs@antgroup.com>
+Date: Wed, 25 Mar 2026 06:52:22 +0000
+Subject: [PATCH 89/97] Enable LTP renameat202 case
+
+---
+ .../syscall/ltp/debug/family-renameat-202.md  | 24 +++++++++++++++++++
+ .../src/syscall/ltp/testcases/all.txt         |  2 +-
+ 2 files changed, 25 insertions(+), 1 deletion(-)
+ create mode 100644 test/initramfs/src/syscall/ltp/debug/family-renameat-202.md
+
+diff --git a/test/initramfs/src/syscall/ltp/debug/family-renameat-202.md b/test/initramfs/src/syscall/ltp/debug/family-renameat-202.md
+new file mode 100644
+index 00000000..99cdcad3
+--- /dev/null
++++ b/test/initramfs/src/syscall/ltp/debug/family-renameat-202.md
+@@ -0,0 +1,24 @@
++# renameat202
++
++## Goal
++
++Enable `renameat202` on `/tmp`.
++
++## Failure
++
++No new kernel failure remained after adding `renameat2()` support for `RENAME_EXCHANGE`. The
++testcase's repeated exchange checks all passed on `/tmp`.
++
++## Root Cause
++
++The case had remained disabled in `all.txt`, but the `renameat2()` support added for
++`renameat201` already covers the pathname exchange behavior exercised here.
++
++## Fix
++
++- Enabled `renameat202` in `testcases/all.txt`.
++- No additional kernel code changes were required beyond the prior `renameat2()` implementation.
++
++## Validation
++
++- `make run_kernel AUTO_TEST=syscall SYSCALL_TEST_SUITE=ltp LTP_CASES=renameat202`
+diff --git a/test/initramfs/src/syscall/ltp/testcases/all.txt b/test/initramfs/src/syscall/ltp/testcases/all.txt
+index 7da0c749..03480616 100644
+--- a/test/initramfs/src/syscall/ltp/testcases/all.txt
++++ b/test/initramfs/src/syscall/ltp/testcases/all.txt
+@@ -1246,7 +1246,7 @@ rename15
+ # renameat01
+ 
+ renameat201
+-# renameat202
++renameat202
+ 
+ # request_key01
+ # request_key02
+-- 
+2.43.0
+

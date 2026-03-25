@@ -1,0 +1,323 @@
+From 3a1c2dfcb77309877178a196790cc984c854d688 Mon Sep 17 00:00:00 2001
+From: Qingsong Chen <changxian.cqs@antgroup.com>
+Date: Tue, 24 Mar 2026 14:33:09 +0000
+Subject: [PATCH 29/97] Enable LTP fcntl30 cases
+
+---
+ kernel/src/fs/file/inode_handle.rs            | 11 ++++
+ kernel/src/fs/fs_impls/procfs/sys/fs/mod.rs   | 63 +++++++++++++++++++
+ .../fs_impls/procfs/sys/fs/pipe_max_size.rs   | 39 ++++++++++++
+ kernel/src/fs/fs_impls/procfs/sys/mod.rs      |  9 ++-
+ kernel/src/fs/pipe/common.rs                  |  8 +++
+ kernel/src/syscall/fcntl.rs                   | 10 +++
+ .../src/syscall/ltp/debug/family-fcntl-13.md  | 49 +++++++++++++++
+ .../src/syscall/ltp/testcases/all.txt         |  4 +-
+ 8 files changed, 188 insertions(+), 5 deletions(-)
+ create mode 100644 kernel/src/fs/fs_impls/procfs/sys/fs/mod.rs
+ create mode 100644 kernel/src/fs/fs_impls/procfs/sys/fs/pipe_max_size.rs
+ create mode 100644 test/initramfs/src/syscall/ltp/debug/family-fcntl-13.md
+
+diff --git a/kernel/src/fs/file/inode_handle.rs b/kernel/src/fs/file/inode_handle.rs
+index 1d800a5e..e41a5e12 100644
+--- a/kernel/src/fs/file/inode_handle.rs
++++ b/kernel/src/fs/file/inode_handle.rs
+@@ -157,6 +157,17 @@ impl InodeHandle {
+         pipe_handle.set_capacity(requested)
+     }
+ 
++    pub(crate) fn pipe_capacity(&self) -> Result<usize> {
++        let pipe_handle = self.pipe_handle().ok_or_else(|| {
++            Error::with_message(
++                Errno::EINVAL,
++                "F_GETPIPE_SZ is only supported on pipe file handles",
++            )
++        })?;
++
++        Ok(pipe_handle.capacity())
++    }
++
+     fn inode_io_and_is_offset_aware(&self) -> (&dyn InodeIo, bool) {
+         if let Some(ref file_io) = self.file_io {
+             let is_offset_aware = file_io.is_offset_aware();
+diff --git a/kernel/src/fs/fs_impls/procfs/sys/fs/mod.rs b/kernel/src/fs/fs_impls/procfs/sys/fs/mod.rs
+new file mode 100644
+index 00000000..ddba1510
+--- /dev/null
++++ b/kernel/src/fs/fs_impls/procfs/sys/fs/mod.rs
+@@ -0,0 +1,63 @@
++// SPDX-License-Identifier: MPL-2.0
++
++use aster_util::slot_vec::SlotVec;
++use ostd::sync::RwMutexUpgradeableGuard;
++
++use self::pipe_max_size::PipeMaxSizeFileOps;
++use crate::{
++    fs::{
++        file::mkmod,
++        procfs::template::{
++            DirOps, ProcDir, ProcDirBuilder, lookup_child_from_table, populate_children_from_table,
++        },
++        vfs::inode::Inode,
++    },
++    prelude::*,
++};
++
++mod pipe_max_size;
++
++/// Represents the inode at `/proc/sys/fs`.
++pub struct FsDirOps;
++
++impl FsDirOps {
++    pub fn new_inode(parent: Weak<dyn Inode>) -> Arc<dyn Inode> {
++        ProcDirBuilder::new(Self, mkmod!(a+rx))
++            .parent(parent)
++            .build()
++            .unwrap()
++    }
++
++    #[expect(clippy::type_complexity)]
++    const STATIC_ENTRIES: &'static [(&'static str, fn(Weak<dyn Inode>) -> Arc<dyn Inode>)] =
++        &[("pipe-max-size", PipeMaxSizeFileOps::new_inode)];
++}
++
++impl DirOps for FsDirOps {
++    fn lookup_child(&self, dir: &ProcDir<Self>, name: &str) -> Result<Arc<dyn Inode>> {
++        let mut cached_children = dir.cached_children().write();
++
++        if let Some(child) =
++            lookup_child_from_table(name, &mut cached_children, Self::STATIC_ENTRIES, |f| {
++                (f)(dir.this_weak().clone())
++            })
++        {
++            return Ok(child);
++        }
++
++        return_errno_with_message!(Errno::ENOENT, "the file does not exist");
++    }
++
++    fn populate_children<'a>(
++        &self,
++        dir: &'a ProcDir<Self>,
++    ) -> RwMutexUpgradeableGuard<'a, SlotVec<(String, Arc<dyn Inode>)>> {
++        let mut cached_children = dir.cached_children().write();
++
++        populate_children_from_table(&mut cached_children, Self::STATIC_ENTRIES, |f| {
++            (f)(dir.this_weak().clone())
++        });
++
++        cached_children.downgrade()
++    }
++}
+diff --git a/kernel/src/fs/fs_impls/procfs/sys/fs/pipe_max_size.rs b/kernel/src/fs/fs_impls/procfs/sys/fs/pipe_max_size.rs
+new file mode 100644
+index 00000000..4d0c95e8
+--- /dev/null
++++ b/kernel/src/fs/fs_impls/procfs/sys/fs/pipe_max_size.rs
+@@ -0,0 +1,39 @@
++// SPDX-License-Identifier: MPL-2.0
++
++use aster_util::printer::VmPrinter;
++
++use crate::{
++    fs::{
++        file::mkmod,
++        procfs::template::{FileOps, ProcFileBuilder},
++        vfs::inode::Inode,
++    },
++    prelude::*,
++};
++
++/// Represents the inode at `/proc/sys/fs/pipe-max-size`.
++pub struct PipeMaxSizeFileOps;
++
++impl PipeMaxSizeFileOps {
++    pub fn new_inode(parent: Weak<dyn Inode>) -> Arc<dyn Inode> {
++        // Reference:
++        // <https://man7.org/linux/man-pages/man7/pipe.7.html>
++        // <https://docs.kernel.org/admin-guide/sysctl/fs.html#pipe-user-pages-hard>
++        ProcFileBuilder::new(Self, mkmod!(a+r))
++            .parent(parent)
++            .build()
++            .unwrap()
++    }
++}
++
++impl FileOps for PipeMaxSizeFileOps {
++    fn read_at(&self, offset: usize, writer: &mut VmWriter) -> Result<usize> {
++        // Linux defaults to 1 MiB for `/proc/sys/fs/pipe-max-size`.
++        const PIPE_MAX_SIZE: usize = 1 << 20;
++
++        let mut printer = VmPrinter::new_skip(writer, offset);
++        writeln!(printer, "{}", PIPE_MAX_SIZE)?;
++
++        Ok(printer.bytes_written())
++    }
++}
+diff --git a/kernel/src/fs/fs_impls/procfs/sys/mod.rs b/kernel/src/fs/fs_impls/procfs/sys/mod.rs
+index 541f3c00..08986a40 100644
+--- a/kernel/src/fs/fs_impls/procfs/sys/mod.rs
++++ b/kernel/src/fs/fs_impls/procfs/sys/mod.rs
+@@ -3,7 +3,7 @@
+ use aster_util::slot_vec::SlotVec;
+ use ostd::sync::RwMutexUpgradeableGuard;
+ 
+-use self::kernel::KernelDirOps;
++use self::{fs::FsDirOps, kernel::KernelDirOps};
+ use super::template::populate_children_from_table;
+ use crate::{
+     fs::{
+@@ -14,6 +14,7 @@ use crate::{
+     prelude::*,
+ };
+ 
++mod fs;
+ mod kernel;
+ 
+ /// Represents the inode at `/proc/sys`.
+@@ -31,8 +32,10 @@ impl SysDirOps {
+     }
+ 
+     #[expect(clippy::type_complexity)]
+-    const STATIC_ENTRIES: &'static [(&'static str, fn(Weak<dyn Inode>) -> Arc<dyn Inode>)] =
+-        &[("kernel", KernelDirOps::new_inode)];
++    const STATIC_ENTRIES: &'static [(&'static str, fn(Weak<dyn Inode>) -> Arc<dyn Inode>)] = &[
++        ("fs", FsDirOps::new_inode),
++        ("kernel", KernelDirOps::new_inode),
++    ];
+ }
+ 
+ impl DirOps for SysDirOps {
+diff --git a/kernel/src/fs/pipe/common.rs b/kernel/src/fs/pipe/common.rs
+index f484265e..5909c379 100644
+--- a/kernel/src/fs/pipe/common.rs
++++ b/kernel/src/fs/pipe/common.rs
+@@ -57,6 +57,10 @@ impl PipeHandle {
+     pub(crate) fn set_capacity(&self, requested: usize) -> Result<usize> {
+         self.inner.set_capacity(requested)
+     }
++
++    pub(crate) fn capacity(&self) -> usize {
++        self.inner.capacity()
++    }
+ }
+ 
+ impl Pollable for PipeHandle {
+@@ -330,6 +334,10 @@ impl PipeObj {
+ 
+         Ok(capacity)
+     }
++
++    fn capacity(&self) -> usize {
++        self.writer.producer.lock().capacity()
++    }
+ }
+ 
+ #[derive(Default)]
+diff --git a/kernel/src/syscall/fcntl.rs b/kernel/src/syscall/fcntl.rs
+index 3ca5e68a..385a1be1 100644
+--- a/kernel/src/syscall/fcntl.rs
++++ b/kernel/src/syscall/fcntl.rs
+@@ -37,6 +37,7 @@ pub fn sys_fcntl(fd: FileDesc, cmd: i32, arg: u64, ctx: &Context) -> Result<Sysc
+         FcntlCmd::F_GETOWN => handle_getown(fd, ctx),
+         FcntlCmd::F_SETOWN => handle_setown(fd, arg, ctx),
+         FcntlCmd::F_SETPIPE_SZ => handle_setpipe_sz(fd, arg, ctx),
++        FcntlCmd::F_GETPIPE_SZ => handle_getpipe_sz(fd, ctx),
+         FcntlCmd::F_ADD_SEALS => handle_addseal(fd, arg, ctx),
+         FcntlCmd::F_GET_SEALS => handle_getseal(fd, ctx),
+     }
+@@ -211,6 +212,14 @@ fn handle_setpipe_sz(fd: FileDesc, arg: u64, ctx: &Context) -> Result<SyscallRet
+     Ok(SyscallReturn::Return(actual_size as _))
+ }
+ 
++fn handle_getpipe_sz(fd: FileDesc, ctx: &Context) -> Result<SyscallReturn> {
++    let mut file_table = ctx.thread_local.borrow_file_table_mut();
++    let file = get_file_fast!(&mut file_table, fd);
++    let inode_handle = file.as_inode_handle_or_err()?;
++    let pipe_size = inode_handle.pipe_capacity()?;
++    Ok(SyscallReturn::Return(pipe_size as _))
++}
++
+ fn handle_addseal(fd: FileDesc, arg: u64, ctx: &Context) -> Result<SyscallReturn> {
+     let new_seals = FileSeals::from_bits(arg as u32)
+         .ok_or_else(|| Error::with_message(Errno::EINVAL, "invalid seals"))?;
+@@ -250,6 +259,7 @@ enum FcntlCmd {
+     F_GETLEASE = 1025,
+     F_DUPFD_CLOEXEC = 1030,
+     F_SETPIPE_SZ = 1031,
++    F_GETPIPE_SZ = 1032,
+     F_ADD_SEALS = 1033,
+     F_GET_SEALS = 1034,
+ }
+diff --git a/test/initramfs/src/syscall/ltp/debug/family-fcntl-13.md b/test/initramfs/src/syscall/ltp/debug/family-fcntl-13.md
+new file mode 100644
+index 00000000..aae04417
+--- /dev/null
++++ b/test/initramfs/src/syscall/ltp/debug/family-fcntl-13.md
+@@ -0,0 +1,49 @@
++# Fcntl Family Batch 13
++
++## Goal
++
++Re-enable Priority A cases `fcntl30` and `fcntl30_64`, with `/tmp` validation
++first, then `/ext2` and `/exfat` serially.
++
++## Problem Cause
++
++`fcntl30*` was blocked by two missing kernel behaviors:
++
++- LTP setup reads `/proc/sys/fs/pipe-max-size`; Asterinas procfs did not expose
++  this file, so the testcase failed early with `TBROK`.
++- `fcntl(F_GETPIPE_SZ)` was not implemented and returned `EINVAL`, while the
++  testcase requires both `F_GETPIPE_SZ` and `F_SETPIPE_SZ`.
++
++Recent fcntl lease-enablement commits were reviewed to avoid regressions in the
++same syscall path; this batch is independent of lease semantics.
++
++## Solution
++
++- Add `/proc/sys/fs` and `/proc/sys/fs/pipe-max-size` in procfs (read-only,
++  returning `1048576`).
++- Implement `F_GETPIPE_SZ` in `sys_fcntl`, and plumb pipe-capacity getters from
++  `InodeHandle` to `PipeHandle/PipeObj`.
++- Re-enable `fcntl30` and `fcntl30_64` in `testcases/all.txt`.
++
++## Validation Results
++
++Commands:
++
++```bash
++make run_kernel AUTO_TEST=syscall SYSCALL_TEST_SUITE=ltp \
++  LTP_CASES=fcntl30,fcntl30_64
++
++make run_kernel AUTO_TEST=syscall SYSCALL_TEST_SUITE=ltp \
++  SYSCALL_TEST_WORKDIR=/ext2 \
++  LTP_CASES=fcntl30,fcntl30_64
++
++make run_kernel AUTO_TEST=syscall SYSCALL_TEST_SUITE=ltp \
++  SYSCALL_TEST_WORKDIR=/exfat \
++  LTP_CASES=fcntl30,fcntl30_64
++```
++
++Observed:
++
++- `/tmp`: both cases `PASS`.
++- `/ext2`: both cases `PASS`.
++- `/exfat`: both cases `PASS`.
+diff --git a/test/initramfs/src/syscall/ltp/testcases/all.txt b/test/initramfs/src/syscall/ltp/testcases/all.txt
+index d58e4ff1..4920e135 100644
+--- a/test/initramfs/src/syscall/ltp/testcases/all.txt
++++ b/test/initramfs/src/syscall/ltp/testcases/all.txt
+@@ -349,8 +349,8 @@ fcntl27
+ fcntl27_64
+ fcntl29
+ fcntl29_64
+-# fcntl30
+-# fcntl30_64
++fcntl30
++fcntl30_64
+ # fcntl31
+ # fcntl31_64
+ # fcntl32
+-- 
+2.43.0
+

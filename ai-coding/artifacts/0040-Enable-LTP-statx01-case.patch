@@ -1,0 +1,116 @@
+From 35ecf958d4b798ffe571157fb6eade1fb5905d63 Mon Sep 17 00:00:00 2001
+From: Qingsong Chen <changxian.cqs@antgroup.com>
+Date: Tue, 24 Mar 2026 17:05:17 +0000
+Subject: [PATCH 40/97] Enable LTP statx01 case
+
+---
+ .../fs/fs_impls/procfs/pid/task/mountinfo.rs  | 10 ++--
+ .../src/syscall/ltp/debug/family-statx-01.md  | 54 +++++++++++++++++++
+ .../src/syscall/ltp/testcases/all.txt         |  2 +-
+ 3 files changed, 62 insertions(+), 4 deletions(-)
+ create mode 100644 test/initramfs/src/syscall/ltp/debug/family-statx-01.md
+
+diff --git a/kernel/src/fs/fs_impls/procfs/pid/task/mountinfo.rs b/kernel/src/fs/fs_impls/procfs/pid/task/mountinfo.rs
+index 9d66e799..ca84948f 100644
+--- a/kernel/src/fs/fs_impls/procfs/pid/task/mountinfo.rs
++++ b/kernel/src/fs/fs_impls/procfs/pid/task/mountinfo.rs
+@@ -1,6 +1,7 @@
+ // SPDX-License-Identifier: MPL-2.0
+ 
+ use aster_util::printer::VmPrinter;
++use device_id::decode_device_numbers;
+ 
+ use super::TidDirOps;
+ use crate::{
+@@ -128,9 +129,12 @@ impl MountInfoFileOps {
+             let source = mount.source().unwrap_or("none");
+             let fs_flags = mount.fs().flags();
+ 
+-            // The following fields are dummy for now.
+-            let major = 0;
+-            let minor = 0;
++            let (major, minor) = decode_device_numbers(
++                Path::new_fs_root(mount.clone())
++                    .metadata()
++                    .container_dev_id
++                    .as_encoded_u64(),
++            );
+ 
+             let entry = MountInfoEntry {
+                 mount_id,
+diff --git a/test/initramfs/src/syscall/ltp/debug/family-statx-01.md b/test/initramfs/src/syscall/ltp/debug/family-statx-01.md
+new file mode 100644
+index 00000000..02555a26
+--- /dev/null
++++ b/test/initramfs/src/syscall/ltp/debug/family-statx-01.md
+@@ -0,0 +1,54 @@
++# `statx01`
++
++## Goal
++
++Re-enable `statx01` in Phase 3 and verify that it passes on `/tmp`. Validate
++the same fix on `/ext2` and `/exfat`, while treating filesystem-specific
++limitations outside `/tmp` as documentation-only follow-up.
++
++## Root Cause
++
++The testcase cross-checks the `statx()` result against `/proc/self/mountinfo`.
++Asterinas already returned a consistent `stx_mnt_id`, but
++`/proc/self/mountinfo` still printed every mount's device tuple as `0:0`.
++LTP compares the `statx().stx_dev_major:stx_dev_minor` tuple with the
++corresponding `mountinfo` entry, so the test broke even though the mount ID was
++correct.
++
++## Solution
++
++- Replaced the hard-coded `0:0` device numbers in procfs `mountinfo`.
++- Derived each mount's device tuple from the mount root inode's
++  `container_dev_id`.
++- Decoded that device ID with `decode_device_numbers()` before formatting the
++  `mountinfo` line.
++- Re-enabled `statx01` in `testcases/all.txt`.
++
++## Validation
++
++```bash
++make run_kernel AUTO_TEST=syscall SYSCALL_TEST_SUITE=ltp \
++  LTP_CASES=statx01
++
++make run_kernel AUTO_TEST=syscall SYSCALL_TEST_SUITE=ltp \
++  SYSCALL_TEST_WORKDIR=/ext2 \
++  LTP_CASES=statx01
++
++make run_kernel AUTO_TEST=syscall SYSCALL_TEST_SUITE=ltp \
++  SYSCALL_TEST_WORKDIR=/exfat \
++  LTP_CASES=statx01
++```
++
++Observed results:
++
++- `/tmp`: `PASS`
++- `/ext2`: `PASS`
++- `/exfat`: `TBROK` because `mknod()` returned `EINVAL` while creating the
++  block-device fixture used by the testcase
++
++## Impact / Residual Risk
++
++- This fixes procfs `mountinfo` so its device tuple matches the inode metadata
++  exported through `statx()`.
++- The `/exfat` result is a filesystem capability gap around `mknod()`, not a
++  regression in the `statx01` fix path.
+diff --git a/test/initramfs/src/syscall/ltp/testcases/all.txt b/test/initramfs/src/syscall/ltp/testcases/all.txt
+index 07530c82..5b6873fe 100644
+--- a/test/initramfs/src/syscall/ltp/testcases/all.txt
++++ b/test/initramfs/src/syscall/ltp/testcases/all.txt
+@@ -1868,7 +1868,7 @@ futex_wait_bitset01
+ # copy_file_range02
+ # copy_file_range03
+ 
+-# statx01
++statx01
+ statx02
+ statx03
+ # statx04
+-- 
+2.43.0
+

@@ -1,0 +1,57 @@
+From 69d64ad47ba11e4521c59626e3b5b6d6ab9f66ac Mon Sep 17 00:00:00 2001
+From: Qingsong Chen <changxian.cqs@antgroup.com>
+Date: Wed, 25 Mar 2026 07:13:06 +0000
+Subject: [PATCH 93/97] Enable LTP sigwait01 case
+
+---
+ .../syscall/ltp/debug/family-sigwait-01.md    | 24 +++++++++++++++++++
+ .../src/syscall/ltp/testcases/all.txt         |  2 +-
+ 2 files changed, 25 insertions(+), 1 deletion(-)
+ create mode 100644 test/initramfs/src/syscall/ltp/debug/family-sigwait-01.md
+
+diff --git a/test/initramfs/src/syscall/ltp/debug/family-sigwait-01.md b/test/initramfs/src/syscall/ltp/debug/family-sigwait-01.md
+new file mode 100644
+index 00000000..26866510
+--- /dev/null
++++ b/test/initramfs/src/syscall/ltp/debug/family-sigwait-01.md
+@@ -0,0 +1,24 @@
++# sigwait01
++
++## Goal
++
++Enable `sigwait01` on `/tmp`.
++
++## Result
++
++`sigwait01` already passes on the current kernel without code changes. The testcase verifies that
++signal-waiting APIs are interrupted by the expected signal and that the original mask is restored.
++
++## Root Cause
++
++There was no kernel defect for this testcase. It remained commented out in `testcases/all.txt`
++even though the current implementation already satisfies the expected behavior.
++
++## Fix
++
++- Enabled `sigwait01` in `testcases/all.txt`.
++- Recorded the validation result for future batch tracking.
++
++## Validation
++
++- `make run_kernel AUTO_TEST=syscall SYSCALL_TEST_SUITE=ltp LTP_CASES=sigwait01`
+diff --git a/test/initramfs/src/syscall/ltp/testcases/all.txt b/test/initramfs/src/syscall/ltp/testcases/all.txt
+index c538770d..00df99e7 100644
+--- a/test/initramfs/src/syscall/ltp/testcases/all.txt
++++ b/test/initramfs/src/syscall/ltp/testcases/all.txt
+@@ -1575,7 +1575,7 @@ sigsuspend02
+ 
+ # sigtimedwait01
+ 
+-# sigwait01
++sigwait01
+ # sigwaitinfo01
+ 
+ # socket01
+-- 
+2.43.0
+

@@ -1,0 +1,505 @@
+From 7f83f3600bbfb4f9aa760749c8714679cd6178ea Mon Sep 17 00:00:00 2001
+From: Qingsong Chen <changxian.cqs@antgroup.com>
+Date: Tue, 24 Mar 2026 07:02:59 +0000
+Subject: [PATCH 07/97] Enable first LTP clock family batch
+
+---
+ kernel/src/syscall/arch/generic.rs            |   3 +-
+ kernel/src/syscall/arch/x86.rs                |   3 +-
+ kernel/src/syscall/clock_gettime.rs           |  43 +++++++
+ kernel/src/syscall/nanosleep.rs               |   6 +
+ test/initramfs/Makefile                       |   9 ++
+ test/initramfs/nix/default.nix                |   9 +-
+ test/initramfs/nix/syscall/default.nix        |   6 +-
+ test/initramfs/src/syscall/ltp/Makefile       | 120 ++++++++++--------
+ .../src/syscall/ltp/debug/family-clock-01.md  |  84 ++++++++++++
+ .../src/syscall/ltp/testcases/all.txt         |   8 +-
+ 10 files changed, 229 insertions(+), 62 deletions(-)
+ create mode 100644 test/initramfs/src/syscall/ltp/debug/family-clock-01.md
+
+diff --git a/kernel/src/syscall/arch/generic.rs b/kernel/src/syscall/arch/generic.rs
+index e25ea4b4..9ee98a80 100644
+--- a/kernel/src/syscall/arch/generic.rs
++++ b/kernel/src/syscall/arch/generic.rs
+@@ -21,7 +21,7 @@ macro_rules! import_generic_syscall_entries {
+             chmod::{sys_fchmod, sys_fchmodat, sys_fchmodat2},
+             chown::{sys_fchown, sys_fchownat},
+             chroot::sys_chroot,
+-            clock_gettime::sys_clock_gettime,
++            clock_gettime::{sys_clock_getres, sys_clock_gettime},
+             clone::{sys_clone, sys_clone3},
+             close::{sys_close, sys_close_range},
+             connect::sys_connect,
+@@ -293,6 +293,7 @@ macro_rules! define_syscalls_with_generic_syscall_table {
+             SYS_TIMER_SETTIME = 110          => sys_timer_settime(args[..4]);
+             SYS_TIMER_DELETE = 111           => sys_timer_delete(args[..1]);
+             SYS_CLOCK_GETTIME = 113          => sys_clock_gettime(args[..2]);
++            SYS_CLOCK_GETRES = 114           => sys_clock_getres(args[..2]);
+             SYS_CLOCK_NANOSLEEP = 115        => sys_clock_nanosleep(args[..4]);
+             SYS_SCHED_SETPARAM = 118         => sys_sched_setparam(args[..2]);
+             SYS_SCHED_SETSCHEDULER = 119     => sys_sched_setscheduler(args[..3]);
+diff --git a/kernel/src/syscall/arch/x86.rs b/kernel/src/syscall/arch/x86.rs
+index 0ab9bf12..46a6971e 100644
+--- a/kernel/src/syscall/arch/x86.rs
++++ b/kernel/src/syscall/arch/x86.rs
+@@ -15,7 +15,7 @@ use super::{
+     chmod::{sys_chmod, sys_fchmod, sys_fchmodat, sys_fchmodat2},
+     chown::{sys_chown, sys_fchown, sys_fchownat, sys_lchown},
+     chroot::sys_chroot,
+-    clock_gettime::sys_clock_gettime,
++    clock_gettime::{sys_clock_getres, sys_clock_gettime},
+     clone::{sys_clone, sys_clone3},
+     close::{sys_close, sys_close_range},
+     connect::sys_connect,
+@@ -348,6 +348,7 @@ impl_syscall_nums_and_dispatch_fn! {
+     SYS_TIMER_GETTIME = 224    => sys_timer_gettime(args[..2]);
+     SYS_TIMER_DELETE = 226     => sys_timer_delete(args[..1]);
+     SYS_CLOCK_GETTIME = 228    => sys_clock_gettime(args[..2]);
++    SYS_CLOCK_GETRES = 229     => sys_clock_getres(args[..2]);
+     SYS_CLOCK_NANOSLEEP = 230  => sys_clock_nanosleep(args[..4]);
+     SYS_EXIT_GROUP = 231       => sys_exit_group(args[..1]);
+     SYS_EPOLL_WAIT = 232       => sys_epoll_wait(args[..4]);
+diff --git a/kernel/src/syscall/clock_gettime.rs b/kernel/src/syscall/clock_gettime.rs
+index c246bdc1..1e9b59df 100644
+--- a/kernel/src/syscall/clock_gettime.rs
++++ b/kernel/src/syscall/clock_gettime.rs
+@@ -4,6 +4,7 @@ use core::time::Duration;
+ 
+ use int_to_c_enum::TryFromInt;
+ use ostd::mm::VmIo;
++use ostd::timer::TIMER_FREQ;
+ 
+ use super::SyscallReturn;
+ use crate::{
+@@ -37,6 +38,23 @@ pub fn sys_clock_gettime(
+     Ok(SyscallReturn::Return(0))
+ }
+ 
++pub fn sys_clock_getres(
++    clockid: clockid_t,
++    timespec_addr: Vaddr,
++    _ctx: &Context,
++) -> Result<SyscallReturn> {
++    debug!("clockid = {:?}", clockid);
++
++    let resolution = read_clock_resolution(clockid)?;
++
++    if timespec_addr != 0 {
++        let timespec = timespec_t::from(resolution);
++        _ctx.user_space().write_val(timespec_addr, &timespec)?;
++    }
++
++    Ok(SyscallReturn::Return(0))
++}
++
+ // The hard-coded clock IDs.
+ #[derive(Debug, Copy, Clone, TryFromInt, PartialEq)]
+ #[repr(i32)]
+@@ -50,6 +68,8 @@ pub enum ClockId {
+     CLOCK_REALTIME_COARSE = 5,
+     CLOCK_MONOTONIC_COARSE = 6,
+     CLOCK_BOOTTIME = 7,
++    CLOCK_REALTIME_ALARM = 8,
++    CLOCK_BOOTTIME_ALARM = 9,
+ }
+ 
+ /// The information decoded from a dynamic clock ID.
+@@ -122,6 +142,8 @@ pub fn read_clock(clockid: clockid_t, ctx: &Context) -> Result<Duration> {
+             ClockId::CLOCK_REALTIME_COARSE => Ok(RealTimeCoarseClock::get().read_time()),
+             ClockId::CLOCK_MONOTONIC_COARSE => Ok(MonotonicCoarseClock::get().read_time()),
+             ClockId::CLOCK_BOOTTIME => Ok(BootTimeClock::get().read_time()),
++            ClockId::CLOCK_REALTIME_ALARM => Ok(RealTimeClock::get().read_time()),
++            ClockId::CLOCK_BOOTTIME_ALARM => Ok(BootTimeClock::get().read_time()),
+             ClockId::CLOCK_PROCESS_CPUTIME_ID => Ok(ctx.process.prof_clock().read_time()),
+             ClockId::CLOCK_THREAD_CPUTIME_ID => Ok(ctx.posix_thread.prof_clock().read_time()),
+         }
+@@ -154,3 +176,24 @@ pub fn read_clock(clockid: clockid_t, ctx: &Context) -> Result<Duration> {
+         }
+     }
+ }
++
++pub fn read_clock_resolution(clockid: clockid_t) -> Result<Duration> {
++    const NANOS_PER_SEC: u64 = 1_000_000_000;
++    let jiffy_resolution = Duration::from_nanos(NANOS_PER_SEC / TIMER_FREQ);
++
++    let clock_id = ClockId::try_from(clockid)?;
++    let resolution = match clock_id {
++        ClockId::CLOCK_REALTIME
++        | ClockId::CLOCK_MONOTONIC
++        | ClockId::CLOCK_MONOTONIC_RAW
++        | ClockId::CLOCK_BOOTTIME
++        | ClockId::CLOCK_REALTIME_ALARM
++        | ClockId::CLOCK_BOOTTIME_ALARM
++        | ClockId::CLOCK_REALTIME_COARSE
++        | ClockId::CLOCK_MONOTONIC_COARSE
++        | ClockId::CLOCK_PROCESS_CPUTIME_ID
++        | ClockId::CLOCK_THREAD_CPUTIME_ID => jiffy_resolution,
++    };
++
++    Ok(resolution)
++}
+diff --git a/kernel/src/syscall/nanosleep.rs b/kernel/src/syscall/nanosleep.rs
+index a19f0641..5d68d843 100644
+--- a/kernel/src/syscall/nanosleep.rs
++++ b/kernel/src/syscall/nanosleep.rs
+@@ -100,6 +100,12 @@ fn do_clock_nanosleep(
+             ClockId::CLOCK_PROCESS_CPUTIME_ID => {
+                 ctx.process.timer_manager().prof_timer().timer_manager()
+             }
++            ClockId::CLOCK_THREAD_CPUTIME_ID => {
++                return_errno_with_message!(
++                    Errno::EOPNOTSUPP,
++                    "clock_nanosleep does not support thread CPU clocks"
++                );
++            }
+             // FIXME: From the manual,
+             // the CPU clock IDs returned by clock_getcpuclockid(3)
+             // and pthread_getcpuclockid(3) can also be passed in clockid.
+diff --git a/test/initramfs/Makefile b/test/initramfs/Makefile
+index 88c5e854..dc86ab04 100644
+--- a/test/initramfs/Makefile
++++ b/test/initramfs/Makefile
+@@ -5,6 +5,9 @@ SMP ?= 1
+ VERBOSE ?= 1
+ SYSCALL_TEST_SUITE ?= ltp
+ SYSCALL_TEST_WORKDIR ?= /tmp
++LTP_CASES ?=
++LTP_CASE_FILE ?=
++EXTRA_BLOCKLISTS_DIRS ?=
+ ENABLE_BASIC_TEST ?= false
+ # Specify platform macros when building regression tests (supported: asterinas, linux).
+ # - asterinas: Define both `__asterinas__` and `__linux__`. Tests may fail in Linux.
+@@ -71,6 +74,9 @@ $(INITRAMFS_IMAGE): $(INITRAMFS)
+ 		--arg enableSyscallTest $(ENABLE_SYSCALL_TEST) \
+ 		--argstr syscallTestSuite $(SYSCALL_TEST_SUITE) \
+ 		--argstr syscallTestWorkDir $(SYSCALL_TEST_WORKDIR) \
++		--argstr ltpCases "$(LTP_CASES)" \
++		--argstr ltpCaseFile "$(LTP_CASE_FILE)" \
++		--argstr extraBlocklistsDirs "$(EXTRA_BLOCKLISTS_DIRS)" \
+ 		--argstr dnsServer ${DNS_SERVER} \
+ 		--arg initramfsCompressed $(INITRAMFS_COMPRESSED) \
+ 		--arg smp $(SMP) \
+@@ -88,6 +94,9 @@ $(INITRAMFS):
+ 		--arg enableSyscallTest $(ENABLE_SYSCALL_TEST) \
+ 		--argstr syscallTestSuite $(SYSCALL_TEST_SUITE) \
+ 		--argstr syscallTestWorkDir $(SYSCALL_TEST_WORKDIR) \
++		--argstr ltpCases "$(LTP_CASES)" \
++		--argstr ltpCaseFile "$(LTP_CASE_FILE)" \
++		--argstr extraBlocklistsDirs "$(EXTRA_BLOCKLISTS_DIRS)" \
+ 		--argstr dnsServer ${DNS_SERVER} \
+ 		--arg smp $(SMP) \
+ 		--out-link $@ \
+diff --git a/test/initramfs/nix/default.nix b/test/initramfs/nix/default.nix
+index 6dd6e070..b5804a8e 100644
+--- a/test/initramfs/nix/default.nix
++++ b/test/initramfs/nix/default.nix
+@@ -1,6 +1,7 @@
+ { target ? "x86_64", enableBasicTest ? false, basicTestPlatform ? "asterinas"
+ , enableBenchmark ? false, enableSyscallTest ? false, syscallTestSuite ? "ltp"
+-, syscallTestWorkDir ? "/tmp", dnsServer ? "none", smp ? 1
++, syscallTestWorkDir ? "/tmp", ltpCases ? "", ltpCaseFile ? ""
++, extraBlocklistsDirs ? "", dnsServer ? "none", smp ? 1
+ , initramfsCompressed ? true, }:
+ let
+   crossSystem.config = if target == "x86_64" then
+@@ -30,6 +31,12 @@ in rec {
+     inherit smp;
+     testSuite = syscallTestSuite;
+     workDir = syscallTestWorkDir;
++    inherit ltpCases extraBlocklistsDirs;
++    ltpCaseFile = if ltpCaseFile == "" then "" else
++      toString (builtins.path {
++        name = "ltp-case-file";
++        path = ltpCaseFile;
++      });
+   };
+   initramfs = pkgs.callPackage ./initramfs.nix {
+     inherit busybox;
+diff --git a/test/initramfs/nix/syscall/default.nix b/test/initramfs/nix/syscall/default.nix
+index b8c51bf3..6f5f119e 100644
+--- a/test/initramfs/nix/syscall/default.nix
++++ b/test/initramfs/nix/syscall/default.nix
+@@ -1,4 +1,5 @@
+-{ lib, stdenvNoCC, callPackage, testSuite ? "ltp", workDir ? "/tmp", smp ? 1,
++{ lib, stdenvNoCC, callPackage, testSuite ? "ltp", workDir ? "/tmp"
++, ltpCases ? "", ltpCaseFile ? "", extraBlocklistsDirs ? "", smp ? 1,
+ }: rec {
+   inherit testSuite;
+   ltp = callPackage ./ltp.nix { };
+@@ -23,6 +24,9 @@
+       export GVISOR_PREBUILT_DIR=${gvisor}
+       export SYSCALL_TEST_SUITE=${testSuite}
+       export SYSCALL_TEST_WORKDIR=${workDir}
++      export LTP_CASES='${ltpCases}'
++      export LTP_CASE_FILE='${ltpCaseFile}'
++      export EXTRA_BLOCKLISTS_DIRS='${extraBlocklistsDirs}'
+       export SMP=${toString smp}
+       make
+     '';
+diff --git a/test/initramfs/src/syscall/ltp/Makefile b/test/initramfs/src/syscall/ltp/Makefile
+index 50565c86..973a70e4 100644
+--- a/test/initramfs/src/syscall/ltp/Makefile
++++ b/test/initramfs/src/syscall/ltp/Makefile
+@@ -18,52 +18,6 @@ $(TARGET_DIR): $(RUN_BASH) $(ALL_TESTS) $(EXT2_BLOCKLIST) $(EXFAT_BLOCKLIST)
+ 	@# Prepare tests dir for test binaries
+ 	@mkdir -p $@/testcases/bin
+ 	@mkdir -p $@/runtest
+-	@awk '!/^#/ && NF' $(ALL_TESTS) > $@/all.txt
+-	@if [ "$(SYSCALL_TEST_WORKDIR)" = "/ext2" ]; then \
+-		grep -vxF -f $(EXT2_BLOCKLIST) $@/all.txt > $@/fs_filtered.txt; \
+-	elif [ "$(SYSCALL_TEST_WORKDIR)" = "/exfat" ]; then \
+-		grep -vxF -f $(EXFAT_BLOCKLIST) $@/all.txt > $@/fs_filtered.txt; \
+-	else \
+-		cp -f $@/all.txt $@/fs_filtered.txt; \
+-	fi;
+-	@cp -f $@/fs_filtered.txt $@/extra_filtered.txt
+-	@if [ -n "$(EXTRA_BLOCKLISTS_DIRS)" ] && [ "$(EXTRA_BLOCKLISTS_DIRS)" != "\"\"" ] && [ "$(EXTRA_BLOCKLISTS_DIRS)" != "''" ]; then \
+-		for extra_dir in $(EXTRA_BLOCKLISTS_DIRS); do \
+-			if [ -z "$$extra_dir" ] || [ "$$extra_dir" = "\"\"" ] || [ "$$extra_dir" = "''" ]; then \
+-				continue; \
+-			fi; \
+-			case "$$extra_dir" in \
+-				/*) extra_dir_path="$$extra_dir" ;; \
+-				*) extra_dir_path="$(CUR_DIR)/$$extra_dir" ;; \
+-			esac; \
+-			if [ ! -d "$$extra_dir_path" ]; then \
+-				echo "Error: EXTRA_BLOCKLISTS_DIRS entry is not a directory: $$extra_dir" >&2; \
+-				exit 1; \
+-			fi; \
+-			for blocklist_file in "$$extra_dir_path/all.txt"; do \
+-				if [ -f "$$blocklist_file" ]; then \
+-					awk '!/^#/ && NF { print $$1 }' "$$blocklist_file" > $@/extra_blocklist.txt; \
+-					if [ -s $@/extra_blocklist.txt ]; then \
+-						grep -vxF -f $@/extra_blocklist.txt $@/extra_filtered.txt > $@/extra_filtered.next || true; \
+-						mv $@/extra_filtered.next $@/extra_filtered.txt; \
+-					fi; \
+-				fi; \
+-			done; \
+-			if [ "$(SYSCALL_TEST_WORKDIR)" = "/ext2" ] && [ -f "$$extra_dir_path/ext2.txt" ]; then \
+-				awk '!/^#/ && NF { print $$1 }' "$$extra_dir_path/ext2.txt" > $@/extra_blocklist.txt; \
+-				if [ -s $@/extra_blocklist.txt ]; then \
+-					grep -vxF -f $@/extra_blocklist.txt $@/extra_filtered.txt > $@/extra_filtered.next || true; \
+-					mv $@/extra_filtered.next $@/extra_filtered.txt; \
+-				fi; \
+-			elif [ "$(SYSCALL_TEST_WORKDIR)" = "/exfat" ] && [ -f "$$extra_dir_path/exfat.txt" ]; then \
+-				awk '!/^#/ && NF { print $$1 }' "$$extra_dir_path/exfat.txt" > $@/extra_blocklist.txt; \
+-				if [ -s $@/extra_blocklist.txt ]; then \
+-					grep -vxF -f $@/extra_blocklist.txt $@/extra_filtered.txt > $@/extra_filtered.next || true; \
+-					mv $@/extra_filtered.next $@/extra_filtered.txt; \
+-				fi; \
+-			fi; \
+-		done; \
+-	fi;
+ 	@if [ -n "$(LTP_CASES)" ] || [ -n "$(LTP_CASE_FILE)" ]; then \
+ 		: > $@/selected.txt; \
+ 		if [ -n "$(LTP_CASES)" ]; then \
+@@ -81,28 +35,86 @@ $(TARGET_DIR): $(RUN_BASH) $(ALL_TESTS) $(EXT2_BLOCKLIST) $(EXFAT_BLOCKLIST)
+ 			echo "Error: no testcases selected from LTP_CASES/LTP_CASE_FILE." >&2; \
+ 			exit 1; \
+ 		fi; \
+-		grep -xF -f $@/selected.txt $@/extra_filtered.txt > $@/filtered.txt || true; \
+-		if [ ! -s $@/filtered.txt ]; then \
+-			echo "Error: selected LTP cases are not enabled after blocklist filtering." >&2; \
+-			exit 1; \
+-		fi; \
+ 	else \
++		awk '!/^#/ && NF' $(ALL_TESTS) > $@/all.txt; \
++		if [ "$(SYSCALL_TEST_WORKDIR)" = "/ext2" ]; then \
++			grep -vxF -f $(EXT2_BLOCKLIST) $@/all.txt > $@/fs_filtered.txt; \
++		elif [ "$(SYSCALL_TEST_WORKDIR)" = "/exfat" ]; then \
++			grep -vxF -f $(EXFAT_BLOCKLIST) $@/all.txt > $@/fs_filtered.txt; \
++		else \
++			cp -f $@/all.txt $@/fs_filtered.txt; \
++		fi; \
++		cp -f $@/fs_filtered.txt $@/extra_filtered.txt; \
++		if [ -n "$(EXTRA_BLOCKLISTS_DIRS)" ] && [ "$(EXTRA_BLOCKLISTS_DIRS)" != "\"\"" ] && [ "$(EXTRA_BLOCKLISTS_DIRS)" != "''" ]; then \
++			for extra_dir in $(EXTRA_BLOCKLISTS_DIRS); do \
++				if [ -z "$$extra_dir" ] || [ "$$extra_dir" = "\"\"" ] || [ "$$extra_dir" = "''" ]; then \
++					continue; \
++				fi; \
++				case "$$extra_dir" in \
++					/*) extra_dir_path="$$extra_dir" ;; \
++					*) extra_dir_path="$(CUR_DIR)/$$extra_dir" ;; \
++				esac; \
++				if [ ! -d "$$extra_dir_path" ]; then \
++					echo "Error: EXTRA_BLOCKLISTS_DIRS entry is not a directory: $$extra_dir" >&2; \
++					exit 1; \
++				fi; \
++				for blocklist_file in "$$extra_dir_path/all.txt"; do \
++					if [ -f "$$blocklist_file" ]; then \
++						awk '!/^#/ && NF { print $$1 }' "$$blocklist_file" > $@/extra_blocklist.txt; \
++						if [ -s $@/extra_blocklist.txt ]; then \
++							grep -vxF -f $@/extra_blocklist.txt $@/extra_filtered.txt > $@/extra_filtered.next || true; \
++							mv $@/extra_filtered.next $@/extra_filtered.txt; \
++						fi; \
++					fi; \
++				done; \
++				if [ "$(SYSCALL_TEST_WORKDIR)" = "/ext2" ] && [ -f "$$extra_dir_path/ext2.txt" ]; then \
++					awk '!/^#/ && NF { print $$1 }' "$$extra_dir_path/ext2.txt" > $@/extra_blocklist.txt; \
++					if [ -s $@/extra_blocklist.txt ]; then \
++						grep -vxF -f $@/extra_blocklist.txt $@/extra_filtered.txt > $@/extra_filtered.next || true; \
++						mv $@/extra_filtered.next $@/extra_filtered.txt; \
++					fi; \
++				elif [ "$(SYSCALL_TEST_WORKDIR)" = "/exfat" ] && [ -f "$$extra_dir_path/exfat.txt" ]; then \
++					awk '!/^#/ && NF { print $$1 }' "$$extra_dir_path/exfat.txt" > $@/extra_blocklist.txt; \
++					if [ -s $@/extra_blocklist.txt ]; then \
++						grep -vxF -f $@/extra_blocklist.txt $@/extra_filtered.txt > $@/extra_filtered.next || true; \
++						mv $@/extra_filtered.next $@/extra_filtered.txt; \
++					fi; \
++				fi; \
++			done; \
++		fi; \
+ 		cp -f $@/extra_filtered.txt $@/filtered.txt; \
+ 	fi;
+ 	@# Process syscall testcases and copy binaries
++	@: > $@/matched.txt
+ 	@while read -r syscall binary params; do \
+-		if grep -q "^$$syscall$$" $@/filtered.txt; then \
++		if [ -n "$(LTP_CASES)" ] || [ -n "$(LTP_CASE_FILE)" ]; then \
++			grep -qxF "$$syscall" $@/selected.txt || continue; \
++		elif ! grep -q "^$$syscall$$" $@/filtered.txt; then \
++			continue; \
++		fi; \
+ 			if [ -f $(LTP_PREBUILT_DIR)/testcases/bin/$$binary ]; then \
+ 				cp -f $(LTP_PREBUILT_DIR)/testcases/bin/$$binary $@/testcases/bin; \
+ 				echo "$$syscall $$binary $$params" >> $@/runtest/syscalls; \
++				echo "$$syscall" >> $@/matched.txt; \
+ 			else \
+ 				echo "Warning: $$binary not found (skipping)"; \
+ 			fi; \
+-		fi; \
+ 	done < $(LTP_PREBUILT_DIR)/runtest/syscalls
++	@if [ -n "$(LTP_CASES)" ] || [ -n "$(LTP_CASE_FILE)" ]; then \
++		sort -u -o $@/matched.txt $@/matched.txt; \
++		if [ ! -s $@/matched.txt ]; then \
++			echo "Error: selected LTP cases do not exist in upstream runtest/syscalls." >&2; \
++			exit 1; \
++		fi; \
++		if ! diff -u $@/matched.txt $@/selected.txt >/dev/null; then \
++			echo "Error: some selected LTP cases were not found in upstream runtest/syscalls." >&2; \
++			diff -u $@/matched.txt $@/selected.txt || true; \
++			exit 1; \
++		fi; \
++	fi
+ 	@# Remove intermediate files
+ 	@rm -f $@/all.txt $@/fs_filtered.txt $@/extra_filtered.txt $@/extra_filtered.next \
+-		$@/filtered.txt $@/selected.txt $@/extra_blocklist.txt
++		$@/filtered.txt $@/selected.txt $@/matched.txt $@/extra_blocklist.txt
+ 	@# Copy bash scripts
+ 	@cp -r $(LTP_PREBUILT_DIR)/bin $@
+ 	@cp -f $(LTP_PREBUILT_DIR)/runltp $@
+diff --git a/test/initramfs/src/syscall/ltp/debug/family-clock-01.md b/test/initramfs/src/syscall/ltp/debug/family-clock-01.md
+new file mode 100644
+index 00000000..b30a82c7
+--- /dev/null
++++ b/test/initramfs/src/syscall/ltp/debug/family-clock-01.md
+@@ -0,0 +1,84 @@
++# Clock Family Batch 01
++
++## Goal
++
++Re-enable a first `clock_*` batch that already had partial syscall support and
++should pass consistently across `/tmp`, `/ext2`, and `/exfat`.
++
++Enabled cases in this batch:
++
++- `clock_getres01`
++- `clock_gettime01`
++- `clock_nanosleep01`
++- `clock_nanosleep02`
++
++## Problem Cause
++
++This batch initially had three independent blockers:
++
++1. Disabled-case debugging did not work through the normal Nix initramfs build
++   path because `LTP_CASES`, `LTP_CASE_FILE`, and `EXTRA_BLOCKLISTS_DIRS` were
++   not forwarded into the packaged syscall test environment.
++2. `clock_getres01` failed because Asterinas had no `clock_getres` syscall
++   implementation or syscall-table entry.
++3. `clock_nanosleep01` failed because `CLOCK_THREAD_CPUTIME_ID` returned
++   `EINVAL` instead of Linux-compatible `EOPNOTSUPP`.
++4. `clock_nanosleep02` failed after adding `clock_getres` because the reported
++   clock resolution was unrealistically optimistic (`1ns`), which made LTP use
++   thresholds that were too strict for the kernel's actual timer granularity.
++
++`clock_gettime02` was also investigated but remains out of this batch because
++it currently `TBROK`s on a harness/environment assumption: LTP wants a parsable
++kernel `.config`.
++
++## Solution
++
++### Harness changes used by this batch
++
++- Forwarded `LTP_CASES`, `LTP_CASE_FILE`, and `EXTRA_BLOCKLISTS_DIRS` through
++  the Nix-based initramfs build path so targeted disabled-case debugging works
++  with `make run_kernel`.
++- Relaxed LTP packaging semantics for explicit case selection so a selected
++  case can be debugged even if it is still commented out in `testcases/all.txt`
++  or normally excluded by persistent blocklists.
++
++### Kernel fixes used by this batch
++
++- Added `clock_getres` support to the syscall dispatch tables and implemented
++  `sys_clock_getres`.
++- Extended the clock ID set to include `CLOCK_REALTIME_ALARM` and
++  `CLOCK_BOOTTIME_ALARM` for `clock_getres`.
++- Returned `EOPNOTSUPP` for `clock_nanosleep(CLOCK_THREAD_CPUTIME_ID, ...)`
++  instead of `EINVAL`.
++- Reported `clock_getres()` using the kernel's effective jiffy-based timer
++  granularity (`1ms` with `TIMER_FREQ=1000`) instead of an artificial `1ns`.
++
++### Validation results
++
++The batch passed on all three required targets:
++
++- `/tmp`
++- `/ext2`
++- `/exfat`
++
++Representative commands:
++
++```bash
++make run_kernel AUTO_TEST=syscall SYSCALL_TEST_SUITE=ltp \
++  LTP_CASES=clock_getres01,clock_gettime01,clock_nanosleep01,clock_nanosleep02
++
++make run_kernel AUTO_TEST=syscall SYSCALL_TEST_SUITE=ltp \
++  SYSCALL_TEST_WORKDIR=/ext2 \
++  LTP_CASES=clock_getres01,clock_gettime01,clock_nanosleep01,clock_nanosleep02
++
++make run_kernel AUTO_TEST=syscall SYSCALL_TEST_SUITE=ltp \
++  SYSCALL_TEST_WORKDIR=/exfat \
++  LTP_CASES=clock_getres01,clock_gettime01,clock_nanosleep01,clock_nanosleep02
++```
++
++## Follow-up
++
++- `clock_gettime02` is still blocked by a harness/environment issue
++  (`Cannot parse kernel .config`) and should be tracked separately.
++- `clock_settime01` and `clock_adjtime01` remain feature work rather than
++  compatibility nits; they were not mixed into this batch.
+diff --git a/test/initramfs/src/syscall/ltp/testcases/all.txt b/test/initramfs/src/syscall/ltp/testcases/all.txt
+index f57e7a8f..b632af7d 100644
+--- a/test/initramfs/src/syscall/ltp/testcases/all.txt
++++ b/test/initramfs/src/syscall/ltp/testcases/all.txt
+@@ -97,13 +97,13 @@ chroot02
+ # clock_adjtime01
+ # clock_adjtime02
+ 
+-# clock_getres01
+-# clock_nanosleep01
+-# clock_nanosleep02
++clock_getres01
++clock_nanosleep01
++clock_nanosleep02
+ # clock_nanosleep03
+ clock_nanosleep04
+ 
+-# clock_gettime01
++clock_gettime01
+ # clock_gettime02
+ # clock_gettime03
+ # clock_gettime04
+-- 
+2.43.0
+

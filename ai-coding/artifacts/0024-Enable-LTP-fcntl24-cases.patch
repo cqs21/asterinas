@@ -1,0 +1,326 @@
+From fd81045322a3dec5f82bd91c6cfaba9433a40478 Mon Sep 17 00:00:00 2001
+From: Qingsong Chen <changxian.cqs@antgroup.com>
+Date: Tue, 24 Mar 2026 13:47:27 +0000
+Subject: [PATCH 24/97] Enable LTP fcntl24 cases
+
+---
+ kernel/src/fs/file/inode_handle.rs            | 54 +++++++++++++++++-
+ kernel/src/fs/vfs/fs_apis/inode_ext.rs        | 57 ++++++++++++++++++-
+ kernel/src/syscall/fcntl.rs                   | 28 +++++++++
+ .../src/syscall/ltp/debug/family-fcntl-09.md  | 45 +++++++++++++++
+ .../src/syscall/ltp/testcases/all.txt         |  8 +--
+ 5 files changed, 184 insertions(+), 8 deletions(-)
+ create mode 100644 test/initramfs/src/syscall/ltp/debug/family-fcntl-09.md
+
+diff --git a/kernel/src/fs/file/inode_handle.rs b/kernel/src/fs/file/inode_handle.rs
+index d362c7af..1d800a5e 100644
+--- a/kernel/src/fs/file/inode_handle.rs
++++ b/kernel/src/fs/file/inode_handle.rs
+@@ -2,7 +2,10 @@
+ 
+ //! Opened Inode-backed File Handle
+ 
+-use core::{fmt::Display, sync::atomic::Ordering};
++use core::{
++    fmt::Display,
++    sync::atomic::{AtomicU64, Ordering},
++};
+ 
+ use aster_rights::Rights;
+ 
+@@ -27,7 +30,10 @@ use crate::{
+     util::ioctl::RawIoctl,
+ };
+ 
++static NEXT_INODE_HANDLE_ID: AtomicU64 = AtomicU64::new(1);
++
+ pub struct InodeHandle {
++    owner_id: u64,
+     path: Path,
+     /// `file_io` is similar to the `file_private` field in Linux's `file` structure. If `file_io`
+     /// is `Some(_)`, typical file operations including `read`, `write`, `poll`, and `ioctl` will
+@@ -68,6 +74,7 @@ impl InodeHandle {
+         };
+ 
+         Ok(Self {
++            owner_id: NEXT_INODE_HANDLE_ID.fetch_add(1, Ordering::Relaxed),
+             path,
+             file_io,
+             offset: Mutex::new(0),
+@@ -80,6 +87,50 @@ impl InodeHandle {
+         &self.path
+     }
+ 
++    pub fn get_lease(&self) -> crate::fs::vfs::inode_ext::LeaseType {
++        self.path
++            .inode()
++            .fs_lock_context()
++            .map(|lock_context| lock_context.get_lease())
++            .unwrap_or(crate::fs::vfs::inode_ext::LeaseType::Unlock)
++    }
++
++    pub fn set_lease(&self, lease_type: crate::fs::vfs::inode_ext::LeaseType) -> Result<()> {
++        if self.rights.is_empty() {
++            return_errno_with_message!(Errno::EBADF, "the file is opened as a path");
++        }
++        if self.path.inode().type_() != InodeType::File {
++            return_errno_with_message!(
++                Errno::EINVAL,
++                "file leases are only supported on regular files"
++            );
++        }
++        if lease_type == crate::fs::vfs::inode_ext::LeaseType::ReadLock
++            && self.access_mode() != AccessMode::O_RDONLY
++        {
++            return_errno_with_message!(
++                Errno::EAGAIN,
++                "read leases require a read-only file descriptor"
++            );
++        }
++
++        if lease_type == crate::fs::vfs::inode_ext::LeaseType::Unlock {
++            self.release_lease();
++            return Ok(());
++        }
++
++        self.path
++            .inode()
++            .fs_lock_context_or_init()
++            .set_lease(self.owner_id, lease_type)
++    }
++
++    pub fn release_lease(&self) {
++        if let Some(lock_context) = self.path.inode().fs_lock_context() {
++            lock_context.release_lease(self.owner_id);
++        }
++    }
++
+     pub fn offset(&self) -> usize {
+         let offset = self.offset.lock();
+         *offset
+@@ -511,6 +562,7 @@ impl FileLike for InodeHandle {
+ 
+ impl Drop for InodeHandle {
+     fn drop(&mut self) {
++        self.release_lease();
+         self.release_range_locks();
+         let _ = self.unlock_flock();
+     }
+diff --git a/kernel/src/fs/vfs/fs_apis/inode_ext.rs b/kernel/src/fs/vfs/fs_apis/inode_ext.rs
+index 4817d4e0..6ed08203 100644
+--- a/kernel/src/fs/vfs/fs_apis/inode_ext.rs
++++ b/kernel/src/fs/vfs/fs_apis/inode_ext.rs
+@@ -2,15 +2,30 @@
+ 
+ use alloc::boxed::ThinBox;
+ 
+-use crate::fs::{
+-    file::flock::FlockList,
+-    vfs::{inode::Inode, notify::FsEventPublisher, range_lock::RangeLockList},
++use crate::{
++    fs::{
++        file::flock::FlockList,
++        vfs::{
++            inode::Inode,
++            notify::FsEventPublisher,
++            range_lock::{RangeLockList, RangeLockType},
++        },
++    },
++    prelude::*,
+ };
+ 
++struct FileLease {
++    owner_id: u64,
++    type_: RangeLockType,
++}
++
++pub type LeaseType = RangeLockType;
++
+ /// Context for FS locks.
+ pub struct FsLockContext {
+     range_lock_list: RangeLockList,
+     flock_list: FlockList,
++    lease: Mutex<Option<FileLease>>,
+ }
+ 
+ impl FsLockContext {
+@@ -18,6 +33,7 @@ impl FsLockContext {
+         Self {
+             range_lock_list: RangeLockList::new(),
+             flock_list: FlockList::new(),
++            lease: Mutex::new(None),
+         }
+     }
+ 
+@@ -30,6 +46,41 @@ impl FsLockContext {
+     pub fn flock_list(&self) -> &FlockList {
+         &self.flock_list
+     }
++
++    pub fn get_lease(&self) -> LeaseType {
++        self.lease
++            .lock()
++            .as_ref()
++            .map(|lease| lease.type_)
++            .unwrap_or(LeaseType::Unlock)
++    }
++
++    pub fn set_lease(&self, owner_id: u64, lease_type: LeaseType) -> Result<()> {
++        debug_assert_ne!(lease_type, LeaseType::Unlock);
++
++        let mut lease = self.lease.lock();
++        if let Some(existing_lease) = lease.as_ref()
++            && existing_lease.owner_id != owner_id
++        {
++            return_errno_with_message!(Errno::EBUSY, "the file already has a lease");
++        }
++
++        *lease = Some(FileLease {
++            owner_id,
++            type_: lease_type,
++        });
++        Ok(())
++    }
++
++    pub fn release_lease(&self, owner_id: u64) {
++        let mut lease = self.lease.lock();
++        if lease
++            .as_ref()
++            .is_some_and(|existing_lease| existing_lease.owner_id == owner_id)
++        {
++            *lease = None;
++        }
++    }
+ }
+ 
+ /// A trait that instantiates kernel types for the inode [`Extension`].
+diff --git a/kernel/src/syscall/fcntl.rs b/kernel/src/syscall/fcntl.rs
+index 60b04fcd..3ca5e68a 100644
+--- a/kernel/src/syscall/fcntl.rs
++++ b/kernel/src/syscall/fcntl.rs
+@@ -32,6 +32,8 @@ pub fn sys_fcntl(fd: FileDesc, cmd: i32, arg: u64, ctx: &Context) -> Result<Sysc
+             Errno::EINTR => Error::new(Errno::ERESTARTSYS),
+             _ => err,
+         }),
++        FcntlCmd::F_SETLEASE => handle_setlease(fd, arg, ctx),
++        FcntlCmd::F_GETLEASE => handle_getlease(fd, ctx),
+         FcntlCmd::F_GETOWN => handle_getown(fd, ctx),
+         FcntlCmd::F_SETOWN => handle_setown(fd, arg, ctx),
+         FcntlCmd::F_SETPIPE_SZ => handle_setpipe_sz(fd, arg, ctx),
+@@ -177,6 +179,24 @@ fn handle_setown(fd: FileDesc, arg: u64, ctx: &Context) -> Result<SyscallReturn>
+     Ok(SyscallReturn::Return(0))
+ }
+ 
++fn handle_setlease(fd: FileDesc, arg: u64, ctx: &Context) -> Result<SyscallReturn> {
++    let lease_type = lease_type_from_arg(arg)?;
++
++    let mut file_table = ctx.thread_local.borrow_file_table_mut();
++    let file = get_file_fast!(&mut file_table, fd);
++    file.as_inode_handle_or_err()?.set_lease(lease_type)?;
++
++    Ok(SyscallReturn::Return(0))
++}
++
++fn handle_getlease(fd: FileDesc, ctx: &Context) -> Result<SyscallReturn> {
++    let mut file_table = ctx.thread_local.borrow_file_table_mut();
++    let file = get_file_fast!(&mut file_table, fd);
++    let lease_type = file.as_inode_handle_or_err()?.get_lease();
++
++    Ok(SyscallReturn::Return(lease_type as _))
++}
++
+ fn handle_setpipe_sz(fd: FileDesc, arg: u64, ctx: &Context) -> Result<SyscallReturn> {
+     let requested_size = usize::try_from(arg)
+         .map_err(|_| Error::with_message(Errno::EINVAL, "invalid pipe size"))?;
+@@ -226,6 +246,8 @@ enum FcntlCmd {
+     F_SETLKW = 7,
+     F_SETOWN = 8,
+     F_GETOWN = 9,
++    F_SETLEASE = 1024,
++    F_GETLEASE = 1025,
+     F_DUPFD_CLOEXEC = 1030,
+     F_SETPIPE_SZ = 1031,
+     F_ADD_SEALS = 1033,
+@@ -319,3 +341,9 @@ fn from_c_flock_and_file(lock: &c_flock, file: &dyn FileLike) -> Result<FileRang
+ 
+     FileRange::new(start, end)
+ }
++
++fn lease_type_from_arg(arg: u64) -> Result<RangeLockType> {
++    let lease_type =
++        u16::try_from(arg).map_err(|_| Error::with_message(Errno::EINVAL, "invalid lease type"))?;
++    Ok(RangeLockType::try_from(lease_type)?)
++}
+diff --git a/test/initramfs/src/syscall/ltp/debug/family-fcntl-09.md b/test/initramfs/src/syscall/ltp/debug/family-fcntl-09.md
+new file mode 100644
+index 00000000..0c218825
+--- /dev/null
++++ b/test/initramfs/src/syscall/ltp/debug/family-fcntl-09.md
+@@ -0,0 +1,45 @@
++# Fcntl Family Batch 09
++
++## Goal
++
++Re-enable `fcntl24` and `fcntl24_64` in Phase 3, with `/tmp` pass-first
++validation and cross-checks on `/ext2` and `/exfat`.
++
++## Problem Cause
++
++`fcntl24*` exercises `F_SETLEASE` with `F_WRLCK`. Before the lease support
++work, these commands returned `EINVAL`, so the cases were disabled.
++
++On `/tmp` specifically, LTP marks these cases as configuration skip (`TCONF`)
++because the test runtime detects `ramfs` and intentionally does not run the
++lease assertions there.
++
++## Solution
++
++- Reuse the lease support added for the same fcntl family in kernel fcntl path:
++  `F_SETLEASE` and `F_GETLEASE`, with inode-scoped lease state.
++- Validate `fcntl24` and `fcntl24_64` on `/tmp`, `/ext2`, and `/exfat`.
++- Re-enable `fcntl24` and `fcntl24_64` in `testcases/all.txt`.
++
++## Validation Results
++
++Representative commands:
++
++```bash
++make run_kernel AUTO_TEST=syscall SYSCALL_TEST_SUITE=ltp \
++  LTP_CASES=fcntl24,fcntl24_64
++
++make run_kernel AUTO_TEST=syscall SYSCALL_TEST_SUITE=ltp \
++  SYSCALL_TEST_WORKDIR=/ext2 \
++  LTP_CASES=fcntl24,fcntl24_64
++
++make run_kernel AUTO_TEST=syscall SYSCALL_TEST_SUITE=ltp \
++  SYSCALL_TEST_WORKDIR=/exfat \
++  LTP_CASES=fcntl24,fcntl24_64
++```
++
++Observed results:
++
++- `/tmp`: both cases `TCONF` (expected by LTP on ramfs), no failures.
++- `/ext2`: both cases `PASS`.
++- `/exfat`: both cases `PASS`.
+diff --git a/test/initramfs/src/syscall/ltp/testcases/all.txt b/test/initramfs/src/syscall/ltp/testcases/all.txt
+index e8b46d0e..e12b5fc8 100644
+--- a/test/initramfs/src/syscall/ltp/testcases/all.txt
++++ b/test/initramfs/src/syscall/ltp/testcases/all.txt
+@@ -337,10 +337,10 @@ fcntl21
+ fcntl21_64
+ fcntl22
+ fcntl22_64
+-# fcntl23
+-# fcntl23_64
+-# fcntl24
+-# fcntl24_64
++fcntl23
++fcntl23_64
++fcntl24
++fcntl24_64
+ # fcntl25
+ # fcntl25_64
+ # fcntl26
+-- 
+2.43.0
+

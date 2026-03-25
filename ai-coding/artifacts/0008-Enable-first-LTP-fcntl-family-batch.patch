@@ -1,0 +1,214 @@
+From 667e1f6e446744c358a988db0914282e413d7fdc Mon Sep 17 00:00:00 2001
+From: Qingsong Chen <changxian.cqs@antgroup.com>
+Date: Tue, 24 Mar 2026 07:11:00 +0000
+Subject: [PATCH 08/97] Enable first LTP fcntl family batch
+
+---
+ kernel/src/fs/file/file_table.rs              | 39 ++++++++--
+ kernel/src/syscall/fcntl.rs                   | 17 ++++-
+ .../src/syscall/ltp/debug/family-fcntl-01.md  | 76 +++++++++++++++++++
+ .../src/syscall/ltp/testcases/all.txt         |  4 +-
+ 4 files changed, 126 insertions(+), 10 deletions(-)
+ create mode 100644 test/initramfs/src/syscall/ltp/debug/family-fcntl-01.md
+
+diff --git a/kernel/src/fs/file/file_table.rs b/kernel/src/fs/file/file_table.rs
+index 00a97baf..eff53c1d 100644
+--- a/kernel/src/fs/file/file_table.rs
++++ b/kernel/src/fs/file/file_table.rs
+@@ -41,24 +41,51 @@ impl FileTable {
+         ceil_fd: FileDesc,
+         flags: FdFlags,
+     ) -> Result<FileDesc> {
++        self.dup_ceil_with_limit(fd, ceil_fd, usize::MAX, flags)
++    }
++
++    /// Duplicates `fd` onto the lowest-numbered available descriptor equal to
++    /// or greater than `ceil_fd` and strictly less than `max_fd_exclusive`.
++    pub fn dup_ceil_with_limit(
++        &mut self,
++        fd: FileDesc,
++        ceil_fd: FileDesc,
++        max_fd_exclusive: usize,
++        flags: FdFlags,
++    ) -> Result<FileDesc> {
++        if ceil_fd < 0 {
++            return_errno_with_message!(Errno::EINVAL, "the minimum fd must be non-negative");
++        }
++
+         let entry = self.duplicate_entry(fd, flags)?;
+ 
+         // Get the lowest-numbered available fd equal to or greater than `ceil_fd`.
+-        let get_min_free_fd = || -> usize {
++        let get_min_free_fd = || -> Option<usize> {
+             let ceil_fd = ceil_fd as usize;
++            if ceil_fd >= max_fd_exclusive {
++                return None;
++            }
++
+             if self.table.get(ceil_fd).is_none() {
+-                return ceil_fd;
++                return Some(ceil_fd);
+             }
+ 
+-            for idx in ceil_fd + 1..self.len() {
++            for idx in ceil_fd + 1..self.len().min(max_fd_exclusive) {
+                 if self.table.get(idx).is_none() {
+-                    return idx;
++                    return Some(idx);
+                 }
+             }
+-            self.len()
++
++            if self.len() < max_fd_exclusive {
++                return Some(self.len());
++            }
++
++            None
+         };
+ 
+-        let min_free_fd = get_min_free_fd();
++        let min_free_fd = get_min_free_fd().ok_or_else(|| {
++            Error::with_message(Errno::EMFILE, "no file descriptor available under the limit")
++        })?;
+         self.table.put_at(min_free_fd, entry);
+         Ok(min_free_fd as FileDesc)
+     }
+diff --git a/kernel/src/syscall/fcntl.rs b/kernel/src/syscall/fcntl.rs
+index fd4f0dcd..688397ac 100644
+--- a/kernel/src/syscall/fcntl.rs
++++ b/kernel/src/syscall/fcntl.rs
+@@ -13,7 +13,7 @@ use crate::{
+         vfs::range_lock::{FileRange, OFFSET_MAX, RangeLockItem, RangeLockType},
+     },
+     prelude::*,
+-    process::{Pid, process_table},
++    process::{Pid, ResourceType, process_table},
+ };
+ 
+ pub fn sys_fcntl(fd: FileDesc, cmd: i32, arg: u64, ctx: &Context) -> Result<SyscallReturn> {
+@@ -40,11 +40,24 @@ pub fn sys_fcntl(fd: FileDesc, cmd: i32, arg: u64, ctx: &Context) -> Result<Sysc
+ }
+ 
+ fn handle_dupfd(fd: FileDesc, arg: u64, flags: FdFlags, ctx: &Context) -> Result<SyscallReturn> {
++    let minimum_fd = i32::try_from(arg)
++        .map_err(|_| Error::with_message(Errno::EINVAL, "invalid minimum fd value"))?;
++    let max_fd_exclusive = ctx
++        .process
++        .resource_limits()
++        .get_rlimit(ResourceType::RLIMIT_NOFILE)
++        .get_cur()
++        .min(i32::MAX as u64 + 1) as usize;
++
++    if minimum_fd as usize >= max_fd_exclusive {
++        return_errno_with_message!(Errno::EINVAL, "minimum fd exceeds RLIMIT_NOFILE");
++    }
++
+     let file_table = ctx.thread_local.borrow_file_table();
+     let new_fd = file_table
+         .unwrap()
+         .write()
+-        .dup_ceil(fd, arg as FileDesc, flags)?;
++        .dup_ceil_with_limit(fd, minimum_fd as FileDesc, max_fd_exclusive, flags)?;
+     Ok(SyscallReturn::Return(new_fd as _))
+ }
+ 
+diff --git a/test/initramfs/src/syscall/ltp/debug/family-fcntl-01.md b/test/initramfs/src/syscall/ltp/debug/family-fcntl-01.md
+new file mode 100644
+index 00000000..1929f211
+--- /dev/null
++++ b/test/initramfs/src/syscall/ltp/debug/family-fcntl-01.md
+@@ -0,0 +1,76 @@
++# Fcntl Family Batch 01
++
++## Goal
++
++Re-enable a first `fcntl` batch that should be unlocked by a Linux-compatible
++`F_DUPFD` fix instead of filesystem-specific work.
++
++Enabled cases in this batch:
++
++- `fcntl12`
++- `fcntl12_64`
++
++## Problem Cause
++
++This batch checks one narrow semantic: `fcntl(fd, F_DUPFD, minfd)` must honor
++`RLIMIT_NOFILE`.
++
++Before this change, Asterinas duplicated file descriptors with an unbounded
++`dup_ceil()` search. That meant:
++
++- `minfd >= RLIMIT_NOFILE` was not rejected consistently at the syscall layer.
++- `minfd < RLIMIT_NOFILE` but no free descriptor existed below the limit did
++  not return Linux-compatible `EMFILE`.
++
++As a result, `fcntl12` and `fcntl12_64` could not observe the expected
++resource-limit failure path.
++
++## Solution
++
++- Added `RLIMIT_NOFILE` handling to `sys_fcntl(..., F_DUPFD, ...)`.
++- Introduced `FileTable::dup_ceil_with_limit()` so descriptor allocation can be
++  capped at an exclusive upper bound.
++- Returned `EMFILE` when no descriptor is available in `[minfd, RLIMIT_NOFILE)`.
++- Kept `EINVAL` for invalid `minfd` values that are negative, overflow `i32`, or
++  start at/above `RLIMIT_NOFILE`.
++
++Files changed for this batch:
++
++- `kernel/src/syscall/fcntl.rs`
++- `kernel/src/fs/file/file_table.rs`
++
++## Validation Results
++
++This batch passed on all three validation targets:
++
++- `/tmp`
++- `/ext2`
++- `/exfat`
++
++Representative commands:
++
++```bash
++make run_kernel AUTO_TEST=syscall SYSCALL_TEST_SUITE=ltp \
++  LTP_CASES=fcntl12,fcntl12_64
++
++make run_kernel AUTO_TEST=syscall SYSCALL_TEST_SUITE=ltp \
++  SYSCALL_TEST_WORKDIR=/ext2 \
++  LTP_CASES=fcntl12,fcntl12_64
++
++make run_kernel AUTO_TEST=syscall SYSCALL_TEST_SUITE=ltp \
++  SYSCALL_TEST_WORKDIR=/exfat \
++  LTP_CASES=fcntl12,fcntl12_64
++```
++
++Observed LTP result on each target:
++
++- `fcntl12`: `TPASS` with `EMFILE (24)`
++- `fcntl12_64`: `TPASS` with `EMFILE (24)`
++
++## Follow-up
++
++- `fcntl07`, `fcntl11`, and `fcntl15` remain disabled and should be debugged as
++  separate `fcntl` sub-batches.
++- There is still a possible errno-priority edge case when both `fd` and `minfd`
++  are invalid; that does not affect `fcntl12*`, but it should be kept in mind
++  for later `fcntl` coverage.
+diff --git a/test/initramfs/src/syscall/ltp/testcases/all.txt b/test/initramfs/src/syscall/ltp/testcases/all.txt
+index b632af7d..5207e714 100644
+--- a/test/initramfs/src/syscall/ltp/testcases/all.txt
++++ b/test/initramfs/src/syscall/ltp/testcases/all.txt
+@@ -315,8 +315,8 @@ fcntl10
+ fcntl10_64
+ # fcntl11
+ # fcntl11_64
+-# fcntl12
+-# fcntl12_64
++fcntl12
++fcntl12_64
+ fcntl13
+ fcntl13_64
+ fcntl14
+-- 
+2.43.0
+

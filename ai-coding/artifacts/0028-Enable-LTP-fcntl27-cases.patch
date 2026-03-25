@@ -1,0 +1,83 @@
+From 11856e5269ef77893f9064a089c62cd7bfa9d075 Mon Sep 17 00:00:00 2001
+From: Qingsong Chen <changxian.cqs@antgroup.com>
+Date: Tue, 24 Mar 2026 14:22:39 +0000
+Subject: [PATCH 28/97] Enable LTP fcntl27 cases
+
+---
+ .../src/syscall/ltp/debug/family-fcntl-12.md  | 48 +++++++++++++++++++
+ .../src/syscall/ltp/testcases/all.txt         |  4 +-
+ 2 files changed, 50 insertions(+), 2 deletions(-)
+ create mode 100644 test/initramfs/src/syscall/ltp/debug/family-fcntl-12.md
+
+diff --git a/test/initramfs/src/syscall/ltp/debug/family-fcntl-12.md b/test/initramfs/src/syscall/ltp/debug/family-fcntl-12.md
+new file mode 100644
+index 00000000..375ff5f3
+--- /dev/null
++++ b/test/initramfs/src/syscall/ltp/debug/family-fcntl-12.md
+@@ -0,0 +1,48 @@
++# Fcntl Family Batch 12
++
++## Goal
++
++Re-enable `fcntl27` and `fcntl27_64` in Phase 3 after confirming the current
++lease behavior on `/tmp`, `/ext2`, and `/exfat`.
++
++## Problem Cause
++
++These cases remained disabled only because the earlier file-lease support work
++had not yet been revalidated against them. `fcntl27*` expects
++`F_SETLEASE(F_RDLCK)` to fail with `EAGAIN` on `O_RDWR` and `O_WRONLY`
++descriptors.
++
++The current lease validation added for the preceding fcntl batches already
++matches that expectation, so there was no new kernel bug in this batch.
++
++## Solution
++
++- Re-validate `fcntl27` and `fcntl27_64` on `/tmp`, `/ext2`, and `/exfat`.
++- Confirm both cases return the expected `EAGAIN/EWOULDBLOCK` result on all
++  three workdirs.
++- Re-enable `fcntl27` and `fcntl27_64` in `testcases/all.txt`.
++
++No additional kernel code change was required in this batch.
++
++## Validation Results
++
++Representative commands:
++
++```bash
++make run_kernel AUTO_TEST=syscall SYSCALL_TEST_SUITE=ltp \
++  LTP_CASES=fcntl27,fcntl27_64
++
++make run_kernel AUTO_TEST=syscall SYSCALL_TEST_SUITE=ltp \
++  SYSCALL_TEST_WORKDIR=/ext2 \
++  LTP_CASES=fcntl27,fcntl27_64
++
++make run_kernel AUTO_TEST=syscall SYSCALL_TEST_SUITE=ltp \
++  SYSCALL_TEST_WORKDIR=/exfat \
++  LTP_CASES=fcntl27,fcntl27_64
++```
++
++Observed results:
++
++- `/tmp`: both cases `PASS`.
++- `/ext2`: both cases `PASS`.
++- `/exfat`: both cases `PASS`.
+diff --git a/test/initramfs/src/syscall/ltp/testcases/all.txt b/test/initramfs/src/syscall/ltp/testcases/all.txt
+index a69fa7c5..d58e4ff1 100644
+--- a/test/initramfs/src/syscall/ltp/testcases/all.txt
++++ b/test/initramfs/src/syscall/ltp/testcases/all.txt
+@@ -345,8 +345,8 @@ fcntl25
+ fcntl25_64
+ fcntl26
+ fcntl26_64
+-# fcntl27
+-# fcntl27_64
++fcntl27
++fcntl27_64
+ fcntl29
+ fcntl29_64
+ # fcntl30
+-- 
+2.43.0
+

@@ -1,0 +1,84 @@
+From 3416b3a5043bda02dfc3fd605ed50d592521b903 Mon Sep 17 00:00:00 2001
+From: Qingsong Chen <changxian.cqs@antgroup.com>
+Date: Tue, 24 Mar 2026 17:32:23 +0000
+Subject: [PATCH 43/97] Enable LTP rename01 case
+
+---
+ .../src/syscall/ltp/debug/family-rename-01.md | 51 +++++++++++++++++++
+ .../src/syscall/ltp/testcases/all.txt         |  2 +-
+ 2 files changed, 52 insertions(+), 1 deletion(-)
+ create mode 100644 test/initramfs/src/syscall/ltp/debug/family-rename-01.md
+
+diff --git a/test/initramfs/src/syscall/ltp/debug/family-rename-01.md b/test/initramfs/src/syscall/ltp/debug/family-rename-01.md
+new file mode 100644
+index 00000000..9f97025e
+--- /dev/null
++++ b/test/initramfs/src/syscall/ltp/debug/family-rename-01.md
+@@ -0,0 +1,51 @@
++# `rename01`
++
++## Goal
++
++Re-enable `rename01` in Phase 3 and verify that it passes on `/tmp`, `/ext2`,
++and `/exfat`.
++
++## Root Cause
++
++There was no kernel bug here. The testcase had simply remained commented out in
++`testcases/all.txt` even though the current VFS rename path already handled the
++covered semantics:
++
++- renaming a file onto a non-existent path
++- renaming a directory onto a non-existent path
++- preserving inode identity across the rename
++- making the old pathname disappear with `ENOENT`
++
++## Solution
++
++- Re-ran `rename01` on all three validation targets.
++- Confirmed that the existing implementation already matches Linux for this
++  coverage slice.
++- Re-enabled `rename01` in `testcases/all.txt`.
++
++## Validation
++
++```bash
++make run_kernel AUTO_TEST=syscall SYSCALL_TEST_SUITE=ltp \
++  LTP_CASES=rename01
++
++make run_kernel AUTO_TEST=syscall SYSCALL_TEST_SUITE=ltp \
++  SYSCALL_TEST_WORKDIR=/ext2 \
++  LTP_CASES=rename01
++
++make run_kernel AUTO_TEST=syscall SYSCALL_TEST_SUITE=ltp \
++  SYSCALL_TEST_WORKDIR=/exfat \
++  LTP_CASES=rename01
++```
++
++Observed results:
++
++- `/tmp`: `PASS`
++- `/ext2`: `PASS`
++- `/exfat`: `PASS`
++
++## Impact / Residual Risk
++
++- This increases active rename-family coverage without changing kernel code.
++- The remaining rename backlog now shifts to negative and replacement cases
++  (`rename03` through `rename06`), which probe stricter errno semantics.
+diff --git a/test/initramfs/src/syscall/ltp/testcases/all.txt b/test/initramfs/src/syscall/ltp/testcases/all.txt
+index 695097f6..b9277d1e 100644
+--- a/test/initramfs/src/syscall/ltp/testcases/all.txt
++++ b/test/initramfs/src/syscall/ltp/testcases/all.txt
+@@ -1227,7 +1227,7 @@ readv01
+ removexattr01
+ # removexattr02
+ 
+-# rename01
++rename01
+ # rename03
+ # rename04
+ # rename05
+-- 
+2.43.0
+

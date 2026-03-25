@@ -1,0 +1,88 @@
+From ed1d2278e7a925b37aeddeb9dd24842c845da631 Mon Sep 17 00:00:00 2001
+From: Qingsong Chen <changxian.cqs@antgroup.com>
+Date: Tue, 24 Mar 2026 17:37:18 +0000
+Subject: [PATCH 45/97] Enable LTP rename04 case
+
+---
+ .../src/syscall/ltp/debug/family-rename-04.md | 55 +++++++++++++++++++
+ .../src/syscall/ltp/testcases/all.txt         |  2 +-
+ 2 files changed, 56 insertions(+), 1 deletion(-)
+ create mode 100644 test/initramfs/src/syscall/ltp/debug/family-rename-04.md
+
+diff --git a/test/initramfs/src/syscall/ltp/debug/family-rename-04.md b/test/initramfs/src/syscall/ltp/debug/family-rename-04.md
+new file mode 100644
+index 00000000..495d5101
+--- /dev/null
++++ b/test/initramfs/src/syscall/ltp/debug/family-rename-04.md
+@@ -0,0 +1,55 @@
++# `rename04`
++
++## Goal
++
++Re-enable `rename04` in Phase 3 and verify that it passes on `/tmp`, `/ext2`,
++and `/exfat`.
++
++## Root Cause
++
++There was no remaining kernel defect in this case. `rename04` checks the
++negative path where a directory is renamed onto a non-empty directory and Linux
++must reject the operation with `ENOTEMPTY` or `EEXIST`.
++
++The current VFS path already returns `ENOTEMPTY`, which satisfies LTP across
++the tested targets. The testcase had simply remained disabled in
++`testcases/all.txt`.
++
++## Solution
++
++- Re-ran `rename04` on `/tmp`, `/ext2`, and `/exfat`.
++- Confirmed that the existing implementation already matches the expected
++  Linux-compatible errno behavior.
++- Re-enabled `rename04` in `testcases/all.txt`.
++
++## Validation
++
++```bash
++make run_kernel AUTO_TEST=syscall SYSCALL_TEST_SUITE=ltp \
++  LTP_CASES=rename04
++
++make run_kernel AUTO_TEST=syscall SYSCALL_TEST_SUITE=ltp \
++  SYSCALL_TEST_WORKDIR=/ext2 \
++  LTP_CASES=rename04
++
++make run_kernel AUTO_TEST=syscall SYSCALL_TEST_SUITE=ltp \
++  SYSCALL_TEST_WORKDIR=/exfat \
++  LTP_CASES=rename04
++```
++
++Observed results:
++
++- `/tmp`: `PASS`
++- `/ext2`: `PASS`
++- `/exfat`: `PASS`
++
++Observed errno on all three runs:
++
++- `rename()` rejected the operation with `ENOTEMPTY`
++
++## Impact / Residual Risk
++
++- This extends active rename-family negative-path coverage without a kernel
++  code change.
++- Priority A rename work now narrows to `rename05` and `rename06`, which check
++  cross-type and self-subdirectory rejection paths.
+diff --git a/test/initramfs/src/syscall/ltp/testcases/all.txt b/test/initramfs/src/syscall/ltp/testcases/all.txt
+index e27fff1c..018a4bb1 100644
+--- a/test/initramfs/src/syscall/ltp/testcases/all.txt
++++ b/test/initramfs/src/syscall/ltp/testcases/all.txt
+@@ -1229,7 +1229,7 @@ removexattr01
+ 
+ rename01
+ rename03
+-# rename04
++rename04
+ # rename05
+ # rename06
+ # rename07
+-- 
+2.43.0
+

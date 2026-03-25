@@ -1,0 +1,77 @@
+From c72c0a99bf8d20fe9f9dde07f3076ab1128cc16e Mon Sep 17 00:00:00 2001
+From: Qingsong Chen <changxian.cqs@antgroup.com>
+Date: Wed, 25 Mar 2026 06:33:15 +0000
+Subject: [PATCH 82/97] Enable LTP rename10 case
+
+---
+ kernel/src/fs/vfs/path/dentry.rs              |  5 ++++
+ .../src/syscall/ltp/debug/family-rename-10.md | 27 +++++++++++++++++++
+ .../src/syscall/ltp/testcases/all.txt         |  2 +-
+ 3 files changed, 33 insertions(+), 1 deletion(-)
+ create mode 100644 test/initramfs/src/syscall/ltp/debug/family-rename-10.md
+
+diff --git a/kernel/src/fs/vfs/path/dentry.rs b/kernel/src/fs/vfs/path/dentry.rs
+index 5916d53d..b74cc3dc 100644
+--- a/kernel/src/fs/vfs/path/dentry.rs
++++ b/kernel/src/fs/vfs/path/dentry.rs
+@@ -466,6 +466,11 @@ impl DirDentry<'_> {
+ 
+         let old_dir_inode = old_dir.inode();
+         let new_dir_inode = new_dir.inode();
++        if old_name.len() > old_dir_inode.fs().sb().namelen
++            || new_name.len() > new_dir_inode.fs().sb().namelen
++        {
++            return_errno_with_message!(Errno::ENAMETOOLONG, "old_name or new_name is too long");
++        }
+ 
+         // The two are the same dentry, we just modify the name
+         if Arc::ptr_eq(old_dir_arc, new_dir_arc) {
+diff --git a/test/initramfs/src/syscall/ltp/debug/family-rename-10.md b/test/initramfs/src/syscall/ltp/debug/family-rename-10.md
+new file mode 100644
+index 00000000..f428b8ac
+--- /dev/null
++++ b/test/initramfs/src/syscall/ltp/debug/family-rename-10.md
+@@ -0,0 +1,27 @@
++# rename10
++
++## Goal
++
++Enable `rename10` on `/tmp`.
++
++## Failure
++
++`rename10` expects `rename()` to reject both an overlong destination path and an overlong
++destination basename with `ENAMETOOLONG`. On `/tmp`, the long path case already failed correctly,
++but renaming to a single overlong filename incorrectly succeeded.
++
++## Root Cause
++
++The VFS rename path only validated `"."` and `".."` for the source and destination names.
++Component length checks were present in lookup and create paths, but `DirDentry::rename()` did not
++enforce the filesystem `namelen` limit before dispatching to the inode `rename()` operation. On
++`ramfs`, that let an overlong destination basename bypass the usual filename-length checks.
++
++## Fix
++
++- Added `namelen` validation to `DirDentry::rename()` for both the source and destination names.
++- Enabled `rename10` in `testcases/all.txt`.
++
++## Validation
++
++- `make run_kernel AUTO_TEST=syscall SYSCALL_TEST_SUITE=ltp LTP_CASES=rename10`
+diff --git a/test/initramfs/src/syscall/ltp/testcases/all.txt b/test/initramfs/src/syscall/ltp/testcases/all.txt
+index efa5ab10..37a58fc4 100644
+--- a/test/initramfs/src/syscall/ltp/testcases/all.txt
++++ b/test/initramfs/src/syscall/ltp/testcases/all.txt
+@@ -1235,7 +1235,7 @@ rename06
+ rename07
+ rename08
+ rename09
+-# rename10
++rename10
+ # rename11
+ # rename12
+ # rename13
+-- 
+2.43.0
+

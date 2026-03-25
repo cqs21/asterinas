@@ -1,0 +1,195 @@
+From 3a77418428b4d14ef5c6baea62b6d951ca42bea0 Mon Sep 17 00:00:00 2001
+From: Qingsong Chen <changxian.cqs@antgroup.com>
+Date: Wed, 25 Mar 2026 05:07:30 +0000
+Subject: [PATCH 72/97] Enable LTP open14 case
+
+---
+ .../src/fs/file/file_attr/creation_flags.rs   |  3 +-
+ kernel/src/fs/fs_impls/ramfs/fs.rs            | 10 ++++++
+ kernel/src/fs/vfs/fs_apis/inode.rs            |  8 +++++
+ kernel/src/fs/vfs/path/mod.rs                 | 35 ++++++++++++++++++-
+ .../src/syscall/ltp/debug/family-open-14.md   | 31 ++++++++++++++++
+ .../src/syscall/ltp/testcases/all.txt         |  2 +-
+ 6 files changed, 86 insertions(+), 3 deletions(-)
+ create mode 100644 test/initramfs/src/syscall/ltp/debug/family-open-14.md
+
+diff --git a/kernel/src/fs/file/file_attr/creation_flags.rs b/kernel/src/fs/file/file_attr/creation_flags.rs
+index a181a9cd..9c6e2dcb 100644
+--- a/kernel/src/fs/file/file_attr/creation_flags.rs
++++ b/kernel/src/fs/file/file_attr/creation_flags.rs
+@@ -3,7 +3,6 @@
+ use bitflags::bitflags;
+ 
+ bitflags! {
+-    // TODO: Add O_TMPFILE
+     pub struct CreationFlags: u32 {
+         /// create file if it does not exist
+         const O_CREAT = 1 << 6;
+@@ -19,5 +18,7 @@ bitflags! {
+         const O_NOFOLLOW = 1 << 17;
+         /// close on exec
+         const O_CLOEXEC = 1 << 19;
++        /// atomically create an unnamed temporary regular file
++        const O_TMPFILE = 0o20000000 | Self::O_DIRECTORY.bits();
+     }
+ }
+diff --git a/kernel/src/fs/fs_impls/ramfs/fs.rs b/kernel/src/fs/fs_impls/ramfs/fs.rs
+index ea319a11..4d81a0c4 100644
+--- a/kernel/src/fs/fs_impls/ramfs/fs.rs
++++ b/kernel/src/fs/fs_impls/ramfs/fs.rs
+@@ -886,6 +886,16 @@ impl Inode for RamInode {
+         Ok(new_inode)
+     }
+ 
++    fn create_tmpfile(&self, mode: InodeMode) -> Result<Arc<dyn Inode>> {
++        if self.typ != InodeType::Dir {
++            return_errno_with_message!(Errno::ENOTDIR, "self is not dir");
++        }
++
++        let fs = self.fs.upgrade().unwrap();
++        let (mode, uid, gid) = self.creation_attributes(InodeType::File, mode);
++        Ok(RamInode::new_file(&fs, mode, uid, gid))
++    }
++
+     fn readdir_at(&self, offset: usize, visitor: &mut dyn DirentVisitor) -> Result<usize> {
+         if self.typ != InodeType::Dir {
+             return_errno_with_message!(Errno::ENOTDIR, "self is not dir");
+diff --git a/kernel/src/fs/vfs/fs_apis/inode.rs b/kernel/src/fs/vfs/fs_apis/inode.rs
+index f58db73d..346b1473 100644
+--- a/kernel/src/fs/vfs/fs_apis/inode.rs
++++ b/kernel/src/fs/vfs/fs_apis/inode.rs
+@@ -298,6 +298,14 @@ pub trait Inode: Any + InodeIo + Send + Sync {
+         Err(Error::new(Errno::ENOTDIR))
+     }
+ 
++    fn create_tmpfile(&self, mode: InodeMode) -> Result<Arc<dyn Inode>> {
++        let _ = mode;
++        Err(Error::with_message(
++            Errno::EISDIR,
++            "O_TMPFILE is not supported",
++        ))
++    }
++
+     fn mknod(&self, name: &str, mode: InodeMode, type_: MknodType) -> Result<Arc<dyn Inode>> {
+         Err(Error::new(Errno::ENOTDIR))
+     }
+diff --git a/kernel/src/fs/vfs/path/mod.rs b/kernel/src/fs/vfs/path/mod.rs
+index c69e0a7b..292d46cf 100644
+--- a/kernel/src/fs/vfs/path/mod.rs
++++ b/kernel/src/fs/vfs/path/mod.rs
+@@ -2,6 +2,7 @@
+ 
+ //! Form file paths within and across FSes with dentries and mount points.
+ 
++use alloc::format;
+ use core::time::Duration;
+ 
+ pub(in crate::fs) use dentry::Dentry;
+@@ -15,7 +16,8 @@ pub use resolver::{AT_FDCWD, AbsPathResult, FsPath, LookupResult, PathResolver,
+ use crate::{
+     fs::{
+         file::{
+-            CreationFlags, InodeHandle, InodeMode, InodeType, OpenArgs, Permission, StatusFlags,
++            AccessMode, CreationFlags, InodeHandle, InodeMode, InodeType, OpenArgs, Permission,
++            StatusFlags,
+         },
+         vfs::{
+             file_system::{FileSystem, FsFlags},
+@@ -111,6 +113,10 @@ impl Path {
+         let creation_flags = &open_args.creation_flags;
+         let status_flags = &open_args.status_flags;
+ 
++        if creation_flags.contains(CreationFlags::O_TMPFILE) {
++            return self.open_tmpfile(open_args);
++        }
++
+         if creation_flags.contains(CreationFlags::O_CREAT)
+             && creation_flags.contains(CreationFlags::O_EXCL)
+         {
+@@ -144,6 +150,33 @@ impl Path {
+         InodeHandle::new(self.clone(), open_args.access_mode, *status_flags)
+     }
+ 
++    fn open_tmpfile(&self, open_args: OpenArgs) -> Result<InodeHandle> {
++        if self.type_() != InodeType::Dir {
++            return_errno_with_message!(Errno::ENOTDIR, "O_TMPFILE requires a directory path");
++        }
++        if matches!(open_args.access_mode, AccessMode::O_RDONLY) {
++            return_errno_with_message!(
++                Errno::EINVAL,
++                "O_TMPFILE must be used with O_WRONLY or O_RDWR"
++            );
++        }
++        if open_args.creation_flags.contains(CreationFlags::O_CREAT) {
++            return_errno_with_message!(Errno::EINVAL, "O_TMPFILE and O_CREAT cannot be combined");
++        }
++        if open_args.status_flags.contains(StatusFlags::O_PATH) {
++            return_errno_with_message!(Errno::EINVAL, "O_TMPFILE cannot be used with O_PATH");
++        }
++
++        self.inode().check_permission(Permission::MAY_WRITE)?;
++
++        let inode = self.inode().create_tmpfile(open_args.inode_mode)?;
++        let temp_path = Self::new_pseudo(self.mount.clone(), inode.clone(), |inode| {
++            format!("#{} (deleted)", inode.ino())
++        });
++
++        InodeHandle::new_unchecked_access(temp_path, open_args.access_mode, open_args.status_flags)
++    }
++
+     fn check_noatime_permission(&self, status_flags: StatusFlags) -> Result<()> {
+         if !status_flags.contains(StatusFlags::O_NOATIME)
+             || status_flags.contains(StatusFlags::O_PATH)
+diff --git a/test/initramfs/src/syscall/ltp/debug/family-open-14.md b/test/initramfs/src/syscall/ltp/debug/family-open-14.md
+new file mode 100644
+index 00000000..e76acba4
+--- /dev/null
++++ b/test/initramfs/src/syscall/ltp/debug/family-open-14.md
+@@ -0,0 +1,31 @@
++# open14
++
++## Goal
++
++Enable `open14` and make `O_TMPFILE` work on `/tmp`.
++
++## Failure
++
++On `/tmp`, `open14` reported `TCONF: O_TMPFILE not supported`.
++
++## Root Cause
++
++The kernel did not recognize `O_TMPFILE`. Because the Linux `O_TMPFILE` bit pattern includes
++`O_DIRECTORY`, the flag combination degraded into an ordinary writable open on the target
++directory and failed with `EISDIR`, which LTP treated as "feature not supported".
++
++There was also no way to represent an unnamed regular file that stays invisible in the directory
++but can later be linked into the filesystem through `/proc/self/fd/<n>`.
++
++## Fix
++
++- Add `CreationFlags::O_TMPFILE`.
++- Teach `Path::open()` to handle `O_TMPFILE` before normal directory-open validation.
++- Add a VFS `create_tmpfile()` hook and implement it for `ramfs/tmpfs`.
++- Represent unnamed tmpfiles as pseudo paths backed by detached inodes so:
++  - the containing directory stays empty until `linkat()`
++  - `/proc/self/fd/<n>` can still resolve back to the live inode and link it later
++
++## Validation
++
++- `make run_kernel AUTO_TEST=syscall SYSCALL_TEST_SUITE=ltp LTP_CASES=open14`
+diff --git a/test/initramfs/src/syscall/ltp/testcases/all.txt b/test/initramfs/src/syscall/ltp/testcases/all.txt
+index 760e962c..11664b7a 100644
+--- a/test/initramfs/src/syscall/ltp/testcases/all.txt
++++ b/test/initramfs/src/syscall/ltp/testcases/all.txt
+@@ -995,7 +995,7 @@ open10
+ open11
+ open12
+ open13
+-# open14
++open14
+ open15
+ 
+ openat01
+-- 
+2.43.0
+

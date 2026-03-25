@@ -1,0 +1,185 @@
+From a4afaedaee3c627225c0cf1f2d6147eb97303822 Mon Sep 17 00:00:00 2001
+From: Qingsong Chen <changxian.cqs@antgroup.com>
+Date: Tue, 24 Mar 2026 07:24:29 +0000
+Subject: [PATCH 09/97] Enable first LTP epoll family batch
+
+---
+ kernel/src/events/epoll/file.rs               |  7 ++
+ kernel/src/fs/file/file_handle.rs             |  9 +++
+ kernel/src/fs/file/inode_handle.rs            |  4 +
+ kernel/src/syscall/epoll.rs                   |  4 +
+ .../src/syscall/ltp/debug/family-epoll-01.md  | 80 +++++++++++++++++++
+ .../src/syscall/ltp/testcases/all.txt         |  2 +-
+ 6 files changed, 105 insertions(+), 1 deletion(-)
+ create mode 100644 test/initramfs/src/syscall/ltp/debug/family-epoll-01.md
+
+diff --git a/kernel/src/events/epoll/file.rs b/kernel/src/events/epoll/file.rs
+index e4ef7e03..1aef30af 100644
+--- a/kernel/src/events/epoll/file.rs
++++ b/kernel/src/events/epoll/file.rs
+@@ -96,6 +96,13 @@ impl EpollFile {
+     ) -> Result<()> {
+         self.warn_unsupported_flags(&ep_flags);
+ 
++        if !file.supports_epoll() {
++            return_errno_with_message!(
++                Errno::EPERM,
++                "the target file descriptor does not support epoll"
++            );
++        }
++
+         // Add the new entry to the interest list and start monitoring its events
+         let ready_entry = {
+             let mut interest = self.interest.lock();
+diff --git a/kernel/src/fs/file/file_handle.rs b/kernel/src/fs/file/file_handle.rs
+index 6ecf35ae..b744f4d2 100644
+--- a/kernel/src/fs/file/file_handle.rs
++++ b/kernel/src/fs/file/file_handle.rs
+@@ -20,6 +20,15 @@ use crate::{
+ 
+ /// The basic operations defined on a file
+ pub trait FileLike: Pollable + Send + Sync + Any {
++    /// Returns whether this file descriptor can be monitored by `epoll`.
++    ///
++    /// Linux rejects `epoll_ctl(EPOLL_CTL_ADD)` with `EPERM` for some file
++    /// types such as regular files, even though other polling APIs may treat
++    /// them as always ready.
++    fn supports_epoll(&self) -> bool {
++        true
++    }
++
+     fn read(&self, writer: &mut VmWriter) -> Result<usize> {
+         return_errno_with_message!(Errno::EBADF, "the file is not valid for reading");
+     }
+diff --git a/kernel/src/fs/file/inode_handle.rs b/kernel/src/fs/file/inode_handle.rs
+index 658266c1..c2d8d477 100644
+--- a/kernel/src/fs/file/inode_handle.rs
++++ b/kernel/src/fs/file/inode_handle.rs
+@@ -248,6 +248,10 @@ impl Pollable for InodeHandle {
+ }
+ 
+ impl FileLike for InodeHandle {
++    fn supports_epoll(&self) -> bool {
++        self.file_io.is_some()
++    }
++
+     fn read(&self, writer: &mut VmWriter) -> Result<usize> {
+         if !self.rights.contains(Rights::READ) {
+             return_errno_with_message!(Errno::EBADF, "the file is not opened readable");
+diff --git a/kernel/src/syscall/epoll.rs b/kernel/src/syscall/epoll.rs
+index dc565ba0..fb093206 100644
+--- a/kernel/src/syscall/epoll.rs
++++ b/kernel/src/syscall/epoll.rs
+@@ -60,6 +60,10 @@ pub fn sys_epoll_ctl(
+         epfd, op, fd, event_addr
+     );
+ 
++    if fd == epfd {
++        return_errno_with_message!(Errno::EINVAL, "epoll fd cannot watch itself");
++    }
++
+     const EPOLL_CTL_ADD: i32 = 1;
+     const EPOLL_CTL_DEL: i32 = 2;
+     const EPOLL_CTL_MOD: i32 = 3;
+diff --git a/test/initramfs/src/syscall/ltp/debug/family-epoll-01.md b/test/initramfs/src/syscall/ltp/debug/family-epoll-01.md
+new file mode 100644
+index 00000000..f9b719d3
+--- /dev/null
++++ b/test/initramfs/src/syscall/ltp/debug/family-epoll-01.md
+@@ -0,0 +1,80 @@
++# Epoll Family Batch 01
++
++## Goal
++
++Re-enable a first `epoll` batch by fixing small control-path compatibility
++issues instead of mixing them with the separate timeout-accuracy work in
++`epoll_wait*`.
++
++Enabled cases in this batch:
++
++- `epoll_ctl02`
++
++## Problem Cause
++
++`epoll_ctl02` initially exposed two Linux compatibility gaps:
++
++1. Asterinas accepted regular inode-backed files in `EPOLL_CTL_ADD`, while
++   Linux requires `EPERM` when the target fd does not support epoll.
++2. Asterinas accepted `fd == epfd`, while Linux requires `EINVAL` when an
++   epoll instance tries to watch itself through the same file descriptor.
++
++These are both control-path validation issues, not filesystem differences.
++
++`epoll_wait02` was also probed during this family pass, but it failed for a
++different reason: timeout measurements were unstable on `/tmp`, with several
++early wakeups and one long sleep outlier. That case was intentionally left out
++of this batch.
++
++## Solution
++
++- Added `FileLike::supports_epoll()` so file types can explicitly opt out of
++  epoll monitoring.
++- Marked plain `InodeHandle`s without a specialized `file_io` backend as not
++  supporting epoll, which makes regular files return `EPERM` on
++  `EPOLL_CTL_ADD`.
++- Rejected `fd == epfd` in `sys_epoll_ctl()` with Linux-compatible `EINVAL`.
++
++Files changed for this batch:
++
++- `kernel/src/fs/file/file_handle.rs`
++- `kernel/src/fs/file/inode_handle.rs`
++- `kernel/src/events/epoll/file.rs`
++- `kernel/src/syscall/epoll.rs`
++
++## Validation Results
++
++This batch passed on all three validation targets:
++
++- `/tmp`
++- `/ext2`
++- `/exfat`
++
++Representative commands:
++
++```bash
++make run_kernel AUTO_TEST=syscall SYSCALL_TEST_SUITE=ltp \
++  LTP_CASES=epoll_ctl02
++
++make run_kernel AUTO_TEST=syscall SYSCALL_TEST_SUITE=ltp \
++  SYSCALL_TEST_WORKDIR=/ext2 \
++  LTP_CASES=epoll_ctl02
++
++make run_kernel AUTO_TEST=syscall SYSCALL_TEST_SUITE=ltp \
++  SYSCALL_TEST_WORKDIR=/exfat \
++  LTP_CASES=epoll_ctl02
++```
++
++Observed LTP result on each target:
++
++- `epoll_ctl(...) if fd does not support epoll : EPERM (1)` -> `TPASS`
++- `epoll_ctl(...) if fd is the same as epfd : EINVAL (22)` -> `TPASS`
++
++## Follow-up
++
++- `epoll_wait02` remains disabled. Its `/tmp` run failed due timeout-accuracy
++  behavior (`woken up early` at several short intervals and one `slept for too
++  long` outlier near the 1s case), so it should be debugged as a timer/wakeup
++  batch rather than mixed into `epoll_ctl` work.
++- `epoll_ctl04`, `epoll_wait05`, and `epoll_pwait03` should be triaged as
++  separate `epoll` sub-batches after the timeout path is understood.
+diff --git a/test/initramfs/src/syscall/ltp/testcases/all.txt b/test/initramfs/src/syscall/ltp/testcases/all.txt
+index 5207e714..9ab92edb 100644
+--- a/test/initramfs/src/syscall/ltp/testcases/all.txt
++++ b/test/initramfs/src/syscall/ltp/testcases/all.txt
+@@ -177,7 +177,7 @@ epoll_create1_01
+ epoll_create1_02
+ epoll01
+ epoll_ctl01
+-# epoll_ctl02
++epoll_ctl02
+ epoll_ctl03
+ # epoll_ctl04
+ # epoll_ctl05
+-- 
+2.43.0
+

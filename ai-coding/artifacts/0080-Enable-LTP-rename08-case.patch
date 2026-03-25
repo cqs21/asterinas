@@ -1,0 +1,57 @@
+From 0bb9409080f05a06c9a685f35b414e4b2503dbba Mon Sep 17 00:00:00 2001
+From: Qingsong Chen <changxian.cqs@antgroup.com>
+Date: Wed, 25 Mar 2026 06:20:47 +0000
+Subject: [PATCH 80/97] Enable LTP rename08 case
+
+---
+ .../src/syscall/ltp/debug/family-rename-08.md | 24 +++++++++++++++++++
+ .../src/syscall/ltp/testcases/all.txt         |  2 +-
+ 2 files changed, 25 insertions(+), 1 deletion(-)
+ create mode 100644 test/initramfs/src/syscall/ltp/debug/family-rename-08.md
+
+diff --git a/test/initramfs/src/syscall/ltp/debug/family-rename-08.md b/test/initramfs/src/syscall/ltp/debug/family-rename-08.md
+new file mode 100644
+index 00000000..c8c7fc8c
+--- /dev/null
++++ b/test/initramfs/src/syscall/ltp/debug/family-rename-08.md
+@@ -0,0 +1,24 @@
++# rename08
++
++## Goal
++
++Enable `rename08` on `/tmp`.
++
++## Failure
++
++No new kernel failure was reproduced on `/tmp`. The testcase already returned the expected
++`EFAULT` when either source or destination path pointer was invalid.
++
++## Root Cause
++
++The case had remained disabled in `all.txt`, but current syscall argument validation already
++matches the LTP expectation for invalid userspace path pointers.
++
++## Fix
++
++- Enabled `rename08` in `testcases/all.txt`.
++- No kernel code changes were required.
++
++## Validation
++
++- `make run_kernel AUTO_TEST=syscall SYSCALL_TEST_SUITE=ltp LTP_CASES=rename08`
+diff --git a/test/initramfs/src/syscall/ltp/testcases/all.txt b/test/initramfs/src/syscall/ltp/testcases/all.txt
+index 150e2760..34a8be83 100644
+--- a/test/initramfs/src/syscall/ltp/testcases/all.txt
++++ b/test/initramfs/src/syscall/ltp/testcases/all.txt
+@@ -1233,7 +1233,7 @@ rename04
+ rename05
+ rename06
+ rename07
+-# rename08
++rename08
+ # rename09
+ # rename10
+ # rename11
+-- 
+2.43.0
+

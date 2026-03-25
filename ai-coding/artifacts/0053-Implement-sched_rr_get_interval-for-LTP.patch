@@ -1,0 +1,258 @@
+From df9d472bb21cfb6ec995c4b5c758acdba6834533 Mon Sep 17 00:00:00 2001
+From: Qingsong Chen <changxian.cqs@antgroup.com>
+Date: Wed, 25 Mar 2026 02:19:11 +0000
+Subject: [PATCH 53/97] Implement sched_rr_get_interval for LTP
+
+---
+ kernel/src/sched/mod.rs                       |  3 +-
+ kernel/src/sched/sched_class/mod.rs           |  1 +
+ kernel/src/sched/sched_class/real_time.rs     | 15 ++++-
+ kernel/src/syscall/arch/generic.rs            |  2 +
+ kernel/src/syscall/arch/x86.rs                |  2 +
+ kernel/src/syscall/mod.rs                     |  1 +
+ kernel/src/syscall/sched_rr_get_interval.rs   | 33 +++++++++
+ .../debug/family-sched-rr-get-interval-01.md  | 67 +++++++++++++++++++
+ .../src/syscall/ltp/testcases/all.txt         |  2 +-
+ 9 files changed, 123 insertions(+), 3 deletions(-)
+ create mode 100644 kernel/src/syscall/sched_rr_get_interval.rs
+ create mode 100644 test/initramfs/src/syscall/ltp/debug/family-sched-rr-get-interval-01.md
+
+diff --git a/kernel/src/sched/mod.rs b/kernel/src/sched/mod.rs
+index 3b3b37cc..6779b356 100644
+--- a/kernel/src/sched/mod.rs
++++ b/kernel/src/sched/mod.rs
+@@ -7,7 +7,8 @@ mod stats;
+ pub use self::{
+     nice::{AtomicNice, Nice},
+     sched_class::{
+-        RealTimePolicy, RealTimePriority, SchedAttr, SchedPolicy, init, init_on_each_cpu,
++        MIN_PERIOD_NS, RealTimePolicy, RealTimePriority, SchedAttr, SchedPolicy, init,
++        init_on_each_cpu,
+     },
+     stats::{loadavg, nr_queued_and_running},
+ };
+diff --git a/kernel/src/sched/sched_class/mod.rs b/kernel/src/sched/sched_class/mod.rs
+index 5889dd96..7e9937a4 100644
+--- a/kernel/src/sched/sched_class/mod.rs
++++ b/kernel/src/sched/sched_class/mod.rs
+@@ -40,6 +40,7 @@ use self::policy::{SchedPolicyKind, SchedPolicyState};
+ pub use self::{
+     policy::SchedPolicy,
+     real_time::{RealTimePolicy, RealTimePriority},
++    time::MIN_PERIOD_NS,
+ };
+ 
+ type SchedEntity = (Arc<Task>, Arc<Thread>);
+diff --git a/kernel/src/sched/sched_class/real_time.rs b/kernel/src/sched/sched_class/real_time.rs
+index 694fdd3f..42c8be83 100644
+--- a/kernel/src/sched/sched_class/real_time.rs
++++ b/kernel/src/sched/sched_class/real_time.rs
+@@ -17,7 +17,10 @@ use ostd::{
+     },
+ };
+ 
+-use super::{CurrentRuntime, SchedAttr, SchedClassRq, time::base_slice_clocks};
++use super::{
++    CurrentRuntime, SchedAttr, SchedClassRq,
++    time::{BASE_SLICE_NS, base_slice_clocks},
++};
+ use crate::thread::AsThread;
+ 
+ pub type RealTimePriority = RangedU8<1, 99>;
+@@ -39,6 +42,16 @@ impl Default for RealTimePolicy {
+ }
+ 
+ impl RealTimePolicy {
++    pub fn rr_interval_ns(self) -> u64 {
++        match self {
++            RealTimePolicy::RoundRobin { base_slice_factor } => BASE_SLICE_NS.saturating_mul(
++                base_slice_factor
++                    .map_or(DEFAULT_BASE_SLICE_FACTOR, |factor| u64::from(factor.get())),
++            ),
++            RealTimePolicy::Fifo => 0,
++        }
++    }
++
+     fn to_time_slice(self) -> u64 {
+         match self {
+             RealTimePolicy::RoundRobin { base_slice_factor } => {
+diff --git a/kernel/src/syscall/arch/generic.rs b/kernel/src/syscall/arch/generic.rs
+index 3416d7cc..ff2e8258 100644
+--- a/kernel/src/syscall/arch/generic.rs
++++ b/kernel/src/syscall/arch/generic.rs
+@@ -114,6 +114,7 @@ macro_rules! import_generic_syscall_entries {
+             sched_getattr::sys_sched_getattr,
+             sched_getparam::sys_sched_getparam,
+             sched_getscheduler::sys_sched_getscheduler,
++            sched_rr_get_interval::sys_sched_rr_get_interval,
+             sched_setattr::sys_sched_setattr,
+             sched_setparam::sys_sched_setparam,
+             sched_setscheduler::sys_sched_setscheduler,
+@@ -306,6 +307,7 @@ macro_rules! define_syscalls_with_generic_syscall_table {
+             SYS_SCHED_YIELD = 124            => sys_sched_yield(args[..0]);
+             SYS_SCHED_GET_PRIORITY_MAX = 125 => sys_sched_get_priority_max(args[..1]);
+             SYS_SCHED_GET_PRIORITY_MIN = 126 => sys_sched_get_priority_min(args[..1]);
++            SYS_SCHED_RR_GET_INTERVAL = 127  => sys_sched_rr_get_interval(args[..2]);
+             SYS_KILL = 129                   => sys_kill(args[..2]);
+             SYS_TGKILL = 131                 => sys_tgkill(args[..3]);
+             SYS_SIGALTSTACK = 132            => sys_sigaltstack(args[..2], &user_ctx);
+diff --git a/kernel/src/syscall/arch/x86.rs b/kernel/src/syscall/arch/x86.rs
+index c3dee961..033a975a 100644
+--- a/kernel/src/syscall/arch/x86.rs
++++ b/kernel/src/syscall/arch/x86.rs
+@@ -117,6 +117,7 @@ use super::{
+     sched_getattr::sys_sched_getattr,
+     sched_getparam::sys_sched_getparam,
+     sched_getscheduler::sys_sched_getscheduler,
++    sched_rr_get_interval::sys_sched_rr_get_interval,
+     sched_setattr::sys_sched_setattr,
+     sched_setparam::sys_sched_setparam,
+     sched_setscheduler::sys_sched_setscheduler,
+@@ -313,6 +314,7 @@ impl_syscall_nums_and_dispatch_fn! {
+     SYS_SCHED_GETSCHEDULER = 145 => sys_sched_getscheduler(args[..1]);
+     SYS_SCHED_GET_PRIORITY_MAX = 146 => sys_sched_get_priority_max(args[..1]);
+     SYS_SCHED_GET_PRIORITY_MIN = 147 => sys_sched_get_priority_min(args[..1]);
++    SYS_SCHED_RR_GET_INTERVAL = 148 => sys_sched_rr_get_interval(args[..2]);
+     SYS_PIVOT_ROOT = 155       => sys_pivot_root(args[..2]);
+     SYS_PRCTL = 157            => sys_prctl(args[..5]);
+     SYS_ARCH_PRCTL = 158       => sys_arch_prctl(args[..2], &mut user_ctx);
+diff --git a/kernel/src/syscall/mod.rs b/kernel/src/syscall/mod.rs
+index a562a343..6d125601 100644
+--- a/kernel/src/syscall/mod.rs
++++ b/kernel/src/syscall/mod.rs
+@@ -129,6 +129,7 @@ mod sched_get_priority_min;
+ mod sched_getattr;
+ mod sched_getparam;
+ mod sched_getscheduler;
++mod sched_rr_get_interval;
+ mod sched_setattr;
+ mod sched_setparam;
+ mod sched_setscheduler;
+diff --git a/kernel/src/syscall/sched_rr_get_interval.rs b/kernel/src/syscall/sched_rr_get_interval.rs
+new file mode 100644
+index 00000000..ea58a4e5
+--- /dev/null
++++ b/kernel/src/syscall/sched_rr_get_interval.rs
+@@ -0,0 +1,33 @@
++// SPDX-License-Identifier: MPL-2.0
++
++use core::time::Duration;
++
++use ostd::mm::VmIo;
++
++use super::{SyscallReturn, sched_getattr::access_sched_attr_with};
++use crate::{
++    prelude::*,
++    sched::{MIN_PERIOD_NS, SchedPolicy},
++    thread::Tid,
++    time::timespec_t,
++};
++
++pub fn sys_sched_rr_get_interval(
++    tid: Tid,
++    interval_addr: Vaddr,
++    ctx: &Context,
++) -> Result<SyscallReturn> {
++    let interval_ns = access_sched_attr_with(tid, ctx, |attr| Ok(rr_interval_ns(attr.policy())))?;
++    let interval = timespec_t::from(Duration::from_nanos(interval_ns));
++    ctx.user_space().write_val(interval_addr, &interval)?;
++
++    Ok(SyscallReturn::Return(0))
++}
++
++fn rr_interval_ns(policy: SchedPolicy) -> u64 {
++    match policy {
++        SchedPolicy::RealTime { rt_policy, .. } => rt_policy.rr_interval_ns(),
++        SchedPolicy::Fair(_) | SchedPolicy::Idle => MIN_PERIOD_NS,
++        SchedPolicy::Stop => 0,
++    }
++}
+diff --git a/test/initramfs/src/syscall/ltp/debug/family-sched-rr-get-interval-01.md b/test/initramfs/src/syscall/ltp/debug/family-sched-rr-get-interval-01.md
+new file mode 100644
+index 00000000..f21514c2
+--- /dev/null
++++ b/test/initramfs/src/syscall/ltp/debug/family-sched-rr-get-interval-01.md
+@@ -0,0 +1,67 @@
++# `sched_rr_get_interval01`
++
++## Goal
++
++Re-enable `sched_rr_get_interval01` in Phase 3 and verify that it passes on
++`/tmp`, `/ext2`, and `/exfat`.
++
++## Root Cause
++
++This testcase was blocked by a real kernel compatibility gap. Asterinas did not
++expose `sched_rr_get_interval` in either syscall dispatch table, so both the
++libc path and the raw old-kernel-spec path observed the syscall as unsupported.
++
++Even after wiring the entry, LTP still needs a Linux-compatible time quantum to
++be written back to userspace. Without that, the testcase reports an invalid
++zero-length interval.
++
++## Solution
++
++- Added a new `sched_rr_get_interval` syscall handler.
++- Wired the handler into both the x86 and generic syscall dispatch tables.
++- Reused the existing scheduler policy state to return a Linux-compatible
++  quantum:
++  `15ms` for `SCHED_RR`, `0` for `SCHED_FIFO`, and a positive fair-scheduler
++  interval for non-RT policies.
++- Re-enabled `sched_rr_get_interval01` in `testcases/all.txt`.
++
++## Validation
++
++```bash
++SSH_PORT=46028 NGINX_PORT=52086 REDIS_PORT=50385 IPERF_PORT=49207 \
++LMBENCH_TCP_LAT_PORT=45294 LMBENCH_TCP_BW_PORT=45296 MEMCACHED_PORT=45271 \
++make run_kernel AUTO_TEST=syscall SYSCALL_TEST_SUITE=ltp \
++  LTP_CASES=sched_rr_get_interval01
++
++SSH_PORT=46031 NGINX_PORT=52089 REDIS_PORT=50388 IPERF_PORT=49210 \
++LMBENCH_TCP_LAT_PORT=45324 LMBENCH_TCP_BW_PORT=45326 MEMCACHED_PORT=45301 \
++make run_kernel AUTO_TEST=syscall SYSCALL_TEST_SUITE=ltp \
++  SYSCALL_TEST_WORKDIR=/ext2 \
++  LTP_CASES=sched_rr_get_interval01
++
++SSH_PORT=46032 NGINX_PORT=52090 REDIS_PORT=50389 IPERF_PORT=49211 \
++LMBENCH_TCP_LAT_PORT=45334 LMBENCH_TCP_BW_PORT=45336 MEMCACHED_PORT=45311 \
++make run_kernel AUTO_TEST=syscall SYSCALL_TEST_SUITE=ltp \
++  SYSCALL_TEST_WORKDIR=/exfat \
++  LTP_CASES=sched_rr_get_interval01
++```
++
++Observed results:
++
++- `/tmp`: `PASS`
++- `/ext2`: `PASS`
++- `/exfat`: `PASS`
++
++Observed behavior on all three runs:
++
++- the libc path succeeded
++- the old-kernel-spec raw syscall path succeeded
++- the returned time quantum was `0s 15000000ns`
++
++## Impact / Residual Risk
++
++- This closes the missing `sched_rr_get_interval` syscall gap and unlocks
++  scheduler quantum coverage for both libc and raw syscall entry points.
++- The same kernel change is expected to help the remaining disabled
++  `sched_rr_get_interval02` and `sched_rr_get_interval03` cases, which should
++  now be triaged next.
+diff --git a/test/initramfs/src/syscall/ltp/testcases/all.txt b/test/initramfs/src/syscall/ltp/testcases/all.txt
+index b3ec5cd3..9aacac81 100644
+--- a/test/initramfs/src/syscall/ltp/testcases/all.txt
++++ b/test/initramfs/src/syscall/ltp/testcases/all.txt
+@@ -1283,7 +1283,7 @@ sched_get_priority_min02
+ sched_getparam01
+ sched_getparam03
+ 
+-# sched_rr_get_interval01
++sched_rr_get_interval01
+ # sched_rr_get_interval02
+ # sched_rr_get_interval03
+ 
+-- 
+2.43.0
+

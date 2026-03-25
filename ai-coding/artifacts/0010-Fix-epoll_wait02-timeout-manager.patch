@@ -1,0 +1,111 @@
+From 73de2cef05947dbc22c9952ba1b334caea9eb2bc Mon Sep 17 00:00:00 2001
+From: Qingsong Chen <changxian.cqs@antgroup.com>
+Date: Tue, 24 Mar 2026 07:37:41 +0000
+Subject: [PATCH 10/97] Fix epoll_wait02 timeout manager
+
+---
+ kernel/src/time/wait.rs                       | 10 ++--
+ .../src/syscall/ltp/debug/family-epoll-02.md  | 47 +++++++++++++++++++
+ .../src/syscall/ltp/testcases/all.txt         |  2 +-
+ 3 files changed, 55 insertions(+), 4 deletions(-)
+ create mode 100644 test/initramfs/src/syscall/ltp/debug/family-epoll-02.md
+
+diff --git a/kernel/src/time/wait.rs b/kernel/src/time/wait.rs
+index d0821bf2..04c8e57d 100644
+--- a/kernel/src/time/wait.rs
++++ b/kernel/src/time/wait.rs
+@@ -4,7 +4,11 @@ use core::time::Duration;
+ 
+ use ostd::sync::{WaitQueue, Waiter};
+ 
+-use super::{Timer, TimerManager, clocks::JIFFIES_TIMER_MANAGER, timer::Timeout};
++use super::{
++    Timer, TimerManager,
++    clocks::MonotonicClock,
++    timer::Timeout,
++};
+ use crate::{prelude::*, time::timer::TimerGuard};
+ 
+ /// A trait that provide the timeout related function for [`Waiter`] and [`WaitQueue`]`.
+@@ -127,10 +131,10 @@ pub struct ManagedTimeout<'a> {
+ }
+ 
+ impl<'a> ManagedTimeout<'a> {
+-    /// Creates a new `ManagedTimeout` with the JIFFIES timer manager.
++    /// Creates a new `ManagedTimeout` with the monotonic timer manager.
+     pub fn new(timeout: Duration) -> Self {
+         let timeout = Timeout::After(timeout);
+-        let manager = JIFFIES_TIMER_MANAGER.get().unwrap();
++        let manager = MonotonicClock::timer_manager();
+         Self::new_with_manager(timeout, manager)
+     }
+ 
+diff --git a/test/initramfs/src/syscall/ltp/debug/family-epoll-02.md b/test/initramfs/src/syscall/ltp/debug/family-epoll-02.md
+new file mode 100644
+index 00000000..51cac740
+--- /dev/null
++++ b/test/initramfs/src/syscall/ltp/debug/family-epoll-02.md
+@@ -0,0 +1,47 @@
++# `epoll_wait02`
++
++## Goal
++
++Ensure `epoll_wait02` runs reliably under the LTP `/tmp`, `/ext2`, and `/exfat`
++workloads so we can leave the timer-heavy epoll wait test enabled in the
++default `testcases/all.txt`.
++
++## Root cause
++
++`epoll_wait02` exercises short relative timeouts. The kernel previously wired
++`WaitTimeout::ManagedTimeout::new()` to the coarse `JIFFIES_TIMER_MANAGER`. When
++a user request waited relative to that manager, the pending timer could easily
++be armed near the end of the current jiffy and fire as soon as the next tick
++began, which is ~1ms earlier than intended. That aligned poorly with LTP's
++microsecond thresholds and caused the testcase to report premature completions.
++
++## Solution
++
++- Default `ManagedTimeout::new()` to `MonotonicClock::timer_manager()`, the same
++  timer manager already powering `CLOCK_MONOTONIC`/`CLOCK_BOOTTIME` users.
++  This manager ticks in real nanoseconds and does not suffer the coarse tail
++  shot that the `JIFFIES_TIMER_MANAGER` exhibits.
++- Enable `epoll_wait02` in `testcases/all.txt` so it runs when the suite is
++  executed without an explicit case list.
++
++## Validation
++
++The testcase now passes across the three LTP workdirs:
++
++```bash
++make run_kernel AUTO_TEST=syscall SYSCALL_TEST_SUITE=ltp LTP_CASES=epoll_wait02
++make run_kernel AUTO_TEST=syscall SYSCALL_TEST_SUITE=ltp \
++  SYSCALL_TEST_WORKDIR=/ext2 LTP_CASES=epoll_wait02
++make run_kernel AUTO_TEST=syscall SYSCALL_TEST_SUITE=ltp \
++  SYSCALL_TEST_WORKDIR=/exfat LTP_CASES=epoll_wait02
++```
++
++## Impact / Residual risk
++
++- All other waits that relied on the jiffy manager now use the monotonic timer
++  manager too, so they also benefit from finer resolution. There should be no
++  correctness regression because monotonic is already the clock that exposes
++  the wall time that users expect; the change just removes the artificial
++  coarse granularity that was leftover from the legacy manager. Continue
++  watching other timeout-heavy tests for unexpected latency once more testcases
++  enable this path.
+diff --git a/test/initramfs/src/syscall/ltp/testcases/all.txt b/test/initramfs/src/syscall/ltp/testcases/all.txt
+index 9ab92edb..bd0a54cc 100644
+--- a/test/initramfs/src/syscall/ltp/testcases/all.txt
++++ b/test/initramfs/src/syscall/ltp/testcases/all.txt
+@@ -182,7 +182,7 @@ epoll_ctl03
+ # epoll_ctl04
+ # epoll_ctl05
+ epoll_wait01
+-# epoll_wait02
++epoll_wait02
+ epoll_wait03
+ epoll_wait04
+ # epoll_wait05
+-- 
+2.43.0
+

@@ -1,0 +1,241 @@
+From 10159a9dbb92c2a202943984f5320be41f9b23d0 Mon Sep 17 00:00:00 2001
+From: Qingsong Chen <changxian.cqs@antgroup.com>
+Date: Tue, 24 Mar 2026 16:54:59 +0000
+Subject: [PATCH 38/97] Enable LTP sched_setscheduler02 case
+
+---
+ kernel/src/syscall/sched_setscheduler.rs      | 120 +++++++++++++++++-
+ .../src/syscall/ltp/debug/family-sched-04.md  |  56 ++++++++
+ .../src/syscall/ltp/testcases/all.txt         |   2 +-
+ 3 files changed, 176 insertions(+), 2 deletions(-)
+ create mode 100644 test/initramfs/src/syscall/ltp/debug/family-sched-04.md
+
+diff --git a/kernel/src/syscall/sched_setscheduler.rs b/kernel/src/syscall/sched_setscheduler.rs
+index 73dd22c1..38176add 100644
+--- a/kernel/src/syscall/sched_setscheduler.rs
++++ b/kernel/src/syscall/sched_setscheduler.rs
+@@ -4,9 +4,27 @@ use ostd::mm::VmIo;
+ 
+ use super::{
+     SyscallReturn,
++    sched_get_priority_max::rt_to_static,
+     sched_getattr::{LinuxSchedAttr, access_sched_attr_with},
+ };
+-use crate::{prelude::*, thread::Tid};
++use crate::{
++    prelude::*,
++    process::{
++        ResourceType,
++        credentials::capabilities::CapSet,
++        posix_thread::{AsPosixThread, thread_table},
++    },
++    sched::SchedPolicy,
++    thread::Tid,
++};
++
++#[derive(Clone, Copy)]
++struct SchedTargetInfo {
++    old_policy: SchedPolicy,
++    rtprio_limit: u64,
++    same_owner: bool,
++    has_sys_nice: bool,
++}
+ 
+ pub fn sys_sched_setscheduler(
+     tid: Tid,
+@@ -19,6 +37,7 @@ pub fn sys_sched_setscheduler(
+     }
+ 
+     let prio = ctx.user_space().read_val(addr)?;
++    let target_info = get_sched_target_info(tid, ctx)?;
+ 
+     let attr = LinuxSchedAttr {
+         sched_policy: policy as u32,
+@@ -27,6 +46,7 @@ pub fn sys_sched_setscheduler(
+     };
+ 
+     let policy = attr.try_into()?;
++    check_sched_setscheduler_perm(target_info, policy)?;
+     access_sched_attr_with(tid, ctx, |attr| {
+         attr.set_policy(policy);
+         Ok(())
+@@ -34,3 +54,101 @@ pub fn sys_sched_setscheduler(
+ 
+     Ok(SyscallReturn::Return(0))
+ }
++
++fn get_sched_target_info(tid: Tid, ctx: &Context) -> Result<SchedTargetInfo> {
++    if tid.cast_signed() < 0 {
++        return_errno_with_message!(Errno::EINVAL, "all negative TIDs are not valid");
++    }
++
++    if tid == 0 {
++        return Ok(SchedTargetInfo {
++            old_policy: ctx.thread.sched_attr().policy(),
++            rtprio_limit: ctx
++                .process
++                .resource_limits()
++                .get_rlimit(ResourceType::RLIMIT_RTPRIO)
++                .get_cur(),
++            same_owner: true,
++            has_sys_nice: ctx
++                .process
++                .user_ns()
++                .lock()
++                .check_cap(CapSet::SYS_NICE, ctx.posix_thread)
++                .is_ok(),
++        });
++    }
++
++    let Some(thread) = thread_table::get_thread(tid) else {
++        return_errno_with_message!(Errno::ESRCH, "the target thread does not exist");
++    };
++    let target_posix_thread = thread.as_posix_thread().unwrap();
++    let target_process = target_posix_thread.process();
++
++    let current_cred = ctx.posix_thread.credentials();
++    let target_cred = target_posix_thread.credentials();
++
++    Ok(SchedTargetInfo {
++        old_policy: thread.sched_attr().policy(),
++        rtprio_limit: target_process
++            .resource_limits()
++            .get_rlimit(ResourceType::RLIMIT_RTPRIO)
++            .get_cur(),
++        same_owner: current_cred.euid() == target_cred.ruid()
++            || current_cred.euid() == target_cred.euid()
++            || current_cred.ruid() == target_cred.ruid()
++            || current_cred.ruid() == target_cred.euid(),
++        has_sys_nice: target_process
++            .user_ns()
++            .lock()
++            .check_cap(CapSet::SYS_NICE, ctx.posix_thread)
++            .is_ok(),
++    })
++}
++
++fn check_sched_setscheduler_perm(
++    target_info: SchedTargetInfo,
++    new_policy: SchedPolicy,
++) -> Result<()> {
++    if target_info.has_sys_nice {
++        return Ok(());
++    }
++
++    if !target_info.same_owner {
++        return_errno_with_message!(
++            Errno::EPERM,
++            "changing the scheduling policy of another user's thread is not allowed"
++        );
++    }
++
++    let SchedPolicy::RealTime {
++        rt_prio: new_rt_prio,
++        ..
++    } = new_policy
++    else {
++        return Ok(());
++    };
++
++    if !matches!(target_info.old_policy, SchedPolicy::RealTime { .. })
++        && target_info.rtprio_limit == 0
++    {
++        return_errno_with_message!(
++            Errno::EPERM,
++            "switching to a real-time scheduling policy requires CAP_SYS_NICE or RLIMIT_RTPRIO"
++        );
++    }
++
++    let old_user_priority = match target_info.old_policy {
++        SchedPolicy::RealTime { rt_prio, .. } => u64::from(rt_to_static(rt_prio)),
++        _ => 0,
++    };
++    let new_user_priority = u64::from(rt_to_static(new_rt_prio));
++
++    if new_user_priority > old_user_priority && new_user_priority > target_info.rtprio_limit {
++        return_errno_with_message!(
++            Errno::EPERM,
++            "raising the real-time priority beyond RLIMIT_RTPRIO requires CAP_SYS_NICE"
++        );
++    }
++
++    Ok(())
++}
+diff --git a/test/initramfs/src/syscall/ltp/debug/family-sched-04.md b/test/initramfs/src/syscall/ltp/debug/family-sched-04.md
+new file mode 100644
+index 00000000..c359f8e6
+--- /dev/null
++++ b/test/initramfs/src/syscall/ltp/debug/family-sched-04.md
+@@ -0,0 +1,56 @@
++# `sched_setscheduler02`
++
++## Goal
++
++Re-enable `sched_setscheduler02` in Phase 3 and verify that it passes on
++`/tmp`, `/ext2`, and `/exfat`.
++
++## Root Cause
++
++The kernel accepted an unprivileged transition to a real-time scheduling
++policy. `sched_setscheduler()` updated the target thread's policy directly
++after basic argument parsing, but it did not enforce the Linux permission
++rules for `SCHED_FIFO` and `SCHED_RR`.
++
++As a result, after LTP dropped the effective UID from `root` to `nobody`,
++
++- `sched_setscheduler(0, SCHED_FIFO, { .sched_priority = 1 })`
++
++still succeeded instead of failing with `EPERM`.
++
++## Solution
++
++- Added permission checks to `sys_sched_setscheduler()`.
++- Rejected unprivileged transitions to real-time policy when:
++  - the caller lacks `CAP_SYS_NICE`, and
++  - `RLIMIT_RTPRIO` does not permit the requested operation.
++- Kept same-owner checks for non-capability callers before changing another
++  thread's scheduling policy.
++- Re-enabled `sched_setscheduler02` in `testcases/all.txt`.
++
++## Validation
++
++```bash
++make run_kernel AUTO_TEST=syscall SYSCALL_TEST_SUITE=ltp \
++  LTP_CASES=sched_setscheduler02
++
++make run_kernel AUTO_TEST=syscall SYSCALL_TEST_SUITE=ltp \
++  SYSCALL_TEST_WORKDIR=/ext2 \
++  LTP_CASES=sched_setscheduler02
++
++make run_kernel AUTO_TEST=syscall SYSCALL_TEST_SUITE=ltp \
++  SYSCALL_TEST_WORKDIR=/exfat \
++  LTP_CASES=sched_setscheduler02
++```
++
++Observed result on all three workdirs:
++
++- `sched_setscheduler02` finished with `PASS`
++- both libc and raw-syscall variants returned `EPERM` as expected
++
++## Impact / Residual Risk
++
++- This fixes the missing real-time scheduling permission check for the legacy
++  `sched_setscheduler()` syscall path.
++- `sched_setscheduler03` still needs separate validation because it exercises
++  non-real-time policy changes and `RLIMIT_NICE` behavior.
+diff --git a/test/initramfs/src/syscall/ltp/testcases/all.txt b/test/initramfs/src/syscall/ltp/testcases/all.txt
+index bcf9f679..68f8c441 100644
+--- a/test/initramfs/src/syscall/ltp/testcases/all.txt
++++ b/test/initramfs/src/syscall/ltp/testcases/all.txt
+@@ -1297,7 +1297,7 @@ sched_getscheduler01
+ sched_getscheduler02
+ 
+ sched_setscheduler01
+-# sched_setscheduler02
++sched_setscheduler02
+ # sched_setscheduler03
+ sched_setscheduler04
+ 
+-- 
+2.43.0
+
