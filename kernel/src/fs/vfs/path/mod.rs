@@ -2,6 +2,7 @@
 
 //! Form file paths within and across FSes with dentries and mount points.
 
+use alloc::format;
 use core::time::Duration;
 
 pub(in crate::fs) use dentry::Dentry;
@@ -15,7 +16,8 @@ pub use resolver::{AT_FDCWD, AbsPathResult, FsPath, LookupResult, PathResolver, 
 use crate::{
     fs::{
         file::{
-            CreationFlags, InodeHandle, InodeMode, InodeType, OpenArgs, Permission, StatusFlags,
+            AccessMode, CreationFlags, InodeHandle, InodeMode, InodeType, OpenArgs, Permission,
+            StatusFlags,
         },
         vfs::{
             file_system::{FileSystem, FsFlags},
@@ -111,6 +113,10 @@ impl Path {
         let creation_flags = &open_args.creation_flags;
         let status_flags = &open_args.status_flags;
 
+        if creation_flags.contains(CreationFlags::O_TMPFILE) {
+            return self.open_tmpfile(open_args);
+        }
+
         if creation_flags.contains(CreationFlags::O_CREAT)
             && creation_flags.contains(CreationFlags::O_EXCL)
         {
@@ -142,6 +148,33 @@ impl Path {
         }
 
         InodeHandle::new(self.clone(), open_args.access_mode, *status_flags)
+    }
+
+    fn open_tmpfile(&self, open_args: OpenArgs) -> Result<InodeHandle> {
+        if self.type_() != InodeType::Dir {
+            return_errno_with_message!(Errno::ENOTDIR, "O_TMPFILE requires a directory path");
+        }
+        if matches!(open_args.access_mode, AccessMode::O_RDONLY) {
+            return_errno_with_message!(
+                Errno::EINVAL,
+                "O_TMPFILE must be used with O_WRONLY or O_RDWR"
+            );
+        }
+        if open_args.creation_flags.contains(CreationFlags::O_CREAT) {
+            return_errno_with_message!(Errno::EINVAL, "O_TMPFILE and O_CREAT cannot be combined");
+        }
+        if open_args.status_flags.contains(StatusFlags::O_PATH) {
+            return_errno_with_message!(Errno::EINVAL, "O_TMPFILE cannot be used with O_PATH");
+        }
+
+        self.inode().check_permission(Permission::MAY_WRITE)?;
+
+        let inode = self.inode().create_tmpfile(open_args.inode_mode)?;
+        let temp_path = Self::new_pseudo(self.mount.clone(), inode.clone(), |inode| {
+            format!("#{} (deleted)", inode.ino())
+        });
+
+        InodeHandle::new_unchecked_access(temp_path, open_args.access_mode, open_args.status_flags)
     }
 
     fn check_noatime_permission(&self, status_flags: StatusFlags) -> Result<()> {

@@ -298,6 +298,14 @@ pub trait Inode: Any + InodeIo + Send + Sync {
         Err(Error::new(Errno::ENOTDIR))
     }
 
+    fn create_tmpfile(&self, mode: InodeMode) -> Result<Arc<dyn Inode>> {
+        let _ = mode;
+        Err(Error::with_message(
+            Errno::EISDIR,
+            "O_TMPFILE is not supported",
+        ))
+    }
+
     fn mknod(&self, name: &str, mode: InodeMode, type_: MknodType) -> Result<Arc<dyn Inode>> {
         Err(Error::new(Errno::ENOTDIR))
     }
