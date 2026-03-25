@@ -21,7 +21,7 @@ use super::{
 };
 use crate::{
     fs::{
-        file::{InodeMode, Permission},
+        file::{InodeMode, Permission, StatusFlags},
         pipe::Pipe,
         vfs::{
             inode::{Extension, FallocMode, Inode as _, Metadata},
@@ -712,20 +712,32 @@ impl Inode {
         inner.device_id()
     }
 
-    pub fn read_at(&self, offset: usize, writer: &mut VmWriter) -> Result<usize> {
+    pub fn read_at_with_flags(
+        &self,
+        offset: usize,
+        writer: &mut VmWriter,
+        status_flags: StatusFlags,
+    ) -> Result<usize> {
         if self.type_ != InodeType::File {
             return_errno!(Errno::EISDIR);
         }
 
         let bytes_read = self.inner.read().read_at(offset, writer)?;
 
-        self.set_atime(now());
+        if !status_flags.contains(StatusFlags::O_NOATIME) {
+            self.set_atime(now());
+        }
 
         Ok(bytes_read)
     }
 
     // The offset and the length of buffer must be multiples of the block size.
-    pub fn read_direct_at(&self, offset: usize, writer: &mut VmWriter) -> Result<usize> {
+    pub fn read_direct_at_with_flags(
+        &self,
+        offset: usize,
+        writer: &mut VmWriter,
+        status_flags: StatusFlags,
+    ) -> Result<usize> {
         if self.type_ != InodeType::File {
             return_errno!(Errno::EISDIR);
         }
@@ -735,7 +747,9 @@ impl Inode {
 
         let bytes_read = self.inner.read().read_direct_at(offset, writer)?;
 
-        self.set_atime(now());
+        if !status_flags.contains(StatusFlags::O_NOATIME) {
+            self.set_atime(now());
+        }
 
         Ok(bytes_read)
     }

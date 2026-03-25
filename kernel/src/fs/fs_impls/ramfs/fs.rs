@@ -635,7 +635,7 @@ impl InodeIo for RamInode {
         &self,
         offset: usize,
         writer: &mut VmWriter,
-        _status_flags: StatusFlags,
+        status_flags: StatusFlags,
     ) -> Result<usize> {
         let read_len = match &self.inner {
             Inner::File(page_cache) => {
@@ -651,7 +651,7 @@ impl InodeIo for RamInode {
             _ => return_errno_with_message!(Errno::EISDIR, "read is not supported"),
         };
 
-        if self.typ == InodeType::File {
+        if self.typ == InodeType::File && !status_flags.contains(StatusFlags::O_NOATIME) {
             self.set_atime(now());
         }
         Ok(read_len)

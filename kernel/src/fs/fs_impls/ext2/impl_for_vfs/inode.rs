@@ -29,9 +29,9 @@ impl InodeIo for Ext2Inode {
         status_flags: StatusFlags,
     ) -> Result<usize> {
         if status_flags.contains(StatusFlags::O_DIRECT) {
-            self.read_direct_at(offset, writer)
+            self.read_direct_at_with_flags(offset, writer, status_flags)
         } else {
-            self.read_at(offset, writer)
+            self.read_at_with_flags(offset, writer, status_flags)
         }
     }
 

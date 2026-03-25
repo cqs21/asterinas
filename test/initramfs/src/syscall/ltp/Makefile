@@ -95,6 +95,11 @@ $(TARGET_DIR): $(RUN_BASH) $(KCONFIG_TEMPLATE) $(ALL_TESTS) $(EXT2_BLOCKLIST) $(
 		fi; \
 			if [ -f $(LTP_PREBUILT_DIR)/testcases/bin/$$binary ]; then \
 				cp -f $(LTP_PREBUILT_DIR)/testcases/bin/$$binary $@/testcases/bin; \
+				for helper in $(LTP_PREBUILT_DIR)/testcases/bin/$$binary\_*; do \
+					if [ -f "$$helper" ]; then \
+						cp -f "$$helper" $@/testcases/bin; \
+					fi; \
+				done; \
 				echo "$$syscall $$binary $$params" >> $@/runtest/syscalls; \
 				echo "$$syscall" >> $@/matched.txt; \
 			else \
