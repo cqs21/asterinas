@@ -466,6 +466,11 @@ impl DirDentry<'_> {
 
         let old_dir_inode = old_dir.inode();
         let new_dir_inode = new_dir.inode();
+        if old_name.len() > old_dir_inode.fs().sb().namelen
+            || new_name.len() > new_dir_inode.fs().sb().namelen
+        {
+            return_errno_with_message!(Errno::ENAMETOOLONG, "old_name or new_name is too long");
+        }
 
         // The two are the same dentry, we just modify the name
         if Arc::ptr_eq(old_dir_arc, new_dir_arc) {
