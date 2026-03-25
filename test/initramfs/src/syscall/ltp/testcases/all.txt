@@ -1543,7 +1543,7 @@ setuid04
 # shutdown01
 # shutdown02
 
-# sigaction01
+sigaction01
 sigaction02
 
 sigaltstack01

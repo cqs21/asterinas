@@ -53,5 +53,15 @@ pub fn sys_rt_sigreturn(ctx: &Context, user_ctx: &mut UserContext) -> Result<Sys
     let sig_mask = ucontext.uc_sigmask;
     ctx.set_sig_mask(sig_mask.into());
 
+    if let Some((sig_num, expected_action)) =
+        ctx.thread_local.oneshot_sig_actions().borrow_mut().pop()
+    {
+        let sig_dispositions = ctx.process.sig_dispositions().lock();
+        let mut sig_dispositions = sig_dispositions.lock();
+        if sig_dispositions.get(sig_num) == expected_action {
+            sig_dispositions.set_default(sig_num);
+        }
+    }
+
     Ok(SyscallReturn::NoReturn)
 }

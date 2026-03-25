@@ -10,7 +10,7 @@ use crate::{
     prelude::*,
     process::{
         NsProxy, UserNamespace,
-        signal::{SigStack, sig_mask::SigMask},
+        signal::{SigStack, sig_action::SigAction, sig_mask::SigMask, sig_num::SigNum},
     },
     vm::vmar::Vmar,
 };
@@ -46,6 +46,8 @@ pub struct ThreadLocal {
     /// Saved signal mask. It will be restored either after the signal handler, or upon
     /// return from the system call if there is no signal handler to run.
     sig_mask_saved: Cell<Option<SigMask>>,
+    /// One-shot signal actions that should be reset to default on `rt_sigreturn`.
+    oneshot_sig_actions: RefCell<Vec<(SigNum, SigAction)>>,
 
     // Namespaces.
     user_ns: RefCell<Arc<UserNamespace>>,
@@ -76,6 +78,7 @@ impl ThreadLocal {
             fpu_state: Cell::new(FpuState::Unloaded),
             sig_stack: RefCell::new(SigStack::default()),
             sig_mask_saved: Cell::new(None),
+            oneshot_sig_actions: RefCell::new(Vec::new()),
             user_ns: RefCell::new(user_ns),
             ns_proxy: RefCell::new(Some(ns_proxy)),
         }
@@ -168,6 +171,10 @@ impl ThreadLocal {
 
     pub(in crate::process) fn sig_mask_saved(&self) -> &Cell<Option<SigMask>> {
         &self.sig_mask_saved
+    }
+
+    pub(crate) fn oneshot_sig_actions(&self) -> &RefCell<Vec<(SigNum, SigAction)>> {
+        &self.oneshot_sig_actions
     }
 
     pub fn borrow_user_ns(&self) -> Ref<'_, Arc<UserNamespace>> {

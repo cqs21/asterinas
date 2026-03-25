@@ -179,10 +179,10 @@ fn dequeue_pending_signal(ctx: &Context) -> Option<(Box<dyn Signal>, SigAction)>
     let posix_thread = ctx.posix_thread;
 
     let sig_dispositions = ctx.process.sig_dispositions().lock();
-    let mut sig_dispositions = sig_dispositions.lock();
+    let sig_dispositions = sig_dispositions.lock();
 
     let sig_mask = posix_thread.sig_mask();
-    let (signal, sig_num, sig_action) = loop {
+    let (signal, sig_action) = loop {
         let signal = ctx.dequeue_signal(&sig_mask)?;
         let sig_num = signal.num();
         let sig_action = sig_dispositions.get(sig_num);
@@ -190,17 +190,8 @@ fn dequeue_pending_signal(ctx: &Context) -> Option<(Box<dyn Signal>, SigAction)>
             continue;
         }
 
-        break (signal, sig_num, sig_action);
+        break (signal, sig_action);
     };
-
-    if let SigAction::User { flags, .. } = &sig_action
-        && flags.contains(SigActionFlags::SA_RESETHAND)
-    {
-        // In Linux, SA_RESETHAND corresponds to SA_ONESHOT,
-        // which means the user handler will be executed only once and then reset to the default.
-        // Reference: <https://elixir.bootlin.com/linux/v6.0.9/source/kernel/signal.c#L2761>.
-        sig_dispositions.set_default(sig_num);
-    }
 
     trace!(
         "sig_num = {:?}, sig_name = {}, sig_action = {:#x?}",
@@ -229,6 +220,13 @@ pub fn handle_user_signal(
     debug!("flags = {:?}", flags);
     debug!("restorer_addr = 0x{:x}", restorer_addr);
     debug!("mask = {:?}, mask_to_restore = {:?}", mask, mask_to_restore);
+
+    let installed_sig_action = SigAction::User {
+        handler_addr,
+        flags,
+        restorer_addr,
+        mask,
+    };
 
     if flags.contains_unsupported_flag() {
         warn!("Unsupported signal flags: {:?}", flags);
@@ -400,6 +398,13 @@ pub fn handle_user_signal(
             const X86_RFLAGS_DF: usize = 1 << 10; // Bit 10 is the DF flag.
             user_ctx.general_regs_mut().rflags &= !X86_RFLAGS_DF;
         }
+    }
+
+    if flags.contains(SigActionFlags::SA_RESETHAND) {
+        ctx.thread_local
+            .oneshot_sig_actions()
+            .borrow_mut()
+            .push((sig_num, installed_sig_action));
     }
 
     Ok(())
