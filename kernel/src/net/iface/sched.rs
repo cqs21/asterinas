@@ -14,16 +14,20 @@ pub struct PollScheduler {
 }
 
 impl PollScheduler {
+    const INACTIVE: u64 = u64::MAX;
+
     pub(super) fn new() -> Self {
         Self {
-            next_poll_at_ms: AtomicU64::new(0),
+            next_poll_at_ms: AtomicU64::new(Self::INACTIVE),
             polling_wait_queue: WaitQueue::new(),
         }
     }
 
     pub(super) fn next_poll_at_ms(&self) -> Option<u64> {
-        let millis = self.next_poll_at_ms.load(Ordering::Relaxed);
-        if millis == 0 { None } else { Some(millis) }
+        match self.next_poll_at_ms.load(Ordering::Acquire) {
+            Self::INACTIVE => None,
+            millis => Some(millis),
+        }
     }
 
     pub(super) fn polling_wait_queue(&self) -> &WaitQueue {
@@ -33,15 +37,16 @@ impl PollScheduler {
 
 impl ScheduleNextPoll for PollScheduler {
     fn schedule_next_poll(&self, poll_at: Option<u64>) {
-        let Some(new_instant) = poll_at else {
-            self.next_poll_at_ms.store(0, Ordering::Relaxed);
-            return;
+        let new_val = poll_at.unwrap_or(Self::INACTIVE);
+        let old_val = self.next_poll_at_ms.swap(new_val, Ordering::Release);
+
+        let should_wake = match (old_val, new_val) {
+            (_, Self::INACTIVE) => false,
+            (Self::INACTIVE, _) => true,
+            (old, new) => new < old,
         };
 
-        let old_instant = self.next_poll_at_ms.load(Ordering::Relaxed);
-        self.next_poll_at_ms.store(new_instant, Ordering::Relaxed);
-
-        if old_instant == 0 || new_instant < old_instant {
+        if should_wake {
             self.polling_wait_queue.wake_all();
         }
     }

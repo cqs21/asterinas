@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: MPL-2.0
 
 use alloc::{collections::btree_map::BTreeMap, string::String, sync::Arc};
+use core::sync::atomic::{AtomicU8, Ordering};
 
 use aster_softirq::BottomHalfDisabled;
 use ostd::sync::SpinLock;
@@ -24,11 +25,27 @@ use crate::{
     },
 };
 
+/// Polling state machine for [`EtherIface`].
+///
+/// Ensures that at most one thread runs the poll loop at any time while
+/// guaranteeing that a poll request arriving during an in-progress poll is
+/// never lost.
+#[repr(u8)]
+enum PollState {
+    /// No poll is running.
+    Idle = 0,
+    /// A poll is running, no new request pending.
+    Polling = 1,
+    /// A poll is running and at least one new request has arrived.
+    PollingAndRequested = 2,
+}
+
 pub struct EtherIface<D, E: Ext> {
     driver: D,
     common: IfaceCommon<E>,
     ether_addr: EthernetAddress,
     arp_table: SpinLock<BTreeMap<Ipv4Address, EthernetAddress>, BottomHalfDisabled>,
+    poll_state: AtomicU8,
 }
 
 impl<D: WithDevice, E: Ext> EtherIface<D, E> {
@@ -64,6 +81,7 @@ impl<D: WithDevice, E: Ext> EtherIface<D, E> {
             common,
             ether_addr,
             arp_table: SpinLock::new(BTreeMap::new()),
+            poll_state: AtomicU8::new(PollState::Idle as u8),
         })
     }
 }
@@ -79,15 +97,53 @@ where
     D::Device: NotifyDevice,
 {
     fn poll(&self) {
-        self.driver.with(|device| {
-            let next_poll = self.common.poll(
-                &mut *device,
-                |data, iface_cx, tx_token| self.process(data, iface_cx, tx_token),
-                |pkt, iface_cx, tx_token| self.dispatch(pkt, iface_cx, tx_token),
+        // Try to transition IDLE -> POLLING. If someone else is already polling,
+        // just ensure a re-poll is requested and return.
+        if self
+            .poll_state
+            .compare_exchange(
+                PollState::Idle as u8,
+                PollState::Polling as u8,
+                Ordering::Acquire,
+                Ordering::Relaxed,
+            )
+            .is_err()
+        {
+            let _ = self.poll_state.compare_exchange(
+                PollState::Polling as u8,
+                PollState::PollingAndRequested as u8,
+                Ordering::Release,
+                Ordering::Relaxed,
             );
-            device.notify_poll_end();
-            self.common.sched_poll().schedule_next_poll(next_poll);
-        });
+            return;
+        }
+
+        loop {
+            self.driver.with(|device| {
+                let next_poll = self.common.poll(
+                    &mut *device,
+                    |data, iface_cx, tx_token| self.process(data, iface_cx, tx_token),
+                    |pkt, iface_cx, tx_token| self.dispatch(pkt, iface_cx, tx_token),
+                );
+                device.notify_poll_end();
+                self.common.sched_poll().schedule_next_poll(next_poll);
+            });
+
+            // Try POLLING -> IDLE. If the state is POLLING_AND_REQUESTED instead,
+            // reset to POLLING and loop again.
+            match self.poll_state.compare_exchange(
+                PollState::Polling as u8,
+                PollState::Idle as u8,
+                Ordering::Release,
+                Ordering::Acquire,
+            ) {
+                Ok(_) => break,
+                Err(_) => {
+                    self.poll_state
+                        .store(PollState::Polling as u8, Ordering::Release);
+                }
+            }
+        }
     }
 
     fn mtu(&self) -> usize {

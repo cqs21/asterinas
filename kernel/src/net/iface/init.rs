@@ -5,7 +5,7 @@ use core::slice::Iter;
 
 use aster_bigtcp::{
     device::WithDevice,
-    iface::{InterfaceFlags, InterfaceType},
+    iface::{InterfaceFlags, InterfaceType, ScheduleNextPoll},
 };
 use aster_softirq::BottomHalfDisabled;
 use spin::Once;
@@ -49,7 +49,7 @@ pub fn init() {
     });
 
     if let Some(iface_virtio) = virtio_iface() {
-        let callback = || iface_virtio.poll();
+        let callback = || iface_virtio.sched_poll().schedule_next_poll(Some(0));
         aster_network::register_recv_callback(VIRTIO_DEVICE_NAME, callback);
         aster_network::register_send_callback(VIRTIO_DEVICE_NAME, callback);
     }
