@@ -127,6 +127,20 @@ jobs:
           conformance_test_suite: 'gvisor'
           conformance_test_workdir: ${{ matrix.conformance_test_workdir }}
           boot_protocol: ${{ matrix.boot_protocol || 'linux-efi-handover64' }}
+      - name: Run integration tests ${{ (startsWith(matrix.test_id, 'conformance') && 'with kselftest') || '' }}
+        if: ${{ startsWith(matrix.test_id, 'conformance') }}
+        uses: ./.github/actions/test
+        with:
+          auto_test: 'conformance'
+          release: ${{ !contains(matrix.release, 'false') }}
+          enable_kvm: ${{ !contains(matrix.enable_kvm, 'false') }}
+          smp: ${{ matrix.smp }}
+          netdev: ${{ matrix.netdev || 'tap' }}
+          scheme: ${{ matrix.scheme }}
+          extra_blocklists: ${{ matrix.extra_blocklists }}
+          syscall_test_suite: 'kselftest'
+          syscall_test_workdir: ${{ matrix.syscall_test_workdir }}
+          boot_protocol: ${{ matrix.boot_protocol || 'linux-efi-handover64' }}
 
   osdk-test:
     runs-on: ubuntu-latest

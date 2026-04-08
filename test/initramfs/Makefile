@@ -109,6 +109,7 @@ x86_64_pkgs:
 		-A benchmark.sqlite-speedtest1 \
 		-A benchmark.sysbench \
 		-A conformance.ltp \
+		-A conformance.kselftest \
 		-A regression.package
 
 # Prebuild riscv64 packages

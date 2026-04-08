@@ -8,11 +8,12 @@ TARGET_DIR := $(INITRAMFS)/opt
 CONFORMANCE_TEST_SUITE ?= ltp
 GVISOR_DIR := $(INITRAMFS)/opt/gvisor
 LTP_DIR := $(INITRAMFS)/opt/ltp
+KSELFTEST_DIR := $(INITRAMFS)/opt/kselftest
 
 .PHONY: all
 all: $(TARGET_DIR)
 
-$(TARGET_DIR): $(RUN_BASH) $(GVISOR_DIR) $(LTP_DIR)
+$(TARGET_DIR): $(RUN_BASH) $(GVISOR_DIR) $(LTP_DIR) $(KSELFTEST_DIR)
 	@# Copy bash script
 	@cp -f $(RUN_BASH) $@
 
@@ -24,6 +25,11 @@ endif
 $(LTP_DIR):
 ifeq ($(CONFORMANCE_TEST_SUITE), ltp)
 	@$(MAKE) --no-print-directory -C ltp
+endif
+
+$(KSELFTEST_DIR):
+ifeq ($(CONFORMANCE_TEST_SUITE), kselftest)
+	@$(MAKE) --no-print-directory -C kselftest
 endif
 
 .PHONY: clean
