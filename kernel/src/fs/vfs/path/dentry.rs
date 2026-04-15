@@ -19,6 +19,7 @@ use crate::{
         },
     },
     prelude::*,
+    process::{credentials::capabilities::CapSet, posix_thread::AsPosixThread},
 };
 
 /// A `Dentry` represents a cached filesystem node in the VFS tree.
@@ -259,6 +260,27 @@ impl Deref for DirDentry<'_> {
 }
 
 impl DirDentry<'_> {
+    fn check_sticky_bit(dir_inode: &Arc<dyn Inode>, child_inode: &Arc<dyn Inode>) -> Result<()> {
+        let dir_metadata = dir_inode.metadata();
+        if !dir_metadata.mode.has_sticky_bit() {
+            return Ok(());
+        }
+
+        let creds = current_thread!().as_posix_thread().unwrap().credentials();
+        let child_metadata = child_inode.metadata();
+        if creds.effective_capset().contains(CapSet::FOWNER)
+            || creds.fsuid() == dir_metadata.uid
+            || creds.fsuid() == child_metadata.uid
+        {
+            return Ok(());
+        }
+
+        return_errno_with_message!(
+            Errno::EPERM,
+            "sticky bit set and caller is neither file owner nor directory owner"
+        );
+    }
+
     /// Creates a `Dentry` by creating a new inode of the `type_` with the `mode`.
     pub(super) fn create(
         &self,
@@ -482,6 +504,15 @@ impl DirDentry<'_> {
             let old_dentry = children.check_mountpoint_then_find(old_name)?;
             children.check_mountpoint(new_name)?;
 
+            let old_inode = match old_dentry.as_ref() {
+                Some(dentry) => dentry.inode().clone(),
+                None => old_dir_inode.lookup(old_name)?,
+            };
+            Self::check_sticky_bit(old_dir_inode, &old_inode)?;
+            if let Ok(Some(new_dentry)) = children.find(new_name) {
+                Self::check_sticky_bit(old_dir_inode, new_dentry.inode())?;
+            }
+
             old_dir_inode.rename(old_name, old_dir_inode, new_name)?;
 
             let mut children = children.upgrade();
@@ -506,6 +537,15 @@ impl DirDentry<'_> {
                 write_lock_children_on_two_dentries(&old_dir, &new_dir);
             let old_dentry = self_children.check_mountpoint_then_find(old_name)?;
             new_dir_children.check_mountpoint(new_name)?;
+
+            let old_inode = match old_dentry.as_ref() {
+                Some(dentry) => dentry.inode().clone(),
+                None => old_dir_inode.lookup(old_name)?,
+            };
+            Self::check_sticky_bit(old_dir_inode, &old_inode)?;
+            if let Ok(Some(new_dentry)) = new_dir_children.find(new_name) {
+                Self::check_sticky_bit(new_dir_inode, new_dentry.inode())?;
+            }
 
             old_dir_inode.rename(old_name, new_dir_inode, new_name)?;
             match old_dentry.as_ref() {
