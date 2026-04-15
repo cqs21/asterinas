@@ -181,7 +181,10 @@ fn install_setup_with_arch(
     cmd.arg("--root").arg(install_dir.as_ref());
     if matches!(option_env!("OSDK_LOCAL_DEV"), Some("1")) {
         let crate_dir = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
+        let workspace_root = crate_dir.parent().unwrap();
         let setup_dir = crate_dir.join("../ostd/libs/linux-bzimage/setup");
+        cmd.current_dir(workspace_root);
+        cmd.arg("--locked");
         cmd.arg("--path").arg(setup_dir);
     } else {
         cmd.arg("--version").arg(env!("CARGO_PKG_VERSION"));

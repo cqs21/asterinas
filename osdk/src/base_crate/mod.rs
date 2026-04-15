@@ -99,6 +99,7 @@ pub fn new_base_crate(
         std::fs::remove_dir_all(&base_crate_tmp_path).unwrap();
         if cargo_result.is_ok_and(|res| res) && main_rs_result.is_ok_and(|res| res) {
             info!("Reusing existing base crate");
+            sync_workspace_lockfile(&base_crate_path);
             return base_crate_path;
         }
     }
@@ -154,6 +155,8 @@ fn do_new_base_crate(
     // Create the src directory
     fs::create_dir_all(base_crate_path.as_ref().join("src")).unwrap();
 
+    sync_workspace_lockfile(base_crate_path.as_ref());
+
     // Write Cargo.toml
     let cargo_toml = include_str!("Cargo.toml.template");
     let cargo_toml = cargo_toml.replace("#NAME#", &(dep_crate_name.to_string() + "-osdk-bin"));
@@ -204,6 +207,24 @@ fn do_new_base_crate(
 
     // Get back to the original directory
     std::env::set_current_dir(original_dir).unwrap();
+}
+
+// Seed the generated base crate with the workspace lockfile so Cargo can
+// reuse the repository's pinned dependency graph, including yanked crates
+// that remain buildable as long as they are already locked.
+fn sync_workspace_lockfile(base_crate_path: impl AsRef<Path>) {
+    let workspace_root = {
+        let meta = get_cargo_metadata(None::<&str>, None::<&[&str]>).unwrap();
+        PathBuf::from(meta.get("workspace_root").unwrap().as_str().unwrap())
+    };
+    let workspace_lockfile = workspace_root.join("Cargo.lock");
+    if workspace_lockfile.exists() {
+        fs::copy(
+            workspace_lockfile,
+            base_crate_path.as_ref().join("Cargo.lock"),
+        )
+        .unwrap();
+    }
 }
 
 fn add_manifest_dependency(
