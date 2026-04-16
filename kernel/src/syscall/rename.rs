@@ -4,7 +4,7 @@ use super::SyscallReturn;
 use crate::{
     fs::{
         file::{InodeType, file_table::RawFileDesc},
-        vfs::path::{AT_FDCWD, FsPath, SplitPath},
+        vfs::path::{AT_FDCWD, FsPath, RenameMode, SplitPath},
     },
     prelude::*,
     syscall::constants::MAX_FILENAME_LEN,
@@ -28,11 +28,18 @@ pub fn sys_renameat2(
     let Some(flags) = Flags::from_bits(flags) else {
         return_errno_with_message!(Errno::EINVAL, "invalid flags");
     };
-    // TODO: Add support for handling the `NOREPLACE`, `EXCHANGE`, and `WHITEOUT` flags.
-    if !flags.is_empty() {
-        warn!("unsupported flags: {:?}", flags);
-        return_errno_with_message!(Errno::EINVAL, "unsupported flags");
+    // TODO: Add support for handling the `WHITEOUT` flag.
+    if flags.contains(Flags::WHITEOUT) || flags.contains(Flags::NOREPLACE | Flags::EXCHANGE) {
+        return_errno_with_message!(Errno::EINVAL, "invalid renameat2 flag combination");
     }
+
+    let mode = if flags.contains(Flags::NOREPLACE) {
+        RenameMode::NoReplace
+    } else if flags.contains(Flags::EXCHANGE) {
+        RenameMode::Exchange
+    } else {
+        RenameMode::Replace
+    };
 
     let fs_ref = ctx.thread_local.borrow_fs();
     let path_resolver = fs_ref.resolver().read();
@@ -68,7 +75,7 @@ pub fn sys_renameat2(
         );
     }
 
-    old_parent_path.rename(old_name, &new_parent_path, &new_name)?;
+    old_parent_path.rename(old_name, &new_parent_path, &new_name, mode)?;
 
     Ok(SyscallReturn::Return(0))
 }

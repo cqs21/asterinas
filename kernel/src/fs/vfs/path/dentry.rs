@@ -16,10 +16,12 @@ use crate::{
         vfs::{
             inode::{Inode, MknodType},
             inode_ext::InodeExt,
+            path::RenameMode,
         },
     },
     prelude::*,
     process::{credentials::capabilities::CapSet, posix_thread::AsPosixThread},
+    util::random::getrandom,
 };
 
 /// A `Dentry` represents a cached filesystem node in the VFS tree.
@@ -478,12 +480,21 @@ impl DirDentry<'_> {
         old_name: &str,
         new_dir_arc: &Arc<Dentry>,
         new_name: &str,
+        mode: RenameMode,
     ) -> Result<()> {
         let old_dir = old_dir_arc.as_dir_dentry_or_err()?;
         let new_dir = new_dir_arc.as_dir_dentry_or_err()?;
 
-        if is_dot_or_dotdot(old_name) || is_dot_or_dotdot(new_name) {
-            return_errno_with_message!(Errno::EISDIR, "old_name or new_name is a directory");
+        if is_dot_or_dotdot(old_name) {
+            return_errno_with_message!(Errno::EBUSY, "old_name is . or ..");
+        }
+        if is_dot_or_dotdot(new_name) {
+            let errno = if mode == RenameMode::NoReplace {
+                Errno::EEXIST
+            } else {
+                Errno::EBUSY
+            };
+            return_errno_with_message!(errno, "new_name is . or ..");
         }
 
         let old_dir_inode = old_dir.inode();
@@ -497,38 +508,65 @@ impl DirDentry<'_> {
         // The two are the same dentry, we just modify the name
         if Arc::ptr_eq(old_dir_arc, new_dir_arc) {
             if old_name == new_name {
-                return Ok(());
+                match mode {
+                    RenameMode::Replace | RenameMode::Exchange => return Ok(()),
+                    RenameMode::NoReplace => {
+                        return_errno_with_message!(Errno::EEXIST, "the new path already exists");
+                    }
+                };
             }
 
             let children = old_dir.children.upread();
             let old_dentry = children.check_mountpoint_then_find(old_name)?;
             children.check_mountpoint(new_name)?;
+            let new_dentry = children.find(new_name).ok().flatten();
 
-            let old_inode = match old_dentry.as_ref() {
-                Some(dentry) => dentry.inode().clone(),
-                None => old_dir_inode.lookup(old_name)?,
-            };
-            Self::check_sticky_bit(old_dir_inode, &old_inode)?;
-            if let Ok(Some(new_dentry)) = children.find(new_name) {
-                Self::check_sticky_bit(old_dir_inode, new_dentry.inode())?;
-            }
+            Self::check_rename_inode(
+                old_dir_inode,
+                old_dentry.as_ref(),
+                old_name,
+                new_dir_inode,
+                new_dentry.as_ref(),
+                new_name,
+                mode,
+            )?;
 
-            old_dir_inode.rename(old_name, old_dir_inode, new_name)?;
+            let temp_name = (mode == RenameMode::Exchange)
+                .then(|| Self::new_exchange_temp_name(&children, old_dir_inode))
+                .transpose()?;
+            Self::rename_with_mode(
+                old_dir_inode,
+                new_dir_inode,
+                old_name,
+                new_name,
+                mode,
+                temp_name.as_deref(),
+            )?;
 
             let mut children = children.upgrade();
-            match old_dentry.as_ref() {
-                Some(dentry) => {
+            match mode {
+                RenameMode::Replace | RenameMode::NoReplace => {
                     children.delete(old_name);
-                    dentry
-                        .name_and_parent
-                        .set(new_name, old_dir_arc.clone())
-                        .unwrap();
-                    if dentry.is_dentry_cacheable() {
-                        children.insert(String::from(new_name), dentry.clone());
-                    }
+                    Self::cache_dentry_at(
+                        &mut children,
+                        new_name,
+                        old_dentry.as_ref(),
+                        new_dir_arc,
+                    );
                 }
-                None => {
-                    children.delete(new_name);
+                RenameMode::Exchange => {
+                    Self::cache_dentry_at(
+                        &mut children,
+                        old_name,
+                        new_dentry.as_ref(),
+                        old_dir_arc,
+                    );
+                    Self::cache_dentry_at(
+                        &mut children,
+                        new_name,
+                        old_dentry.as_ref(),
+                        new_dir_arc,
+                    );
                 }
             }
         } else {
@@ -537,34 +575,164 @@ impl DirDentry<'_> {
                 write_lock_children_on_two_dentries(&old_dir, &new_dir);
             let old_dentry = self_children.check_mountpoint_then_find(old_name)?;
             new_dir_children.check_mountpoint(new_name)?;
+            let new_dentry = new_dir_children.find(new_name).ok().flatten();
 
-            let old_inode = match old_dentry.as_ref() {
-                Some(dentry) => dentry.inode().clone(),
-                None => old_dir_inode.lookup(old_name)?,
-            };
-            Self::check_sticky_bit(old_dir_inode, &old_inode)?;
-            if let Ok(Some(new_dentry)) = new_dir_children.find(new_name) {
-                Self::check_sticky_bit(new_dir_inode, new_dentry.inode())?;
-            }
+            Self::check_rename_inode(
+                old_dir_inode,
+                old_dentry.as_ref(),
+                old_name,
+                new_dir_inode,
+                new_dentry.as_ref(),
+                new_name,
+                mode,
+            )?;
 
-            old_dir_inode.rename(old_name, new_dir_inode, new_name)?;
-            match old_dentry.as_ref() {
-                Some(dentry) => {
+            let temp_name = (mode == RenameMode::Exchange)
+                .then(|| Self::new_exchange_temp_name(&self_children, old_dir_inode))
+                .transpose()?;
+            Self::rename_with_mode(
+                old_dir_inode,
+                new_dir_inode,
+                old_name,
+                new_name,
+                mode,
+                temp_name.as_deref(),
+            )?;
+
+            match mode {
+                RenameMode::Replace | RenameMode::NoReplace => {
                     self_children.delete(old_name);
-                    dentry
-                        .name_and_parent
-                        .set(new_name, new_dir_arc.clone())
-                        .unwrap();
-                    if dentry.is_dentry_cacheable() {
-                        new_dir_children.insert(String::from(new_name), dentry.clone());
-                    }
+                    Self::cache_dentry_at(
+                        &mut new_dir_children,
+                        new_name,
+                        old_dentry.as_ref(),
+                        new_dir_arc,
+                    );
                 }
-                None => {
-                    new_dir_children.delete(new_name);
+                RenameMode::Exchange => {
+                    Self::cache_dentry_at(
+                        &mut self_children,
+                        old_name,
+                        new_dentry.as_ref(),
+                        old_dir_arc,
+                    );
+                    Self::cache_dentry_at(
+                        &mut new_dir_children,
+                        new_name,
+                        old_dentry.as_ref(),
+                        new_dir_arc,
+                    );
                 }
             }
         }
         Ok(())
+    }
+
+    fn check_rename_inode(
+        old_dir_inode: &Arc<dyn Inode>,
+        old_dentry: Option<&Arc<Dentry>>,
+        old_name: &str,
+        new_dir_inode: &Arc<dyn Inode>,
+        new_dentry: Option<&Arc<Dentry>>,
+        new_name: &str,
+        mode: RenameMode,
+    ) -> Result<()> {
+        let old_inode = match old_dentry {
+            Some(dentry) => dentry.inode().clone(),
+            None => old_dir_inode.lookup(old_name)?,
+        };
+        Self::check_sticky_bit(old_dir_inode, &old_inode)?;
+
+        let new_inode = match new_dentry {
+            Some(dentry) => Some(dentry.inode().clone()),
+            None => new_dir_inode.lookup(new_name).ok(),
+        };
+        if new_inode.is_none() && mode == RenameMode::Exchange {
+            return_errno_with_message!(Errno::ENOENT, "the new path does not exist");
+        }
+        if new_inode.is_some() && mode == RenameMode::NoReplace {
+            return_errno_with_message!(Errno::EEXIST, "the new path already exists");
+        }
+        if let Some(inode) = new_inode.as_ref() {
+            Self::check_sticky_bit(new_dir_inode, inode)?;
+        }
+
+        Ok(())
+    }
+
+    fn rename_with_mode(
+        old_dir_inode: &Arc<dyn Inode>,
+        new_dir_inode: &Arc<dyn Inode>,
+        old_name: &str,
+        new_name: &str,
+        mode: RenameMode,
+        temp_name: Option<&str>,
+    ) -> Result<()> {
+        match mode {
+            RenameMode::Replace | RenameMode::NoReplace => {
+                old_dir_inode.rename(old_name, new_dir_inode, new_name)?;
+            }
+            RenameMode::Exchange => {
+                let temp_name = temp_name.unwrap();
+                old_dir_inode.rename(old_name, old_dir_inode, temp_name)?;
+                new_dir_inode.rename(new_name, old_dir_inode, old_name)?;
+                old_dir_inode.rename(temp_name, new_dir_inode, new_name)?;
+            }
+        }
+
+        Ok(())
+    }
+
+    fn new_exchange_temp_name(
+        children: &DentryChildren,
+        dir_inode: &Arc<dyn Inode>,
+    ) -> Result<String> {
+        const MAX_ATTEMPTS: usize = 64;
+        const CHARSET: &[u8; 16] = b"0123456789abcdef";
+
+        let name_len = dir_inode.fs().sb().namelen.clamp(1, 16);
+        let mut random_bytes = [0_u8; 16];
+
+        for _ in 0..MAX_ATTEMPTS {
+            getrandom(&mut random_bytes[..name_len]);
+            let temp_name = random_bytes[..name_len]
+                .iter()
+                .map(|byte| CHARSET[(byte & 0x0f) as usize] as char)
+                .collect::<String>();
+
+            if children.contains_valid(&temp_name) {
+                continue;
+            }
+
+            match dir_inode.lookup(&temp_name) {
+                Ok(_) => continue,
+                Err(err) if err.error() == Errno::ENOENT => return Ok(temp_name),
+                Err(err) => return Err(err),
+            }
+        }
+
+        return_errno_with_message!(
+            Errno::EBUSY,
+            "failed to generate an unused temporary name for exchange"
+        )
+    }
+
+    fn cache_dentry_at(
+        children: &mut DentryChildren,
+        name: &str,
+        dentry: Option<&Arc<Dentry>>,
+        parent: &Arc<Dentry>,
+    ) {
+        children.invalidate(name);
+
+        let Some(dentry) = dentry else {
+            return;
+        };
+
+        dentry.name_and_parent.set(name, parent.clone()).unwrap();
+        if dentry.is_dentry_cacheable() {
+            children.insert(String::from(name), dentry.clone());
+        }
     }
 }
 
@@ -670,6 +838,11 @@ impl DentryChildren {
     /// Deletes a dentry by name, turning it into a negative entry if exists.
     fn delete(&mut self, name: &str) -> Option<Arc<Dentry>> {
         self.dentries.get_mut(name).and_then(Option::take)
+    }
+
+    /// Invalidates a dentry by name, removing any cached entry.
+    fn invalidate(&mut self, name: &str) {
+        let _ = self.dentries.remove(name);
     }
 
     /// Probes the corresponding cache entry by name.
