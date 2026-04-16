@@ -64,6 +64,7 @@ read01
 read02
 read04
 readv01
+rename09
 rename15
 rename01A
 rmdir03A
