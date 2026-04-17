@@ -351,7 +351,7 @@ impl DirDentry<'_> {
     /// Deletes a `Dentry` by `unlink()` the inner inode.
     pub(super) fn unlink(&self, name: &str) -> Result<()> {
         if is_dot_or_dotdot(name) {
-            return_errno_with_message!(Errno::EINVAL, "unlink on . or ..");
+            return_errno_with_message!(Errno::EISDIR, "unlink on . or ..");
         }
 
         let children = self.children.upread();

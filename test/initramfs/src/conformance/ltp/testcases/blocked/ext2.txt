@@ -1,6 +1,5 @@
 dup05
 getcwd02
-linkat01
 mknod01
 # FIXME: The inode number of ext2 will be exhausted by `rename14`.
 rename14
@@ -28,15 +27,9 @@ signalfd4_02
 sigrelse01
 stat02
 stat02_64
-symlink02
-symlink04
-symlinkat01
 truncate02
 truncate02_64
 umask01
-unlink01
-unlink05
-unlinkat01
 utime07
 waitpid06
 waitpid07

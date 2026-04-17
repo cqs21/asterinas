@@ -23,7 +23,7 @@ use crate::{
         },
     },
     prelude::*,
-    process::{Gid, Uid},
+    process::{Gid, Uid, credentials::capabilities::CapSet, posix_thread::AsPosixThread},
 };
 
 mod dentry;
@@ -50,6 +50,45 @@ impl PartialEq for Path {
 impl Eq for Path {}
 
 impl Path {
+    /// Checks whether a directory entry may be modified in this directory.
+    fn check_dir_entry_modify_permission(&self) -> Result<()> {
+        if self.mount.flags().contains(PerMountFlags::RDONLY)
+            || self.fs().flags().contains(FsFlags::RDONLY)
+        {
+            return_errno_with_message!(
+                Errno::EROFS,
+                "a directory entry cannot be modified on a read-only mount or filesystem"
+            );
+        }
+        self.inode()
+            .check_permission(Permission::MAY_WRITE | Permission::MAY_EXEC)
+    }
+
+    /// Checks whether an inode may be used as the source of a hard link.
+    fn check_hardlink_source(inode: &Arc<dyn Inode>) -> Result<()> {
+        let credentials = current_thread!().as_posix_thread().unwrap().credentials();
+        let metadata = inode.metadata();
+
+        if metadata.uid == credentials.fsuid()
+            || credentials.effective_capset().contains(CapSet::FOWNER)
+        {
+            return Ok(());
+        }
+
+        let mode = metadata.mode;
+        if metadata.type_.is_regular_file()
+            && !mode.has_set_uid()
+            && !(mode.has_set_gid() && mode.is_group_executable())
+            && inode
+                .check_permission(Permission::MAY_READ | Permission::MAY_WRITE)
+                .is_ok()
+        {
+            return Ok(());
+        }
+
+        return_errno_with_message!(Errno::EPERM, "hard link source is not permitted");
+    }
+
     /// Creates a new `Path` to represent the root directory of a file system.
     pub fn new_fs_root(mount: Arc<Mount>) -> Self {
         let inner = mount.root_dentry().clone();
@@ -58,13 +97,7 @@ impl Path {
 
     /// Creates a new `Path` to represent the child directory of a file system.
     pub fn new_fs_child(&self, name: &str, type_: InodeType, mode: InodeMode) -> Result<Self> {
-        if self
-            .inode()
-            .check_permission(Permission::MAY_WRITE)
-            .is_err()
-        {
-            return_errno!(Errno::EACCES);
-        }
+        self.check_dir_entry_modify_permission()?;
         let new_child_dentry = self
             .dentry
             .as_dir_dentry_or_err()?
@@ -462,6 +495,7 @@ impl Path {
 
     /// Creates a `Path` by making an inode of the `type_` with the `mode`.
     pub fn mknod(&self, name: &str, mode: InodeMode, type_: MknodType) -> Result<Self> {
+        self.check_dir_entry_modify_permission()?;
         let inner = self
             .dentry
             .as_dir_dentry_or_err()?
@@ -475,16 +509,20 @@ impl Path {
             return_errno_with_message!(Errno::EXDEV, "the operation cannot cross mounts");
         }
 
+        Self::check_hardlink_source(old.inode())?;
+        self.check_dir_entry_modify_permission()?;
         self.dentry.as_dir_dentry_or_err()?.link(old.inode(), name)
     }
 
     /// Unlinks a name from the `Path`.
     pub fn unlink(&self, name: &str) -> Result<()> {
+        self.check_dir_entry_modify_permission()?;
         self.dentry.as_dir_dentry_or_err()?.unlink(name)
     }
 
     /// Removes a directory by `rmdir()` the inner inode.
     pub fn rmdir(&self, name: &str) -> Result<()> {
+        self.check_dir_entry_modify_permission()?;
         self.dentry.as_dir_dentry_or_err()?.rmdir(name)
     }
 

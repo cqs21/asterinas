@@ -27,16 +27,19 @@ pub fn sys_unlinkat(
 
     let path_name = path_name.to_string_lossy();
     let (dir_path, name) = {
-        let (parent_path_name, target_name) = path_name.split_dirname_and_filename()?;
-        let fs_path = FsPath::from_fd_and_path(dirfd, parent_path_name)?;
-        (
-            ctx.thread_local
-                .borrow_fs()
-                .resolver()
-                .read()
-                .lookup(&fs_path)?,
-            target_name,
-        )
+        let fs_path = FsPath::from_fd_and_path(dirfd, &path_name)?;
+        let fs_ref = ctx.thread_local.borrow_fs();
+        let path_resolver = fs_ref.resolver().read();
+
+        // Linux resolves the full unlink path before invoking the directory operation.
+        // This preserves path-walk errors for trailing slash and dot components, such as
+        // `file/`, `file/.`, and `file/..`, which should fail with `ENOTDIR` instead of
+        // being reduced to unlinking the parent directory entry.
+        path_resolver.lookup_unresolved_no_follow(&fs_path)?;
+
+        let (parent_path_name, target_name) = path_name.split_dirname_and_basename()?;
+        let parent_fs_path = FsPath::from_fd_and_path(dirfd, parent_path_name)?;
+        (path_resolver.lookup(&parent_fs_path)?, target_name)
     };
 
     dir_path.unlink(name)?;
