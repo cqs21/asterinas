@@ -87,7 +87,7 @@ pub fn handle_pending_signal(
 
     let sig_num = signal.num();
     match sig_action {
-        SigAction::Ign => {
+        SigAction::Ign { .. } => {
             debug!("Ignore signal {:?}", sig_num);
         }
         SigAction::User {
@@ -132,12 +132,12 @@ pub fn handle_pending_signal(
                 do_exit_group(TermStatus::Killed(SIGSEGV));
             }
         }
-        SigAction::Dfl if ctx.process.is_init_process() => {
+        SigAction::Dfl { .. } if ctx.process.is_init_process() => {
             // From Linux man pages "kill(2)":
             // "The only signals that can be sent to process ID 1, the init process, are those for
             // which init has explicitly installed signal handlers."
         }
-        SigAction::Dfl => {
+        SigAction::Dfl { .. } => {
             let sig_default_action = SigDefaultAction::from_signum(sig_num);
             debug!("sig_default_action = {:?}", sig_default_action);
 
@@ -208,7 +208,7 @@ fn dequeue_pending_signal(ctx: &Context) -> Option<(Box<dyn Signal>, SigAction)>
         // In Linux, SA_RESETHAND corresponds to SA_ONESHOT,
         // which means the user handler will be executed only once and then reset to the default.
         // Reference: <https://elixir.bootlin.com/linux/v6.0.9/source/kernel/signal.c#L2761>.
-        sig_dispositions.set_default(sig_num);
+        sig_dispositions.reset_user_handler(sig_num);
     }
 
     debug!(

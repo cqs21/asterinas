@@ -36,9 +36,10 @@ impl SigDispositions {
         Ok(core::mem::replace(&mut self.map[idx], sa))
     }
 
-    pub fn set_default(&mut self, num: SigNum) {
+    /// Resets a user-installed handler to the default disposition without clearing metadata.
+    pub fn reset_user_handler(&mut self, num: SigNum) {
         let idx = Self::num_to_idx(num);
-        self.map[idx] = SigAction::Dfl;
+        self.map[idx] = self.map[idx].reset_user_handler();
     }
 
     /// man 7 signal:
@@ -48,7 +49,7 @@ impl SigDispositions {
     pub fn inherit(&mut self) {
         for sigaction in &mut self.map {
             if let SigAction::User { .. } = sigaction {
-                *sigaction = SigAction::Dfl;
+                *sigaction = SigAction::default();
             }
         }
     }

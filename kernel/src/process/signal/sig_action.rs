@@ -10,11 +10,20 @@ use super::{
 };
 use crate::prelude::*;
 
-#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum SigAction {
-    #[default]
-    Dfl, // Default action
-    Ign, // Ignore this signal
+    Dfl {
+        // Default action
+        flags: SigActionFlags,
+        restorer_addr: usize,
+        mask: SigMask,
+    },
+    Ign {
+        // Ignore this signal
+        flags: SigActionFlags,
+        restorer_addr: usize,
+        mask: SigMask,
+    },
     User {
         // User-given handler
         handler_addr: usize,
@@ -24,21 +33,39 @@ pub enum SigAction {
     },
 }
 
+impl Default for SigAction {
+    fn default() -> Self {
+        Self::Dfl {
+            flags: SigActionFlags::empty(),
+            restorer_addr: 0,
+            mask: SigMask::new_empty(),
+        }
+    }
+}
+
 impl From<sigaction_t> for SigAction {
     fn from(input: sigaction_t) -> Self {
+        let flags = SigActionFlags::from_bits_truncate(input.flags);
+        let mask = SigSet::from(input.mask);
+        let restorer_addr = input.restorer_ptr;
+
         match input.handler_ptr {
-            SIG_DFL => SigAction::Dfl,
-            SIG_IGN => SigAction::Ign,
-            _ => {
-                let flags = SigActionFlags::from_bits_truncate(input.flags);
-                let mask = SigSet::from(input.mask);
-                SigAction::User {
-                    handler_addr: input.handler_ptr,
-                    flags,
-                    restorer_addr: input.restorer_ptr,
-                    mask,
-                }
-            }
+            SIG_DFL => SigAction::Dfl {
+                flags,
+                restorer_addr,
+                mask,
+            },
+            SIG_IGN => SigAction::Ign {
+                flags,
+                restorer_addr,
+                mask,
+            },
+            _ => SigAction::User {
+                handler_addr: input.handler_ptr,
+                flags,
+                restorer_addr,
+                mask,
+            },
         }
     }
 }
@@ -46,18 +73,26 @@ impl From<sigaction_t> for SigAction {
 impl SigAction {
     pub fn as_c_type(&self) -> sigaction_t {
         match self {
-            SigAction::Dfl => sigaction_t {
+            SigAction::Dfl {
+                flags,
+                restorer_addr,
+                mask,
+            } => sigaction_t {
                 handler_ptr: SIG_DFL,
-                flags: 0,
-                restorer_ptr: 0,
-                mask: 0,
+                flags: flags.as_u32(),
+                restorer_ptr: *restorer_addr,
+                mask: (*mask).into(),
                 ..Default::default()
             },
-            SigAction::Ign => sigaction_t {
+            SigAction::Ign {
+                flags,
+                restorer_addr,
+                mask,
+            } => sigaction_t {
                 handler_ptr: SIG_IGN,
-                flags: 0,
-                restorer_ptr: 0,
-                mask: 0,
+                flags: flags.as_u32(),
+                restorer_ptr: *restorer_addr,
+                mask: (*mask).into(),
                 ..Default::default()
             },
             SigAction::User {
@@ -75,6 +110,26 @@ impl SigAction {
         }
     }
 
+    /// Resets a user-installed handler to the default disposition while preserving metadata.
+    ///
+    /// Linux keeps the original `sa_flags`, `sa_mask`, and `sa_restorer` visible through
+    /// `sigaction(..., NULL, &oldact)` even after `SA_RESETHAND` has reset the handler.
+    pub fn reset_user_handler(self) -> Self {
+        match self {
+            SigAction::User {
+                flags,
+                restorer_addr,
+                mask,
+                ..
+            } => SigAction::Dfl {
+                flags,
+                restorer_addr,
+                mask,
+            },
+            action => action,
+        }
+    }
+
     /// Returns whether signals will be ignored.
     ///
     /// Signals will be ignored because either
@@ -82,11 +137,11 @@ impl SigAction {
     ///  * the signal action is default and the default action is to ignore the signals.
     pub fn will_ignore(&self, signum: SigNum) -> bool {
         match self {
-            SigAction::Dfl => {
+            SigAction::Dfl { .. } => {
                 let default_action = SigDefaultAction::from_signum(signum);
                 matches!(default_action, SigDefaultAction::Ign)
             }
-            SigAction::Ign => true,
+            SigAction::Ign { .. } => true,
             SigAction::User { .. } => false,
         }
     }
