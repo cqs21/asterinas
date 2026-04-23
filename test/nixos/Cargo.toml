@@ -13,6 +13,7 @@ edition = "2024"
 
 [workspace.dependencies]
 inventory = "0.3"
+regex = "1"
 rexpect = "0.6"
 strip-ansi-escapes = "0.2"
 nixos-test-framework = { path = "common/framework" }

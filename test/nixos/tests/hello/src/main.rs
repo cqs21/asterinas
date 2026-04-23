@@ -7,7 +7,7 @@
 //! An application's test suite and its "Verified Usage" section in Asterinas Book
 //! should always be kept in sync.
 //! So whenever you modify the test suite,
-//! review the documentation and see if should be updated accordingly.
+//! review the documentation and see if it should be updated accordingly.
 
 use nixos_test_framework::*;
 
