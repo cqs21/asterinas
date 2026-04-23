@@ -14,11 +14,22 @@ on:
 
 jobs:
   minimal-nixos-test:
+    name: Test ${{ matrix.test.name }}
     runs-on: ubuntu-latest
+    timeout-minutes: 75
     strategy:
       fail-fast: false
+      matrix:
+        test:
+          - name: hello
+            disk_size: 6144
+            timeout_minutes: 15
+          - name: python
+            disk_size: 8192
+            timeout_minutes: 60
+
     steps:
-      # In the subsequent tests, a relatively large disk (4GB) will be created to install AsterNixOS.
+      # In the subsequent tests, a disk up to 8 GiB will be created to install AsterNixOS.
       # Standard GitHub runners may encounter "insufficient disk space" errors.
       # Therefore, we first execute the following action to free up
       # some disk space. The amount of space saved can be referenced in
@@ -32,12 +43,12 @@ jobs:
           remove_haskell: true
           remove_tool_cache: true
       - uses: actions/checkout@v4
-      - name: Run the hello test on AsterNixOS
-        timeout-minutes: 30
+      - name: Run the ${{ matrix.test.name }} test on AsterNixOS
+        timeout-minutes: ${{ matrix.test.timeout_minutes }}
         uses: maus007/docker-run-action-fork@v1
         with:
           image: asterinas/asterinas:0.17.1-20260319
           options: --privileged -v /dev:/dev -v ${{ github.workspace }}:/root/asterinas
           run: |
-            make nixos NIXOS_TEST_SUITE=hello NIXOS_DISK_SIZE_IN_MB=6144
-            make run_nixos NIXOS_TEST_SUITE=hello
+            make nixos NIXOS_TEST_SUITE=${{ matrix.test.name }} NIXOS_DISK_SIZE_IN_MB=${{ matrix.test.disk_size }}
+            make run_nixos NIXOS_TEST_SUITE=${{ matrix.test.name }}
