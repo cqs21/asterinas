@@ -25,7 +25,7 @@ use std::env;
 
 pub use inventory;
 pub use nixos_test_macro::nixos_test;
-pub use rexpect::error::Error;
+pub use rexpect::{error::Error, reader::Regex};
 pub use session::{Session, SessionDesc};
 
 mod session;

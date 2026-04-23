@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: MPL-2.0
 
-use rexpect::session::PtySession;
+use rexpect::{reader::Regex, session::PtySession};
 
 use super::Error;
 
@@ -153,13 +153,33 @@ impl Session {
         Ok(())
     }
 
-    /// Executes a command and verifies its output contains expected text.
+    /// Executes a command and returns the output before the prompt reappears.
+    pub fn run_cmd_and_capture_output(&mut self, command: &str) -> Result<String, Error> {
+        println!("--> Running: {}", command);
+        self.pty_session.send_line(command)?;
+        // Read and consume the echoed command line
+        self.pty_session.exp_string(command).unwrap();
+
+        match self.pty_session.exp_string(self.desc.prompt) {
+            Ok(unread) => {
+                let cleaned_unread =
+                    String::from_utf8_lossy(&strip_ansi_escapes::strip(&unread)).to_string();
+                Ok(cleaned_unread)
+            }
+            Err(e) => {
+                Self::output_error(&e);
+                Err(e)
+            }
+        }
+    }
+
+    /// Executes a command and verifies its output contains the expected substring.
     ///
-    /// This method runs the command and checks that the specified string appears
+    /// This method runs the command and checks that the specified substring appears
     /// in the output. This is useful for validating command results.
     ///
     /// Returns an error if:
-    /// - The expected string is not found in the output
+    /// - The expected substring is not found in the output
     /// - The command times out
     /// - The session terminates unexpectedly
     ///
@@ -182,31 +202,60 @@ impl Session {
     /// }
     /// ```
     pub fn run_cmd_and_expect(&mut self, command: &str, expected: &str) -> Result<(), Error> {
-        println!("--> Running: {} (expecting: {})", command, expected);
-        self.pty_session.send_line(command)?;
-        // Read and consume the echoed command line
-        self.pty_session.exp_string(command).unwrap();
+        let cleaned_unread = self.run_cmd_and_capture_output(command)?;
+        if !cleaned_unread.contains(expected) {
+            println!("=== Unexpected Output ===");
+            println!("Expected substring: {}", expected);
+            println!("Output before prompt:\n{}", cleaned_unread);
+            println!("=========================");
+            return Err(Error::EOF {
+                expected: expected.to_string(),
+                got: cleaned_unread,
+                exit_code: None,
+            });
+        }
 
-        match self.pty_session.exp_string(self.desc.prompt) {
-            Ok(unread) => {
-                let cleaned_unread =
-                    String::from_utf8_lossy(&strip_ansi_escapes::strip(&unread)).to_string();
-                if !cleaned_unread.contains(expected) {
-                    println!("=== Unexpected Output ===");
-                    println!("Expected: {}", expected);
-                    println!("Output before prompt:\n{}", cleaned_unread);
-                    println!("=========================");
-                    return Err(Error::EOF {
-                        expected: expected.to_string(),
-                        got: cleaned_unread,
-                        exit_code: None,
-                    });
-                }
-            }
-            Err(e) => {
-                Self::output_error(&e);
-                return Err(e);
-            }
+        Ok(())
+    }
+
+    /// Executes a command and verifies its output matches the expected regex.
+    ///
+    /// This method runs the command and checks that the specified regex matches
+    /// the output before the prompt reappears.
+    ///
+    /// Returns an error if:
+    /// - The expected regex does not match the output
+    /// - The command times out
+    /// - The session terminates unexpectedly
+    ///
+    /// # Example
+    ///
+    /// ```rust
+    /// use nixos_test_framework::*;
+    /// use rexpect::reader::Regex;
+    ///
+    /// fn example(nixos_shell: &mut Session) -> Result<(), Error> {
+    ///     let expected = Regex::new(r"(?m)^Hello, .*!$")?;
+    ///     nixos_shell.run_cmd_and_expect_regex("echo 'Hello, World!'", &expected)?;
+    ///     Ok(())
+    /// }
+    /// ```
+    pub fn run_cmd_and_expect_regex(
+        &mut self,
+        command: &str,
+        expected: &Regex,
+    ) -> Result<(), Error> {
+        let cleaned_unread = self.run_cmd_and_capture_output(command)?;
+        if !expected.is_match(&cleaned_unread) {
+            println!("=== Unexpected Output ===");
+            println!("Expected regex: {}", expected.as_str());
+            println!("Output before prompt:\n{}", cleaned_unread);
+            println!("=========================");
+            return Err(Error::EOF {
+                expected: expected.as_str().to_string(),
+                got: cleaned_unread,
+                exit_code: None,
+            });
         }
 
         Ok(())
