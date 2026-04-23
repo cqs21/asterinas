@@ -15,7 +15,7 @@ pub mod signals;
 
 use align_ext::AlignExt;
 use c_types::{siginfo_t, ucontext_t};
-use constants::SIGSEGV;
+use constants::{SI_KERNEL, SIGSEGV};
 use ostd::{
     arch::cpu::context::{FpuContext, UserContext},
     mm::VmIo,
@@ -36,7 +36,10 @@ use crate::{
     process::{
         TermStatus,
         posix_thread::{ContextPthreadAdminApi, do_exit_group},
-        signal::{c_types::stack_t, signals::Signal},
+        signal::{
+            c_types::stack_t,
+            signals::{Signal, fault::FaultSignal},
+        },
     },
 };
 
@@ -65,7 +68,7 @@ pub fn handle_pending_signal(
         .thread_local
         .sig_mask_saved()
         .take()
-        .map(|mask| RestoreSigMaskGuard { ctx, mask });
+        .map(|mask| RestoreSigMaskGuard::new(ctx, mask));
 
     let (signal, sig_action) = if let Some(dequeued_signal) = dequeue_pending_signal(ctx) {
         dequeued_signal
@@ -111,6 +114,7 @@ pub fn handle_pending_signal(
                     .set_instruction_pointer(user_ctx.instruction_pointer() - SYSCALL_INSTR_LEN);
             }
 
+            let mask_to_restore = restore_sig_mask.and_then(RestoreSigMaskGuard::into_mask);
             if let Err(e) = handle_user_signal(
                 ctx,
                 sig_num,
@@ -118,18 +122,20 @@ pub fn handle_pending_signal(
                 flags,
                 restorer_addr,
                 mask,
-                restore_sig_mask.map(RestoreSigMaskGuard::into_mask),
+                mask_to_restore,
                 user_ctx,
                 signal.to_info(),
             ) {
                 debug!("Failed to handle user signal: {:?}", e);
-                // If signal handling fails, the process should be terminated with SIGSEGV.
-                // Reference: <https://elixir.bootlin.com/linux/v6.13/source/kernel/signal.c#L3082>
-                //
-                // FIXME: Linux converts a signal-frame setup failure into a SIGSEGV delivery,
-                // instead of killing the process directly.
-                // This can be observed in LTP test `signal06`.
-                do_exit_group(TermStatus::Killed(SIGSEGV));
+                if sig_num == SIGSEGV {
+                    do_exit_group(TermStatus::Killed(SIGSEGV));
+                    return;
+                }
+
+                // Convert signal-frame setup failures into a SIGSEGV delivery instead of
+                // killing the process immediately. Linux does this via `force_sigsegv()`,
+                // which lets a user-installed SIGSEGV handler run if possible.
+                force_sigsegv(user_ctx, ctx, mask_to_restore);
             }
         }
         SigAction::Dfl { .. } if ctx.process.is_init_process() => {
@@ -159,28 +165,144 @@ pub fn handle_pending_signal(
     }
 }
 
+fn force_sigsegv(user_ctx: &mut UserContext, ctx: &Context, mask_to_restore: Option<SigMask>) {
+    let sig_action = {
+        let sig_dispositions = ctx.process.sig_dispositions().lock();
+        let mut sig_dispositions = sig_dispositions.lock();
+        let sig_action = sig_dispositions.get(SIGSEGV);
+
+        if let SigAction::User { flags, .. } = &sig_action
+            && flags.contains(SigActionFlags::SA_RESETHAND)
+        {
+            sig_dispositions.reset_user_handler(SIGSEGV);
+        }
+
+        sig_action
+    };
+
+    match sig_action {
+        SigAction::User {
+            handler_addr,
+            flags,
+            restorer_addr,
+            mask,
+        } => {
+            let sig_info = FaultSignal::new(SIGSEGV, SI_KERNEL, None).to_info();
+            if let Err(error) = handle_user_signal(
+                ctx,
+                SIGSEGV,
+                handler_addr,
+                flags,
+                restorer_addr,
+                mask,
+                mask_to_restore,
+                user_ctx,
+                sig_info,
+            ) {
+                debug!("Failed to force SIGSEGV handler: {:?}", error);
+                do_exit_group(TermStatus::Killed(SIGSEGV));
+            }
+        }
+        SigAction::Dfl { .. } | SigAction::Ign { .. } => {
+            do_exit_group(TermStatus::Killed(SIGSEGV));
+        }
+    }
+}
+
 /// A guard that restores the signal mask on drop.
 struct RestoreSigMaskGuard<'a> {
     ctx: &'a Context<'a>,
-    mask: SigMask,
+    mask: Option<SigMask>,
 }
 
-impl RestoreSigMaskGuard<'_> {
-    /// Forgets the guard and returns the signal mask to restore.
-    fn into_mask(self) -> SigMask {
-        let mask = self.mask;
-        // Assert that it's a `Copy` type. So we won't leak resources.
-        let _ = self.mask;
+impl<'a> RestoreSigMaskGuard<'a> {
+    fn new(ctx: &'a Context<'a>, mask: SigMask) -> Self {
+        Self {
+            ctx,
+            mask: Some(mask),
+        }
+    }
 
-        core::mem::forget(self);
+    /// Disarms the guard and returns the signal mask to restore, if any.
+    fn into_mask(mut self) -> Option<SigMask> {
+        self.mask.take()
+    }
 
-        mask
+    fn disarm(&mut self) {
+        self.mask = None;
     }
 }
 
 impl Drop for RestoreSigMaskGuard<'_> {
     fn drop(&mut self) {
-        self.ctx.set_sig_mask(self.mask);
+        let Some(mask) = self.mask else {
+            return;
+        };
+
+        self.ctx.set_sig_mask(mask);
+    }
+}
+
+struct RestoreAltStackGuard<'a> {
+    thread_local: &'a ThreadLocal,
+    stack: Option<SigStack>,
+}
+
+impl<'a> RestoreAltStackGuard<'a> {
+    fn new(thread_local: &'a ThreadLocal, stack: SigStack) -> Self {
+        Self {
+            thread_local,
+            stack: Some(stack),
+        }
+    }
+
+    fn disarm(&mut self) {
+        self.stack = None;
+    }
+}
+
+impl Drop for RestoreAltStackGuard<'_> {
+    fn drop(&mut self) {
+        let Some(stack) = self.stack.take() else {
+            return;
+        };
+
+        *self.thread_local.sig_stack().borrow_mut() = stack;
+    }
+}
+
+struct RestoreFpuContextGuard<'a> {
+    thread_local: &'a ThreadLocal,
+    context: Option<FpuContext>,
+}
+
+impl<'a> RestoreFpuContextGuard<'a> {
+    fn new(thread_local: &'a ThreadLocal, context: FpuContext) -> Self {
+        Self {
+            thread_local,
+            context: Some(context),
+        }
+    }
+
+    fn as_bytes(&self) -> &[u8] {
+        match self.context.as_ref() {
+            Some(context) => context.as_bytes(),
+            None => &[],
+        }
+    }
+
+    fn disarm(&mut self) {
+        self.context = None;
+    }
+}
+
+impl Drop for RestoreFpuContextGuard<'_> {
+    fn drop(&mut self) {
+        let Some(context) = self.context.take() else {
+            return;
+        };
+
+        self.thread_local.fpu().set_context(context);
     }
 }
 
@@ -252,6 +374,7 @@ pub fn handle_user_signal(
     let old_mask = ctx.posix_thread.sig_mask();
     let mask_to_restore = mask_to_restore.unwrap_or(old_mask);
     ctx.set_sig_mask(old_mask + mask);
+    let mut restore_sig_mask = RestoreSigMaskGuard::new(ctx, old_mask);
 
     // Set up the signal stack.
     let mut stack_pointer = if let Some(sp) =
@@ -282,16 +405,18 @@ pub fn handle_user_signal(
     // 2. Write `ucontext_t`.
 
     // Save the current signal stack information.
-    let uc_stack = {
+    let saved_sig_stack = {
         let mut sig_stack = ctx.thread_local.sig_stack().borrow_mut();
-        let stack = stack_t::from(&*sig_stack);
+        let saved_sig_stack = SigStack::new(sig_stack.base(), sig_stack.flags(), sig_stack.size());
 
         if sig_stack.flags().contains(SigStackFlags::SS_AUTODISARM) {
             sig_stack.reset();
         }
 
-        stack
+        saved_sig_stack
     };
+    let uc_stack = stack_t::from(&saved_sig_stack);
+    let mut restore_alt_stack = RestoreAltStackGuard::new(ctx.thread_local, saved_sig_stack);
 
     let mut ucontext = ucontext_t {
         uc_sigmask: mask_to_restore.into(),
@@ -304,7 +429,8 @@ pub fn handle_user_signal(
 
     // Clone and reset the FPU context.
     let fpu_context = ctx.thread_local.fpu().clone_context();
-    let fpu_context_bytes = fpu_context.as_bytes();
+    let mut restore_fpu_context = RestoreFpuContextGuard::new(ctx.thread_local, fpu_context);
+    let fpu_context_bytes = restore_fpu_context.as_bytes();
     ctx.thread_local.fpu().set_context(FpuContext::new());
 
     cfg_if::cfg_if! {
@@ -410,6 +536,10 @@ pub fn handle_user_signal(
             user_ctx.general_regs_mut().rflags &= !X86_RFLAGS_DF;
         }
     }
+
+    restore_sig_mask.disarm();
+    restore_alt_stack.disarm();
+    restore_fpu_context.disarm();
 
     Ok(())
 }
