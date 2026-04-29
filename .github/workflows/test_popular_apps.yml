@@ -54,7 +54,8 @@ jobs:
               { "name": "web-browsers", "disk_size": 8192 },
               { "name": "office-and-productivity", "disk_size": 8192 },
               { "name": "multimedia", "disk_size": 8192 },
-              { "name": "communication", "disk_size": 8192 }
+              { "name": "communication", "disk_size": 8192 },
+              { "name": "file-management-and-terminal", "disk_size": 8192 }
             ]
           PR_BASE_SHA: ${{ github.event.pull_request.base.sha }}
           PR_HEAD_SHA: ${{ github.event.pull_request.head.sha }}
