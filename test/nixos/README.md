@@ -64,6 +64,10 @@ fn file_operations_test(nixos_shell: &mut Session) -> Result<(), Error> {
 
 The `Session` type provides APIs for interacting with the VM. See the [Session API documentation](common/framework/src/session.rs) for details.
 
+### Documentation Maintenance
+
+If a test suite verifies applications that are documented in Asterinas Book, keep the test suite and the corresponding "Verified Usage" section in sync. Whenever you add, remove, or change covered behavior in `test/nixos/tests/<suite>/`, review the matching documentation under `book/src/distro/popular-applications` and update it if needed.
+
 ### Step 4: (Optional) Configure NixOS
 
 If your test requires additional packages or system configuration, edit `extra_config.nix`:

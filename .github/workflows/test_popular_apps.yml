@@ -1,0 +1,95 @@
+# Daily test for popular applications on AsterNixOS.
+#
+# This workflow runs basic tests for popular applications to ensure
+# compatibility with Asterinas NixOS. It executes daily at 16:00 UTC.
+name: Test Popular Applications
+
+on:
+  schedule:
+    # Schedule to run on every day at 16:00 UTC (00:00 Beijing Time)
+    - cron: '0 16 * * *'
+  workflow_dispatch:
+  pull_request:
+    paths:
+      - .github/workflows/test_popular_apps.yml
+      - distro/**
+      - tools/nixos/**
+      - book/src/distro/popular-applications/**
+      - test/nixos/tests/**
+  push:
+    branches:
+      - main
+    paths:
+      - .github/workflows/test_popular_apps.yml
+      - distro/**
+      - tools/nixos/**
+      - book/src/distro/popular-applications/**
+      - test/nixos/tests/**
+
+jobs:
+  select-test-matrix:
+    runs-on: ubuntu-latest
+    outputs:
+      run: ${{ steps.select.outputs.run }}
+      matrix: ${{ steps.select.outputs.matrix }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - name: Select popular application tests
+        id: select
+        env:
+          EVENT_NAME: ${{ github.event_name }}
+          TEST_MATRIX: >-
+            [
+              { "name": "system-core", "disk_size": 10240, "timeout_minutes": 45 }
+            ]
+          PR_BASE_SHA: ${{ github.event.pull_request.base.sha }}
+          PR_HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+          PUSH_BEFORE_SHA: ${{ github.event.before }}
+          PUSH_HEAD_SHA: ${{ github.sha }}
+        run: |
+          bash tools/github_workflows/select_matrix_items.sh \
+            --event-name "${EVENT_NAME}" \
+            --matrix-json "${TEST_MATRIX}" \
+            --pr-base-sha "${PR_BASE_SHA}" \
+            --pr-head-sha "${PR_HEAD_SHA}" \
+            --push-before-sha "${PUSH_BEFORE_SHA}" \
+            --push-head-sha "${PUSH_HEAD_SHA}" \
+            --always-run-on schedule \
+            --always-run-on workflow_dispatch \
+            --shared-file .github/workflows/test_popular_apps.yml \
+            --shared-prefix distro \
+            --shared-prefix tools/nixos \
+            --suite-prefix book/src/distro/popular-applications \
+            --suite-prefix test/nixos/tests
+
+  popular-apps-test:
+    name: Test ${{ matrix.test.name }}
+    needs: select-test-matrix
+    if: needs.select-test-matrix.outputs.run == 'true'
+    runs-on: ubuntu-latest
+    timeout-minutes: 75
+    strategy:
+      fail-fast: false
+      matrix:
+        test: ${{ fromJson(needs.select-test-matrix.outputs.matrix) }}
+
+    steps:
+      - uses: endersonmenezes/free-disk-space@v3
+        with:
+          rm_cmd: "rmz"
+          remove_android: true
+          remove_dotnet: true
+          remove_haskell: true
+          remove_tool_cache: true
+      - uses: actions/checkout@v4
+      - name: Run the ${{ matrix.test.name }} test on AsterNixOS
+        timeout-minutes: ${{ matrix.test.timeout_minutes || 30 }}
+        uses: maus007/docker-run-action-fork@v1
+        with:
+          image: asterinas/asterinas:0.17.1-20260319
+          options: --privileged -v /dev:/dev -v ${{ github.workspace }}:/root/asterinas
+          run: |
+            make nixos NIXOS_TEST_SUITE=${{ matrix.test.name }} NIXOS_DISK_SIZE_IN_MB=${{ matrix.test.disk_size }}
+            make run_nixos NIXOS_TEST_SUITE=${{ matrix.test.name }}
