@@ -43,7 +43,8 @@ jobs:
           TEST_MATRIX: >-
             [
               { "name": "system-core", "disk_size": 10240, "timeout_minutes": 45 },
-              { "name": "nix-and-nixos-tools", "disk_size": 8192 }
+              { "name": "nix-and-nixos-tools", "disk_size": 8192 },
+              { "name": "containerization-and-virtualization", "disk_size": 10240, "timeout_minutes": 45 }
             ]
           PR_BASE_SHA: ${{ github.event.pull_request.base.sha }}
           PR_HEAD_SHA: ${{ github.event.pull_request.head.sha }}

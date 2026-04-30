@@ -1,10 +1,14 @@
 // SPDX-License-Identifier: MPL-2.0
 
-//! The test suite for podman on Asterinas NixOS.
+//! The test suite for containerization and virtualization applications on Asterinas NixOS.
 
 use nixos_test_framework::*;
 
 nixos_test_main!();
+
+// ============================================================================
+// Podman
+// ============================================================================
 
 #[nixos_test]
 fn alpine_container_basic(nixos_shell: &mut Session) -> Result<(), Error> {
@@ -38,5 +42,19 @@ fn alpine_interactive_session(nixos_shell: &mut Session) -> Result<(), Error> {
         Ok(())
     })?;
 
+    Ok(())
+}
+
+// ============================================================================
+// Skopeo
+// ============================================================================
+
+#[nixos_test]
+fn skopeo(nixos_shell: &mut Session) -> Result<(), Error> {
+    nixos_shell.run_cmd_and_expect(
+        "skopeo inspect docker://docker.io/library/alpine:latest",
+        "Digest",
+    )?;
+    nixos_shell.run_cmd_and_expect("skopeo list-tags docker://docker.io/library/alpine", "Tags")?;
     Ok(())
 }
