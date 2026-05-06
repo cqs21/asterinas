@@ -8,6 +8,7 @@ set -e
 ./pty/open_ptmx
 ./pty/open_pty
 ./pty/pty_blocking
+./pty/pty_large_write
 ./pty/pty_packet_mode
 
 ./devtmpfs_mode

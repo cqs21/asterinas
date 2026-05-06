@@ -6,7 +6,7 @@ use ostd::task::Task;
 
 use super::{PtySlave, driver::PtyDriver};
 use crate::{
-    device::tty::TtyFlags,
+    device::tty::{TtyFlags, write_in_chunks},
     events::IoEvents,
     fs::{
         devpts::Ptmx,
@@ -122,18 +122,15 @@ impl InodeIo for PtyMaster {
         reader: &mut VmReader,
         status_flags: StatusFlags,
     ) -> Result<usize> {
-        let mut buf = vec![0u8; reader.remain().min(IO_CAPACITY)];
-        let write_len = reader.read_fallible(&mut buf.as_mut_slice().into())?;
-
-        // TODO: Add support for timeout.
         let is_nonblocking = status_flags.contains(StatusFlags::O_NONBLOCK);
-        let len = if is_nonblocking {
-            self.slave.push_input(&buf[..write_len])?
-        } else {
-            self.wait_events(IoEvents::OUT, None, || {
-                self.slave.push_input(&buf[..write_len])
-            })?
-        };
+        let len = write_in_chunks(reader, is_nonblocking, |chunk| {
+            // TODO: Add support for timeout.
+            if is_nonblocking {
+                self.slave.push_input(chunk)
+            } else {
+                self.wait_events(IoEvents::OUT, None, || self.slave.push_input(chunk))
+            }
+        })?;
         self.slave.driver().pollee().invalidate();
         Ok(len)
     }

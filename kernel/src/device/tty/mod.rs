@@ -41,6 +41,69 @@ pub(super) fn init_in_first_process() -> Result<()> {
 
 const IO_CAPACITY: usize = 4096;
 
+/// Writes data from `reader` in chunks.
+///
+/// Returns partial progress once some bytes have been written.
+pub(super) fn write_in_chunks<F>(
+    reader: &mut VmReader,
+    is_nonblocking: bool,
+    mut write_chunk_fn: F,
+) -> Result<usize>
+where
+    F: FnMut(&[u8]) -> Result<usize>,
+{
+    let mut buf = vec![0u8; reader.remain().min(IO_CAPACITY)];
+    let mut total_len = 0;
+
+    while reader.has_remain() {
+        let chunk_len = reader.remain().min(buf.len());
+        let mut chunk_writer = VmWriter::from(&mut buf[..chunk_len]).to_fallible();
+        let (read_len, has_read_error) = match reader.read_fallible(&mut chunk_writer) {
+            Ok(read_len) => {
+                assert!(read_len > 0, "VmReader::read_fallible made no progress");
+                (read_len, false)
+            }
+            Err((err, 0)) => {
+                if total_len > 0 {
+                    return Ok(total_len);
+                }
+                return Err(err.into());
+            }
+            Err((_, copied_len)) => (copied_len, true),
+        };
+
+        let mut written_len = 0;
+        while written_len < read_len {
+            match write_chunk_fn(&buf[written_len..read_len]) {
+                Ok(len) => {
+                    assert!(len > 0, "TTY chunk write made no progress");
+                    written_len += len;
+                    total_len += len;
+                }
+                Err(err) => {
+                    let should_return_partial = if is_nonblocking {
+                        err.error() == Errno::EAGAIN
+                    } else {
+                        err.error() == Errno::EINTR
+                    };
+
+                    if should_return_partial && total_len > 0 {
+                        return Ok(total_len);
+                    }
+
+                    return Err(err);
+                }
+            }
+        }
+
+        if has_read_error {
+            return Ok(total_len);
+        }
+    }
+
+    Ok(total_len)
+}
+
 /// A teletyper (TTY).
 ///
 /// This abstracts the general functionality of a TTY in a way that
@@ -206,18 +269,15 @@ impl<D: TtyDriver> Tty<D> {
             return_errno_with_message!(Errno::EIO, "the TTY is closed");
         }
 
-        let mut buf = vec![0u8; reader.remain().min(IO_CAPACITY)];
-        let write_len = reader.read_fallible(&mut buf.as_mut_slice().into())?;
-
-        // TODO: Add support for timeout.
         let is_nonblocking = status_flags.contains(StatusFlags::O_NONBLOCK);
-        let len = if is_nonblocking {
-            self.driver.push_output(&buf[..write_len])?
-        } else {
-            self.wait_events(IoEvents::OUT, None, || {
-                self.driver.push_output(&buf[..write_len])
-            })?
-        };
+        let len = write_in_chunks(reader, is_nonblocking, |chunk| {
+            // TODO: Add support for timeout.
+            if is_nonblocking {
+                self.driver.push_output(chunk)
+            } else {
+                self.wait_events(IoEvents::OUT, None, || self.driver.push_output(chunk))
+            }
+        })?;
         self.pollee.invalidate();
         Ok(len)
     }
