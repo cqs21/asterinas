@@ -26,17 +26,24 @@ pub fn sys_unlinkat(
     debug!("dirfd = {}, path = {:?}", dirfd, path_name);
 
     let path_name = path_name.to_string_lossy();
+    if path_name.starts_with('/') && path_name.trim_end_matches('/').is_empty() {
+        return_errno_with_message!(Errno::EISDIR, "unlink on root directory");
+    }
+
     let (dir_path, name) = {
-        let (parent_path_name, target_name) = path_name.split_dirname_and_filename()?;
-        let fs_path = FsPath::from_fd_at(dirfd, parent_path_name, EmptyPathStr::Reject)?;
-        (
-            ctx.thread_local
-                .borrow_fs()
-                .resolver()
-                .read()
-                .lookup(&fs_path)?,
-            target_name,
-        )
+        let fs_path = FsPath::from_fd_at(dirfd, &path_name, EmptyPathStr::Reject)?;
+        let fs_ref = ctx.thread_local.borrow_fs();
+        let path_resolver = fs_ref.resolver().read();
+
+        // Linux resolves the full unlink path before invoking the directory operation.
+        // This preserves path-walk errors for trailing slash and dot components, such as
+        // `file/`, `file/.`, and `file/..`, which should fail with `ENOTDIR` instead of
+        // being reduced to unlinking the parent directory entry.
+        path_resolver.lookup_unresolved_no_follow(&fs_path)?;
+
+        let (parent_path_name, target_name) = path_name.split_dirname_and_basename()?;
+        let parent_fs_path = FsPath::from_fd_at(dirfd, parent_path_name, EmptyPathStr::Reject)?;
+        (path_resolver.lookup(&parent_fs_path)?, target_name)
     };
 
     dir_path.unlink(name)?;

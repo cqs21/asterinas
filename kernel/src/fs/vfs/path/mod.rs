@@ -27,7 +27,7 @@ use crate::{
         },
     },
     prelude::*,
-    process::{Gid, Uid},
+    process::{Gid, Uid, credentials::capabilities::CapSet, posix_thread::AsPosixThread},
 };
 
 mod dentry;
@@ -62,13 +62,7 @@ impl Path {
 
     /// Creates a new `Path` to represent the child directory of a file system.
     pub fn new_fs_child(&self, name: &str, type_: InodeType, mode: InodeMode) -> Result<Self> {
-        if self
-            .inode()
-            .check_permission(Permission::MAY_WRITE)
-            .is_err()
-        {
-            return_errno!(Errno::EACCES);
-        }
+        self.check_dir_entry_modify_permission()?;
         let new_child_dentry = self
             .dentry
             .as_dir_dentry_or_err()?
@@ -86,13 +80,7 @@ impl Path {
         mode: InodeMode,
         hard_linkability: HardLinkability,
     ) -> Result<Self> {
-        if self
-            .inode()
-            .check_permission(Permission::MAY_WRITE)
-            .is_err()
-        {
-            return_errno!(Errno::EACCES);
-        }
+        self.check_dir_entry_modify_permission()?;
         let tmp_inode = self.inode().create_tmpfile(mode, hard_linkability)?;
         let tmp_dentry = Dentry::new_anonymous(tmp_inode, self.dentry.clone());
         Ok(Self::new(self.mount.clone(), tmp_dentry))
@@ -265,6 +253,50 @@ impl Path {
 
     fn this(&self) -> Self {
         self.clone()
+    }
+
+    /// Checks whether a directory entry may be modified in this directory.
+    fn check_dir_entry_modify_permission(&self) -> Result<()> {
+        if self.mount.flags().contains(PerMountFlags::RDONLY)
+            || self.fs().flags().contains(FsFlags::RDONLY)
+        {
+            return_errno_with_message!(
+                Errno::EROFS,
+                "a directory entry cannot be modified on a read-only mount or filesystem"
+            );
+        }
+
+        self.inode()
+            .check_permission(Permission::MAY_WRITE | Permission::MAY_EXEC)
+    }
+
+    /// Checks whether an inode may be used as the source of a hard link.
+    fn check_hardlink_source(inode: &Arc<dyn Inode>) -> Result<()> {
+        let Some(creds) = current_thread!()
+            .as_posix_thread()
+            .map(|thread| thread.credentials())
+        else {
+            return Ok(());
+        };
+
+        let metadata = inode.metadata();
+
+        if metadata.uid == creds.fsuid() || creds.effective_capset().contains(CapSet::FOWNER) {
+            return Ok(());
+        }
+
+        let mode = metadata.mode;
+        if metadata.type_.is_regular_file()
+            && !mode.has_set_uid()
+            && !(mode.has_set_gid() && mode.is_group_executable())
+            && inode
+                .check_permission(Permission::MAY_READ | Permission::MAY_WRITE)
+                .is_ok()
+        {
+            return Ok(());
+        }
+
+        return_errno_with_message!(Errno::EPERM, "hard link source is not permitted");
     }
 }
 
@@ -522,6 +554,7 @@ impl Path {
 
     /// Creates a `Path` by making an inode of the `type_` with the `mode`.
     pub fn mknod(&self, name: &str, mode: InodeMode, type_: MknodType) -> Result<Self> {
+        self.check_dir_entry_modify_permission()?;
         let inner = self
             .dentry
             .as_dir_dentry_or_err()?
@@ -535,16 +568,20 @@ impl Path {
             return_errno_with_message!(Errno::EXDEV, "the operation cannot cross mounts");
         }
 
+        Self::check_hardlink_source(old.inode())?;
+        self.check_dir_entry_modify_permission()?;
         self.dentry.as_dir_dentry_or_err()?.link(old.inode(), name)
     }
 
     /// Unlinks a name from the `Path`.
     pub fn unlink(&self, name: &str) -> Result<()> {
+        self.check_dir_entry_modify_permission()?;
         self.dentry.as_dir_dentry_or_err()?.unlink(name)
     }
 
     /// Removes a directory by `rmdir()` the inner inode.
     pub fn rmdir(&self, name: &str) -> Result<()> {
+        self.check_dir_entry_modify_permission()?;
         self.dentry.as_dir_dentry_or_err()?.rmdir(name)
     }
 
@@ -552,6 +589,11 @@ impl Path {
     pub fn rename(&self, old_name: &str, new_dir: &Self, new_name: &str) -> Result<()> {
         if !Arc::ptr_eq(&self.mount, &new_dir.mount) {
             return_errno_with_message!(Errno::EXDEV, "the operation cannot cross mounts");
+        }
+
+        self.check_dir_entry_modify_permission()?;
+        if !Arc::ptr_eq(&self.dentry, &new_dir.dentry) {
+            new_dir.check_dir_entry_modify_permission()?;
         }
 
         DirDentry::rename(&self.dentry, old_name, &new_dir.dentry, new_name)
