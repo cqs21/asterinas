@@ -1,0 +1,134 @@
+diff --git a/Cargo.lock b/Cargo.lock
+index d7261e73e..f36e80e10 100644
+--- a/Cargo.lock
++++ b/Cargo.lock
+@@ -221,7 +221,6 @@ dependencies = [
+  "jhash",
+  "keyable-arc",
+  "lending-iterator",
+- "libflate",
+  "logo-ascii-art",
+  "loongArch64",
+  "lru",
+@@ -245,6 +244,7 @@ dependencies = [
+  "xarray",
+  "xmas-elf",
+  "zerocopy",
++ "zune-inflate",
+ ]
+ 
+ [[package]]
+@@ -2252,3 +2252,9 @@ dependencies = [
+  "quote",
+  "syn 2.0.101",
+ ]
++
++[[package]]
++name = "zune-inflate"
++version = "0.2.54"
++source = "registry+https://github.com/rust-lang/crates.io-index"
++checksum = "73ab332fe2f6680068f3582b16a24f90ad7096d5d39b974d1c0aff0125116f02"
+diff --git a/Cargo.toml b/Cargo.toml
+index 17c98408d..b0628dd6e 100644
+--- a/Cargo.toml
++++ b/Cargo.toml
+@@ -247,6 +247,7 @@ rand = { version = "0.9.2", default-features = false }
+ spin = "0.9.4"
+ x86_64 = "0.14.13"
+ xmas-elf = "0.10.0"
++zune-inflate = { version = "0.2", default-features = false, features = ["gzip"] }
+ # Note: when updating the zerocopy version, 
+ # also update it in `ostd/libs/ostd-pod/README.md`.
+ zerocopy = { version = "0.8.34", features = [ "derive" ] }
+diff --git a/kernel/Cargo.toml b/kernel/Cargo.toml
+index d15ebd1a9..1f2fbc07c 100644
+--- a/kernel/Cargo.toml
++++ b/kernel/Cargo.toml
+@@ -46,7 +46,7 @@ io-util.workspace = true
+ jhash.workspace = true
+ keyable-arc.workspace = true
+ lending-iterator.workspace = true
+-libflate.workspace = true
++zune-inflate.workspace = true
+ logo-ascii-art.workspace = true
+ lru.workspace = true
+ no_std_io2.workspace = true
+diff --git a/kernel/src/fs/rootfs.rs b/kernel/src/fs/rootfs.rs
+index bc03e535c..a5eaf71aa 100644
+--- a/kernel/src/fs/rootfs.rs
++++ b/kernel/src/fs/rootfs.rs
+@@ -3,9 +3,9 @@
+ use cpio_decoder::{CpioDecoder, CpioEntry, FileMetadata, FileType};
+ use device_id::{DeviceId, MajorId, MinorId};
+ use lending_iterator::LendingIterator;
+-use libflate::gzip::Decoder as GZipDecoder;
+ use no_std_io2::io::{Cursor, Read};
+ use ostd::boot::boot_info;
++use zune_inflate::DeflateDecoder;
+ 
+ use super::{
+     file::{InodeMode, InodeType},
+@@ -13,22 +13,9 @@ use super::{
+ };
+ use crate::{fs::vfs::inode::MknodType, prelude::*};
+ 
+-struct BoxedReader<'a>(Box<dyn Read + 'a>);
+-
+-impl<'a> BoxedReader<'a> {
+-    pub fn new(reader: Box<dyn Read + 'a>) -> Self {
+-        BoxedReader(reader)
+-    }
+-}
+-
+-impl Read for BoxedReader<'_> {
+-    fn read(&mut self, buf: &mut [u8]) -> no_std_io2::io::Result<usize> {
+-        self.0.read(buf)
+-    }
+-}
+-
+ /// Unpack and prepare the rootfs from the initramfs CPIO buffer.
+ pub fn init_in_first_kthread(path_resolver: &PathResolver) -> Result<()> {
++    ostd::error!("init_in_first_kthread start");
+     let initramfs_buf = boot_info()
+         .initramfs
+         .ok_or_else(|| Error::with_message(Errno::EINVAL, "no initramfs found"))?;
+@@ -36,16 +23,18 @@ pub fn init_in_first_kthread(path_resolver: &PathResolver) -> Result<()> {
+     let (reader, suffix) = match &initramfs_buf[..4] {
+         // Gzip magic number: 0x1F 0x8B
+         &[0x1F, 0x8B, _, _] => {
+-            let gzip_decoder = GZipDecoder::new(initramfs_buf)
+-                .map_err(|_| Error::with_message(Errno::EINVAL, "invalid gzip buffer"))?;
+-            (BoxedReader::new(Box::new(gzip_decoder)), ".gz")
++            let decompressed = DeflateDecoder::new(initramfs_buf)
++                .decode_gzip()
++                .map_err(|_| Error::with_message(Errno::EINVAL, "gzip decompression failed"))?;
++            (decompressed, ".gz")
+         }
+-        _ => (BoxedReader::new(Box::new(Cursor::new(initramfs_buf))), ""),
++        _ => (initramfs_buf.to_vec(), ""),
+     };
+ 
+     println!("[kernel] unpacking initramfs.cpio{} to rootfs ...", suffix);
+ 
+-    let mut decoder = CpioDecoder::new(reader);
++    // let mut decoder = CpioDecoder::new(reader);
++    let mut decoder = CpioDecoder::new(Cursor::new(reader));
+ 
+     while let Some(entry_result) = decoder.next() {
+         let mut entry = entry_result?;
+@@ -54,12 +43,12 @@ pub fn init_in_first_kthread(path_resolver: &PathResolver) -> Result<()> {
+         }
+     }
+ 
+-    println!("[kernel] rootfs is ready");
++    ostd::error!("[kernel] rootfs is ready");
+     Ok(())
+ }
+ 
+-fn try_append_entry_to_rootfs(
+-    entry: &mut CpioEntry<BoxedReader>,
++fn try_append_entry_to_rootfs<R: Read>(
++    entry: &mut CpioEntry<R>,
+     path_resolver: &PathResolver,
+ ) -> Result<()> {
+     // Make sure the name is a relative path, and is not end with "/".

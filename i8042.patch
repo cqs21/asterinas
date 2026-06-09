@@ -1,0 +1,114 @@
+diff --git a/kernel/comps/i8042/src/controller.rs b/kernel/comps/i8042/src/controller.rs
+index 3c4e72a45..3467772c5 100644
+--- a/kernel/comps/i8042/src/controller.rs
++++ b/kernel/comps/i8042/src/controller.rs
+@@ -43,17 +43,17 @@ pub(super) fn init() -> Result<(), I8042ControllerError> {
+     );
+     controller.write_configuration(&config)?;
+ 
+-    // Perform controller self-test.
+-    controller.wait_and_send_command(Command::TestController)?;
+-    let result = controller.wait_and_recv_data()?;
+-    if result != SELF_TEST_OK {
+-        // Any value other than `SELF_TEST_OK` indicates a self-test fail.
+-        return Err(I8042ControllerError::ControllerTestFailed);
+-    }
+-    // The self-test may reset the controller. Restore the original configuration.
+-    controller.write_configuration(&config)?;
+-    // The ports may have been enabled if the controller was reset. Flush the output buffer.
+-    controller.flush_output_buffer();
++    // // Perform controller self-test.
++    // controller.wait_and_send_command(Command::TestController)?;
++    // let result = controller.wait_and_recv_data()?;
++    // if result != SELF_TEST_OK {
++    //     // Any value other than `SELF_TEST_OK` indicates a self-test fail.
++    //     return Err(I8042ControllerError::ControllerTestFailed);
++    // }
++    // // The self-test may reset the controller. Restore the original configuration.
++    // controller.write_configuration(&config)?;
++    // // The ports may have been enabled if the controller was reset. Flush the output buffer.
++    // controller.flush_output_buffer();
+ 
+     // Determine if there are two channels.
+     controller.wait_and_send_command(Command::EnableSecondPort)?;
+@@ -65,21 +65,21 @@ pub(super) fn init() -> Result<(), I8042ControllerError> {
+     // Flush the output buffer again since we may have enabled the second port.
+     controller.flush_output_buffer();
+ 
+-    // Perform interface tests to the first PS/2 port.
+-    controller.wait_and_send_command(Command::TestFirstPort)?;
+-    let result = controller.wait_and_recv_data()?;
+-    if result != PORT_TEST_OK {
+-        return Err(I8042ControllerError::FirstPortTestFailed);
+-    }
+-
+-    // Perform interface tests to the second PS/2 port (if it exists).
+-    if has_second_port {
+-        controller.wait_and_send_command(Command::TestSecondPort)?;
+-        let result = controller.wait_and_recv_data()?;
+-        if result != PORT_TEST_OK {
+-            return Err(I8042ControllerError::SecondPortTestFailed);
+-        }
+-    }
++    // // Perform interface tests to the first PS/2 port.
++    // controller.wait_and_send_command(Command::TestFirstPort)?;
++    // let result = controller.wait_and_recv_data()?;
++    // if result != PORT_TEST_OK {
++    //     return Err(I8042ControllerError::FirstPortTestFailed);
++    // }
++
++    // // Perform interface tests to the second PS/2 port (if it exists).
++    // if has_second_port {
++    //     controller.wait_and_send_command(Command::TestSecondPort)?;
++    //     let result = controller.wait_and_recv_data()?;
++    //     if result != PORT_TEST_OK {
++    //         return Err(I8042ControllerError::SecondPortTestFailed);
++    //     }
++    // }
+ 
+     // Enable the first PS/2 port (keyboard).
+     controller.wait_and_send_command(Command::EnableFirstPort)?;
+diff --git a/kernel/comps/i8042/src/ps2.rs b/kernel/comps/i8042/src/ps2.rs
+index 6e3d6dc98..586204350 100644
+--- a/kernel/comps/i8042/src/ps2.rs
++++ b/kernel/comps/i8042/src/ps2.rs
+@@ -44,22 +44,23 @@ pub(super) trait CommandCtx {
+     fn write_to_port(&mut self, data: u8) -> Result<(), I8042ControllerError>;
+ 
+     fn reset(&mut self) -> Result<Option<u8>, I8042ControllerError> {
+-        // Reset the device by sending `PS2_CMD_RESET` (reset command, supported by all PS/2
+-        // devices).
+-        self.write_to_port(PS2_CMD_RESET)?;
+-
+-        let controller = self.controller();
+-
+-        // The response should be `PS2_ACK` and `PS2_BAT_OK`, followed by the device PS/2 ID.
+-        if controller.wait_for_specific_data(PS2_RESULTS)? != PS2_ACK {
+-            return Err(I8042ControllerError::DeviceResetFailed);
+-        }
+-        // The reset command may take some time to finish. So we use `wait_long_and_recv_data`.
+-        if controller.wait_long_and_recv_data()? != PS2_BAT_OK {
+-            return Err(I8042ControllerError::DeviceResetFailed);
+-        }
+-        // Some keyboards won't reply its device ID. So we don't report any error here.
+-        Ok(controller.wait_and_recv_data().ok())
++        // // Reset the device by sending `PS2_CMD_RESET` (reset command, supported by all PS/2
++        // // devices).
++        // self.write_to_port(PS2_CMD_RESET)?;
++
++        // let controller = self.controller();
++
++        // // The response should be `PS2_ACK` and `PS2_BAT_OK`, followed by the device PS/2 ID.
++        // if controller.wait_for_specific_data(PS2_RESULTS)? != PS2_ACK {
++        //     return Err(I8042ControllerError::DeviceResetFailed);
++        // }
++        // // The reset command may take some time to finish. So we use `wait_long_and_recv_data`.
++        // if controller.wait_long_and_recv_data()? != PS2_BAT_OK {
++        //     return Err(I8042ControllerError::DeviceResetFailed);
++        // }
++        // // Some keyboards won't reply its device ID. So we don't report any error here.
++        // Ok(controller.wait_and_recv_data().ok())
++        Ok(None)
+     }
+ 
+     fn command<C: Command>(

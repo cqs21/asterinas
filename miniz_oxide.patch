@@ -1,0 +1,204 @@
+diff --git a/Cargo.lock b/Cargo.lock
+index d7261e73e..bb30983b5 100644
+--- a/Cargo.lock
++++ b/Cargo.lock
+@@ -13,6 +13,12 @@ dependencies = [
+  "log",
+ ]
+ 
++[[package]]
++name = "adler2"
++version = "2.0.1"
++source = "registry+https://github.com/rust-lang/crates.io-index"
++checksum = "320119579fcad9c21884f5c4861d16174d0e06250625266f50fe6898340abefa"
++
+ [[package]]
+ name = "adler32"
+ version = "1.2.0"
+@@ -221,10 +227,10 @@ dependencies = [
+  "jhash",
+  "keyable-arc",
+  "lending-iterator",
+- "libflate",
+  "logo-ascii-art",
+  "loongArch64",
+  "lru",
++ "miniz_oxide",
+  "no_std_io2",
+  "osdk-frame-allocator",
+  "osdk-heap-allocator",
+@@ -1245,6 +1251,15 @@ dependencies = [
+  "walkdir",
+ ]
+ 
++[[package]]
++name = "miniz_oxide"
++version = "0.9.1"
++source = "registry+https://github.com/rust-lang/crates.io-index"
++checksum = "b63fbc4a50860e98e7b2aa7804ded1db5cbc3aff9193adaff57a6931bf7c4b4c"
++dependencies = [
++ "adler2",
++]
++
+ [[package]]
+ name = "multiboot2"
+ version = "0.24.0"
+diff --git a/Cargo.toml b/Cargo.toml
+index 17c98408d..ce45ef08f 100644
+--- a/Cargo.toml
++++ b/Cargo.toml
+@@ -242,6 +242,7 @@ inherit-methods-macro = { git = "https://github.com/asterinas/inherit-methods-ma
+ intrusive-collections = { version = "0.9.6", features = ["nightly"] }
+ libflate = { version = "2.3.0", default-features = false }
+ log = "0.4"
++miniz_oxide = { version = "0.9", default-features = false, features = ["with-alloc"] }
+ no_std_io2 = { version = "0.9.3", default-features = false, features = ["alloc", "nightly"] }
+ rand = { version = "0.9.2", default-features = false }
+ spin = "0.9.4"
+diff --git a/kernel/Cargo.toml b/kernel/Cargo.toml
+index d15ebd1a9..0999672e8 100644
+--- a/kernel/Cargo.toml
++++ b/kernel/Cargo.toml
+@@ -46,7 +46,7 @@ io-util.workspace = true
+ jhash.workspace = true
+ keyable-arc.workspace = true
+ lending-iterator.workspace = true
+-libflate.workspace = true
++miniz_oxide.workspace = true
+ logo-ascii-art.workspace = true
+ lru.workspace = true
+ no_std_io2.workspace = true
+diff --git a/kernel/src/fs/rootfs.rs b/kernel/src/fs/rootfs.rs
+index bc03e535c..06ef0b658 100644
+--- a/kernel/src/fs/rootfs.rs
++++ b/kernel/src/fs/rootfs.rs
+@@ -3,7 +3,7 @@
+ use cpio_decoder::{CpioDecoder, CpioEntry, FileMetadata, FileType};
+ use device_id::{DeviceId, MajorId, MinorId};
+ use lending_iterator::LendingIterator;
+-use libflate::gzip::Decoder as GZipDecoder;
++use miniz_oxide::{DataFormat, MZFlush, MZStatus, inflate::stream::InflateState};
+ use no_std_io2::io::{Cursor, Read};
+ use ostd::boot::boot_info;
+ 
+@@ -27,8 +27,98 @@ impl Read for BoxedReader<'_> {
+     }
+ }
+ 
++/// Streaming gzip decompressor backed by `miniz_oxide`.
++struct GzipReader<'a> {
++    input: &'a [u8],
++    state: Box<InflateState>,
++    finished: bool,
++}
++
++impl<'a> GzipReader<'a> {
++    fn new(buf: &'a [u8]) -> core::result::Result<Self, &'static str> {
++        let offset = Self::skip_gzip_header(buf)?;
++        Ok(Self {
++            input: &buf[offset..],
++            state: InflateState::new_boxed(DataFormat::Raw),
++            finished: false,
++        })
++    }
++
++    /// Parses and skips the gzip header, returning the byte offset of the
++    /// deflate stream.
++    fn skip_gzip_header(buf: &[u8]) -> core::result::Result<usize, &'static str> {
++        if buf.len() < 10 || buf[0] != 0x1F || buf[1] != 0x8B {
++            return Err("not a gzip stream");
++        }
++        if buf[2] != 8 {
++            return Err("unsupported compression method");
++        }
++
++        let flags = buf[3];
++        let mut pos = 10;
++
++        // FEXTRA
++        if flags & 0x04 != 0 {
++            if pos + 2 > buf.len() {
++                return Err("truncated gzip header (FEXTRA length)");
++            }
++            let xlen = u16::from_le_bytes([buf[pos], buf[pos + 1]]) as usize;
++            pos += 2 + xlen;
++        }
++        // FNAME
++        if flags & 0x08 != 0 {
++            while pos < buf.len() && buf[pos] != 0 {
++                pos += 1;
++            }
++            pos += 1; // skip null terminator
++        }
++        // FCOMMENT
++        if flags & 0x10 != 0 {
++            while pos < buf.len() && buf[pos] != 0 {
++                pos += 1;
++            }
++            pos += 1;
++        }
++        // FHCRC
++        if flags & 0x02 != 0 {
++            pos += 2;
++        }
++
++        if pos > buf.len() {
++            return Err("truncated gzip header");
++        }
++        Ok(pos)
++    }
++}
++
++impl Read for GzipReader<'_> {
++    fn read(&mut self, buf: &mut [u8]) -> no_std_io2::io::Result<usize> {
++        if self.finished || buf.is_empty() {
++            return Ok(0);
++        }
++
++        let result =
++            miniz_oxide::inflate::stream::inflate(&mut self.state, self.input, buf, MZFlush::None);
++
++        self.input = &self.input[result.bytes_consumed..];
++
++        match result.status {
++            Ok(MZStatus::Ok) => Ok(result.bytes_written),
++            Ok(MZStatus::StreamEnd) => {
++                self.finished = true;
++                Ok(result.bytes_written)
++            }
++            _ => Err(no_std_io2::io::Error::new(
++                no_std_io2::io::ErrorKind::InvalidData,
++                "gzip decompression error",
++            )),
++        }
++    }
++}
++
+ /// Unpack and prepare the rootfs from the initramfs CPIO buffer.
+ pub fn init_in_first_kthread(path_resolver: &PathResolver) -> Result<()> {
++    ostd::error!("init_in_first_kthread start");
+     let initramfs_buf = boot_info()
+         .initramfs
+         .ok_or_else(|| Error::with_message(Errno::EINVAL, "no initramfs found"))?;
+@@ -36,9 +126,9 @@ pub fn init_in_first_kthread(path_resolver: &PathResolver) -> Result<()> {
+     let (reader, suffix) = match &initramfs_buf[..4] {
+         // Gzip magic number: 0x1F 0x8B
+         &[0x1F, 0x8B, _, _] => {
+-            let gzip_decoder = GZipDecoder::new(initramfs_buf)
+-                .map_err(|_| Error::with_message(Errno::EINVAL, "invalid gzip buffer"))?;
+-            (BoxedReader::new(Box::new(gzip_decoder)), ".gz")
++            let gzip_reader = GzipReader::new(initramfs_buf)
++                .map_err(|msg| Error::with_message(Errno::EINVAL, msg))?;
++            (BoxedReader::new(Box::new(gzip_reader)), ".gz")
+         }
+         _ => (BoxedReader::new(Box::new(Cursor::new(initramfs_buf))), ""),
+     };
+@@ -54,7 +144,7 @@ pub fn init_in_first_kthread(path_resolver: &PathResolver) -> Result<()> {
+         }
+     }
+ 
+-    println!("[kernel] rootfs is ready");
++    ostd::error!("[kernel] rootfs is ready");
+     Ok(())
+ }
+ 
