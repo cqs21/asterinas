@@ -1,10 +1,15 @@
-{ config, lib, pkgs, ... }:
+{
+  config,
+  lib,
+  pkgs,
+  ...
+}:
 
 {
   systemd.package = pkgs.aster_systemd;
 
-  # TODO: The following services currently do not work and 
-  # may affect systemd startup or cause performance issues. 
+  # TODO: The following services currently do not work and
+  # may affect systemd startup or cause performance issues.
   # Enable them after they can run successfully.
   systemd.coredump.enable = false;
   systemd.oomd.enable = false;

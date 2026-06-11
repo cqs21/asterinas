@@ -13,8 +13,8 @@ ARG DEBIAN_FRONTEND=noninteractive
 # FIXME: Installing Nix as root is not supported in single-user mode.
 RUN sh <(curl -L https://nixos.org/nix/install) --daemon --yes \
     && . /etc/profile.d/nix.sh \
-    && nix-channel --add https://github.com/NixOS/nixpkgs/archive/c0bebd16e69e631ac6e52d6eb439daba28ac50cd.tar.gz nixpkgs \
-    && nix-channel --add https://github.com/NixOS/nixpkgs/archive/c0bebd16e69e631ac6e52d6eb439daba28ac50cd.tar.gz nixos \
+    && nix-channel --add https://github.com/NixOS/nixpkgs/archive/8c50a710ddca43d7a530fb805ad55bde8d0141c5.tar.gz nixpkgs \
+    && nix-channel --add https://github.com/NixOS/nixpkgs/archive/8c50a710ddca43d7a530fb805ad55bde8d0141c5.tar.gz nixos \
     && nix-channel --update \
     && nix-env -iA nixpkgs.nixfmt \
     && nix-env -iA nixpkgs.nixos-install-tools \

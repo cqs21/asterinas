@@ -1,6 +1,8 @@
 { pkgs, ... }:
-let py3 = pkgs.python312;
-in {
+let
+  py3 = pkgs.python312;
+in
+{
   environment.systemPackages = [ py3 ];
   # Make the exact matching source tree available without a download.
   system.activationScripts.testFixtures = ''

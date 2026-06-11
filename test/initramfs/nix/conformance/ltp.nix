@@ -1,12 +1,16 @@
-{ stdenv, fetchFromGitHub, hostPlatform, pkgsBuildBuild, }:
+{
+  stdenv,
+  fetchFromGitHub,
+  pkgsBuildBuild,
+}:
 stdenv.mkDerivation rec {
   pname = "ltp";
-  version = "20250930";
+  version = "20260529";
   src = fetchFromGitHub {
     owner = "linux-test-project";
     repo = "ltp";
     rev = "${version}";
-    hash = "sha256-vmsC4QRM4U1MoRjLbRsodX4jAolWeifaP9zetwIbWl4";
+    hash = "sha256-h4cIK0sDbyGiGwvba3jkJ+W28oNzvQAfGu1RbGAFljA";
   };
 
   # Clear `CFLAGS` and `DEBUG_CFLAGS` to prevent `-g` from being automatically added.
@@ -26,7 +30,7 @@ stdenv.mkDerivation rec {
     runHook preConfigure
 
     make autotools
-    ./configure --host ${hostPlatform.system} --prefix=$out
+    ./configure --host ${stdenv.hostPlatform.system} --prefix=$out
 
     runHook postConfigure
   '';
