@@ -1,4 +1,4 @@
-{ lib, stdenvNoCC, callPackage, hostPlatform, pkgsHostTarget, }: rec {
+{ lib, stdenv, stdenvNoCC, callPackage, pkgsHostTarget, }: rec {
   # Use `--esx` flag to enable `CONFIG_NO_SHM` and disable `CONFIG_HAVE_TIMERFD_CREATE`.
   fio = pkgsHostTarget.fio.overrideAttrs (_: { configureFlags = [ "--esx" ]; });
   hackbench = callPackage ./hackbench.nix { };
@@ -12,7 +12,8 @@
     };
   schbench = callPackage ./schbench.nix { };
   sqlite-speedtest1 = callPackage ./sqlite-speedtest1.nix { };
-  sysbench = if hostPlatform.isx86_64 then pkgsHostTarget.sysbench else null;
+  sysbench =
+    if stdenv.hostPlatform.isx86_64 then pkgsHostTarget.sysbench else null;
 
   package = stdenvNoCC.mkDerivation {
     pname = "benchmark";

@@ -87,6 +87,9 @@ enum MadviseBehavior {
     MADV_POPULATE_WRITE = 23, /* populate (prefault) page tables writable */
 
     MADV_DONTNEED_LOCKED = 24, /* like DONTNEED, but drop locked pages too */
+
+    MADV_GUARD_INSTALL = 102, /* install memory access guard for the range */
+    MADV_GUARD_REMOVE = 103,  /* remove memory access guard for the range */
 }
 
 /// Madvise that a dummy implementation is also correct.
@@ -107,4 +110,6 @@ const DUMMY_MADVISE: &[MadviseBehavior] = &[
     MadviseBehavior::MADV_UNMERGEABLE,
     MadviseBehavior::MADV_HUGEPAGE,
     MadviseBehavior::MADV_NOHUGEPAGE,
+    MadviseBehavior::MADV_GUARD_INSTALL,
+    MadviseBehavior::MADV_GUARD_REMOVE,
 ];

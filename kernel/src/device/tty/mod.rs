@@ -267,6 +267,41 @@ impl<D: TtyDriver> Tty<D> {
 
                 self.pollee.invalidate();
             }
+            cmd @ GetTermios2 => {
+                let termios2 = termio::CTermios2::from_termios(self.ldisc.lock().termios());
+
+                cmd.write(&termios2)?;
+            }
+            cmd @ SetTermios2 => {
+                let termios2 = cmd.read()?;
+                let termios = termios2.termios;
+
+                let mut ldisc = self.ldisc.lock();
+                let old_termios = ldisc.termios();
+                self.driver().on_termios_change(old_termios, &termios);
+                ldisc.set_termios(termios);
+            }
+            cmd @ SetTermios2Wait => {
+                let termios2 = cmd.read()?;
+                let termios = termios2.termios;
+
+                let mut ldisc = self.ldisc.lock();
+                let old_termios = ldisc.termios();
+                self.driver().on_termios_change(old_termios, &termios);
+                ldisc.set_termios(termios);
+            }
+            cmd @ SetTermios2Flush => {
+                let termios2 = cmd.read()?;
+                let termios = termios2.termios;
+
+                let mut ldisc = self.ldisc.lock();
+                let old_termios = ldisc.termios();
+                self.driver().on_termios_change(old_termios, &termios);
+                ldisc.set_termios(termios);
+                ldisc.drain_input();
+
+                self.pollee.invalidate();
+            }
             cmd @ GetWinSize => {
                 let winsize = self.ldisc.lock().window_size();
 

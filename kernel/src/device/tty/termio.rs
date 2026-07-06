@@ -303,6 +303,27 @@ impl CTermios {
     }
 }
 
+/// `struct termios2` in Linux. Extends `CTermios` with explicit input/output baud rates.
+///
+/// Reference: <https://elixir.bootlin.com/linux/v6.18/source/include/uapi/asm-generic/termbits.h#L44>.
+#[repr(C)]
+#[derive(Clone, Copy, Debug, Pod)]
+pub struct CTermios2 {
+    pub termios: CTermios,
+    pub c_ispeed: u32,
+    pub c_ospeed: u32,
+}
+
+impl CTermios2 {
+    pub fn from_termios(termios: &CTermios) -> Self {
+        Self {
+            termios: *termios,
+            c_ispeed: 0,
+            c_ospeed: 0,
+        }
+    }
+}
+
 /// A window size; `struct winsize` in Linux.
 ///
 /// Reference: <https://elixir.bootlin.com/linux/v6.0.9/source/include/uapi/asm-generic/termios.h#L15>.

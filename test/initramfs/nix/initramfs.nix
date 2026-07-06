@@ -1,5 +1,5 @@
-{ lib, pkgs, stdenvNoCC, fetchFromGitHub, hostPlatform, writeClosure, busybox
-, benchmark, conformance, regression, dnsServer, }:
+{ lib, pkgs, stdenvNoCC, fetchFromGitHub, writeClosure, busybox, benchmark
+, conformance, regression, dnsServer, }:
 let
   boot_hello = builtins.path { path = ./../src/boot_hello.sh; };
   init = builtins.path { path = ./../src/init; };
