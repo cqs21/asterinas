@@ -2,13 +2,10 @@ name: "Benchmark x86-64  "
 on:
   # In case of manual trigger, use workflow_dispatch
   workflow_dispatch:
-  schedule:
-    # Schedule to run on every day at 17:00 UTC (01:00 Beijing Time)
-    - cron: '0 17 * * *'
 
 jobs:
   Benchmarks:
-    runs-on: self-hosted
+    runs-on: [self-hosted, x86]
     strategy:
       matrix:
         benchmarks: 
@@ -118,18 +115,3 @@ jobs:
           task: benchmark
           platform: x86-64
           benchmark: ${{ matrix.benchmarks }}
-
-  Results:
-    runs-on: ubuntu-latest
-    needs: Benchmarks
-    if: always()
-
-    steps:
-      - uses: actions/checkout@v4
-      - name: Store benchmark results
-        uses: ./.github/actions/benchmark
-        with:
-          task: result
-          platform: x86-64
-          benchmark-secret: ${{ secrets.BENCHMARK_SECRET }}
-         
