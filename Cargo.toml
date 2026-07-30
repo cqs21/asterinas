@@ -106,6 +106,10 @@ default-members = [
 # Their crate-level `Cargo.toml` files are not affected
 # by the shared in-kernel workspace configuration.
 exclude = [
+    # Git worktrees, which contain their own copies of the crates below.
+    # Without this, Cargo walks up from a worktree's crate and lets this
+    # workspace claim it, colliding with the same crate in the main tree.
+    ".worktrees",
     "kernel/libs/comp-sys/cargo-component",
     "kernel/libs/comp-sys/component",
     "kernel/libs/comp-sys/component-macro",

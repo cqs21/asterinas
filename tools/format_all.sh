@@ -43,6 +43,12 @@ for CRATE in $EXCLUDED_CRATES; do
     # Here temporarily skip processing this crate for now considering that this crate
     # is not currently in use or under development.
     case "$CRATE" in
+        # `.worktrees` is not a crate. It is excluded from the workspace so that Cargo does not
+        # claim the crates inside a worktree as members of this tree, and it holds no manifest
+        # of its own to format.
+        .worktrees)
+            continue
+            ;;
         # `cargo-component` crate currently is pinned to use Rust nightly-2023-02-05 version,
         # and when using this script in the current Docker environment, it will
         # additionally download this version of Rust.
