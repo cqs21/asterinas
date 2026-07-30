@@ -429,6 +429,7 @@ format:
 	@git --git-dir=$$PWD/.git ls-files --no-directory | \
 		grep -v '[.]patch$$' | \
 		grep -v '^.claude/skills/aster-code-review$$' `# This is a symbolic link` | \
+		grep -v '^.claude/skills/fix-conformance$$'   `# This is a symbolic link` | \
 		xargs sed -i 's/ *$$//'
 	@
 	@# Format the code using various tools
