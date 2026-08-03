@@ -1,0 +1,12 @@
+{
+  "commit": "e34a234b7b45dbd86f0d20d568f20ff845f5585f",
+  "branch": "fix-ltp-fsync03-7UHmXC",
+  "worktree": "/root/asterinas/.worktrees/run-7UHmXC",
+  "subject": "Reject `fsync`/`fdatasync` on pipes and FIFOs",
+  "files": [
+    "kernel/src/fs/file/inode_handle.rs",
+    "kernel/src/fs/pipe/common.rs",
+    "kernel/src/syscall/fsync.rs",
+    "test/initramfs/src/conformance/ltp/testcases/all.txt"
+  ]
+}

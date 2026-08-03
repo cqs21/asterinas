@@ -1,0 +1,105 @@
+diff --git a/kernel/src/fs/file/inode_handle.rs b/kernel/src/fs/file/inode_handle.rs
+index b659ac5ca..4859b4f03 100644
+--- a/kernel/src/fs/file/inode_handle.rs
++++ b/kernel/src/fs/file/inode_handle.rs
+@@ -228,6 +228,31 @@ impl InodeHandle {
+         Ok(())
+     }
+ 
++    /// Flushes all in-memory data and metadata of the file to the storage device.
++    pub fn sync_all(&self) -> Result<()> {
++        self.check_syncable()?;
++        self.path().sync_all()
++    }
++
++    /// Flushes all in-memory data of the file to the storage device.
++    pub fn sync_data(&self) -> Result<()> {
++        self.check_syncable()?;
++        self.path().sync_data()
++    }
++
++    /// Checks whether the file can be synchronized.
++    fn check_syncable(&self) -> Result<()> {
++        if self.rights.is_empty() {
++            return_errno_with_message!(Errno::EBADF, "the file is opened as a path");
++        }
++
++        if let Some(ref open_file) = self.open_file {
++            open_file.check_syncable()?;
++        }
++
++        Ok(())
++    }
++
+     pub fn downcast_open_file<T: 'static>(&self) -> Result<Option<&T>> {
+         if self.rights.is_empty() {
+             return_errno_with_message!(Errno::EBADF, "the file is opened as a path");
+@@ -526,6 +551,15 @@ pub trait PerOpenFileOps: Pollable + FileOps + Any + Send + Sync + 'static {
+     /// Checks whether the `seek()` operation should fail.
+     fn check_seekable(&self) -> Result<()>;
+ 
++    /// Checks whether the `fsync()`/`fdatasync()` operation should fail.
++    ///
++    /// The default allows synchronization, so that the request is delegated to the
++    /// inode. Override this for file descriptions that have no data to make durable,
++    /// such as pipes and FIFOs, for which synchronization must fail with `EINVAL`.
++    fn check_syncable(&self) -> Result<()> {
++        Ok(())
++    }
++
+     /// Returns whether the `read()`/`write()` operation should use and advance the offset.
+     ///
+     /// If [`PerOpenFileOps::check_seekable`] succeeds but this method returns `false`,
+diff --git a/kernel/src/fs/pipe/common.rs b/kernel/src/fs/pipe/common.rs
+index cd65f4d58..ed4cff25f 100644
+--- a/kernel/src/fs/pipe/common.rs
++++ b/kernel/src/fs/pipe/common.rs
+@@ -141,6 +141,12 @@ impl PerOpenFileOps for PipeHandle {
+         return_errno_with_message!(Errno::ESPIPE, "the inode is a FIFO file")
+     }
+ 
++    fn check_syncable(&self) -> Result<()> {
++        // A pipe holds no data that can be made durable, so synchronizing it must fail.
++        // Reference: <https://man7.org/linux/man-pages/man2/fsync.2.html>
++        return_errno_with_message!(Errno::EINVAL, "the inode is a FIFO file")
++    }
++
+     fn is_offset_aware(&self) -> bool {
+         false
+     }
+diff --git a/kernel/src/syscall/fsync.rs b/kernel/src/syscall/fsync.rs
+index 62617dd77..197f99029 100644
+--- a/kernel/src/syscall/fsync.rs
++++ b/kernel/src/syscall/fsync.rs
+@@ -11,8 +11,7 @@ pub fn sys_fsync(raw_fd: RawFileDesc, ctx: &Context) -> Result<SyscallReturn> {
+ 
+     let mut file_table = ctx.thread_local.borrow_file_table_mut();
+     let file = get_file_fast!(&mut file_table, raw_fd.try_into()?);
+-    let path = file.as_inode_handle_or_err()?.path();
+-    path.sync_all()?;
++    file.as_inode_handle_or_err()?.sync_all()?;
+     Ok(SyscallReturn::Return(0))
+ }
+ 
+@@ -21,7 +20,6 @@ pub fn sys_fdatasync(raw_fd: RawFileDesc, ctx: &Context) -> Result<SyscallReturn
+ 
+     let mut file_table = ctx.thread_local.borrow_file_table_mut();
+     let file = get_file_fast!(&mut file_table, raw_fd.try_into()?);
+-    let path = file.as_inode_handle_or_err()?.path();
+-    path.sync_data()?;
++    file.as_inode_handle_or_err()?.sync_data()?;
+     Ok(SyscallReturn::Return(0))
+ }
+diff --git a/test/initramfs/src/conformance/ltp/testcases/all.txt b/test/initramfs/src/conformance/ltp/testcases/all.txt
+index 5bef8afbd..c61ba3745 100644
+--- a/test/initramfs/src/conformance/ltp/testcases/all.txt
++++ b/test/initramfs/src/conformance/ltp/testcases/all.txt
+@@ -447,7 +447,7 @@ fstatfs02_64
+ 
+ # fsync01
+ fsync02
+-# fsync03
++fsync03
+ # fsync04
+ 
+ ftruncate01

@@ -1,0 +1,14 @@
+{
+  "result": "selected",
+  "suite": "ltp",
+  "test": "dup02",
+  "gvisor_filter": null,
+  "selector_token": "dup02",
+  "run_vars": "",
+  "pool_file": "test/initramfs/src/conformance/ltp/testcases/all.txt",
+  "pool_entries": ["dup02"],
+  "enable_action": "uncomment the line",
+  "source": "auto-picked",
+  "rationale": "Chosen from 35 stale-entry candidates cached by run-7UHmXC as already passing at commit 68bdd4a99. dup02 is the narrowest: it tests dup() error handling with exactly two cases - EBADF on fd=-1 and EBADF on fd=1500. The test is 36 lines of pure error-checking code with no setup complexity, no filesystem operations, and no subsystem dependencies. Since it already passes in Asterinas, the fix is trivially the pool edit alone (uncommenting line 160 in all.txt), making this an ideal round-2 pick after round 1 addressed a genuine kernel defect (fsync03). Preferred this over the other 34 stale entries because: (1) dup02 is simpler than multi-case tests like lseek02 (15 cases), fcntl series (multiple flag/command combinations), or alarm02 (signal timing with INT_MAX values); (2) avoids tests needing /proc (getpid01), user switching (bind02), or complex process hierarchies (kill10, fork14); (3) dup is more fundamental than specialized syscalls like close_range01 or process-group operations. Round 1 covered ltp/fsync03 from all.txt; this picks different ground from the same pool, and the 34 remaining stale entries stay available for future rounds.",
+  "notes": "All 35 stale-entry records in select.cache are from the same run (run-7UHmXC) at the same commit (68bdd4a99) which matches this run's base_commit, so cache ancestry check passes and all are usable without re-probing. Since dup02 was observed passing in Asterinas on the exact commit this run branched from, and the test contains no flaky timing or resource-dependent logic, re-verification is unnecessary - diagnose phase will confirm it still passes and skip to verify."
+}
