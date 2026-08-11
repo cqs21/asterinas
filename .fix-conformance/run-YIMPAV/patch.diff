@@ -1,0 +1,879 @@
+diff --git a/kernel/src/fs/fs_impls/configfs/test.rs b/kernel/src/fs/fs_impls/configfs/test.rs
+index 664a89976..30b3b68ba 100644
+--- a/kernel/src/fs/fs_impls/configfs/test.rs
++++ b/kernel/src/fs/fs_impls/configfs/test.rs
+@@ -38,8 +38,9 @@ use spin::Once;
+ use crate::{
+     fs::{
+         file::{InodeType, mkmod},
+-        vfs::file_system::FileSystem,
++        vfs::{file_system::FileSystem, inode::NewInodeAttrs},
+     },
++    process::{Gid, Uid},
+     time::clocks::init_for_ktest as time_init_for_ktest,
+ };
+ 
+@@ -176,13 +177,14 @@ fn config_fs() {
+ 
+     // --- Create demo objects ---
+     // path: /sys/kernel/config/demo_set/demo_foo
++    let dir_attrs = NewInodeAttrs::new(Uid::new_root(), Gid::new_root(), mkmod!(a+rx, u+w));
+     let demo_foo = demo_set_inode
+-        .create("demo_foo", InodeType::Dir, mkmod!(a+rx, u+w))
++        .create("demo_foo", InodeType::Dir, dir_attrs)
+         .expect("creating demo 'demo_foo' fails");
+ 
+     // path: /sys/kernel/config/demo_set/demo_bar
+     let demo_bar = demo_set_inode
+-        .create("demo_bar", InodeType::Dir, mkmod!(a+rx, u+w))
++        .create("demo_bar", InodeType::Dir, dir_attrs)
+         .expect("creating demo 'demo_bar' fails");
+ 
+     // --- Test attribute access for demo_foo ---
+diff --git a/kernel/src/fs/fs_impls/devpts/mod.rs b/kernel/src/fs/fs_impls/devpts/mod.rs
+index 66b9360c9..95f4735e2 100644
+--- a/kernel/src/fs/fs_impls/devpts/mod.rs
++++ b/kernel/src/fs/fs_impls/devpts/mod.rs
+@@ -18,7 +18,8 @@ use crate::{
+         vfs::{
+             file_system::{FileSystem, FsEventSubscriberStats, SuperBlock},
+             inode::{
+-                Extension, FileOps, Inode, Metadata, MknodType, RenameMode, RevalidationPolicy,
++                Extension, FileOps, Inode, Metadata, MknodType, NewInodeAttrs, RenameMode,
++                RevalidationPolicy,
+             },
+             registry::{FsCreationCtx, FsProperties, FsType},
+         },
+@@ -308,11 +309,11 @@ impl Inode for RootInode {
+         self.metadata.write().last_meta_change_at = time;
+     }
+ 
+-    fn create(&self, name: &str, type_: InodeType, mode: InodeMode) -> Result<Arc<dyn Inode>> {
++    fn create(&self, name: &str, type_: InodeType, attrs: NewInodeAttrs) -> Result<Arc<dyn Inode>> {
+         Err(Error::new(Errno::EPERM))
+     }
+ 
+-    fn mknod(&self, name: &str, mode: InodeMode, type_: MknodType) -> Result<Arc<dyn Inode>> {
++    fn mknod(&self, name: &str, attrs: NewInodeAttrs, type_: MknodType) -> Result<Arc<dyn Inode>> {
+         Err(Error::new(Errno::EPERM))
+     }
+ 
+diff --git a/kernel/src/fs/fs_impls/exfat/inode.rs b/kernel/src/fs/fs_impls/exfat/inode.rs
+index 96d5d2b3b..4d1e63f64 100644
+--- a/kernel/src/fs/fs_impls/exfat/inode.rs
++++ b/kernel/src/fs/fs_impls/exfat/inode.rs
+@@ -31,7 +31,10 @@ use crate::{
+         utils::DirentVisitor,
+         vfs::{
+             file_system::FileSystem,
+-            inode::{Extension, FileOps, Inode, Metadata, MknodType, RenameMode, SymbolicLink},
++            inode::{
++                Extension, FileOps, Inode, Metadata, MknodType, NewInodeAttrs, RenameMode,
++                SymbolicLink,
++            },
+             path::{is_dot, is_dot_or_dotdot, is_dotdot},
+         },
+     },
+@@ -1519,7 +1522,7 @@ impl Inode for ExfatInode {
+         Some(self.inner.read().page_cache.clone())
+     }
+ 
+-    fn create(&self, name: &str, type_: InodeType, mode: InodeMode) -> Result<Arc<dyn Inode>> {
++    fn create(&self, name: &str, type_: InodeType, attrs: NewInodeAttrs) -> Result<Arc<dyn Inode>> {
+         let fs = self.inner.read().fs();
+         let fs_guard = fs.lock();
+         {
+@@ -1536,7 +1539,7 @@ impl Inode for ExfatInode {
+             }
+         }
+ 
+-        let result = self.add_entry(name, type_, mode, &fs_guard)?;
++        let result = self.add_entry(name, type_, attrs.mode(), &fs_guard)?;
+         let _ = fs.insert_inode(result.clone());
+ 
+         self.inner.write().update_atime_mtime_and_ctime()?;
+@@ -1550,7 +1553,7 @@ impl Inode for ExfatInode {
+         Ok(result)
+     }
+ 
+-    fn mknod(&self, name: &str, mode: InodeMode, type_: MknodType) -> Result<Arc<dyn Inode>> {
++    fn mknod(&self, name: &str, attrs: NewInodeAttrs, type_: MknodType) -> Result<Arc<dyn Inode>> {
+         return_errno_with_message!(Errno::EINVAL, "unsupported operation")
+     }
+ 
+diff --git a/kernel/src/fs/fs_impls/ext2/fs.rs b/kernel/src/fs/fs_impls/ext2/fs.rs
+index 7b76c7974..d6841aaf5 100644
+--- a/kernel/src/fs/fs_impls/ext2/fs.rs
++++ b/kernel/src/fs/fs_impls/ext2/fs.rs
+@@ -383,7 +383,7 @@ impl Ext2 {
+         &self,
+         parent_ino: Ext2Ino,
+         inode_type: InodeType,
+-        perm: FilePerm,
++        attrs: NewInodeAttrs,
+     ) -> Result<Arc<Inode>> {
+         if inode_type == InodeType::Unknown {
+             return_errno_with_message!(Errno::EINVAL, "cannot create inode with unknown type");
+@@ -391,19 +391,8 @@ impl Ext2 {
+ 
+         let ino = self.alloc_ino(parent_ino, inode_type)?;
+         let link_count = if inode_type.is_directory() { 2 } else { 1 };
+-        let (uid, gid) = Thread::current()
+-            .and_then(|thread| {
+-                thread
+-                    .as_posix_thread()
+-                    .map(|posix_thread| posix_thread.credentials())
+-            })
+-            .map(|credentials| {
+-                (
+-                    u32::from(credentials.fsuid()),
+-                    u32::from(credentials.fsgid()),
+-                )
+-            })
+-            .unwrap_or((0, 0));
++        let perm = FilePerm::from(attrs.mode());
++        let (uid, gid) = (u32::from(attrs.uid()), u32::from(attrs.gid()));
+         let now = utils::now();
+         let generation = self.next_generation.fetch_add(1, Ordering::Relaxed);
+         let inode_desc = InodeDesc::new(inode_type, perm, uid, gid, link_count, generation, now);
+diff --git a/kernel/src/fs/fs_impls/ext2/impl_for_vfs/inode.rs b/kernel/src/fs/fs_impls/ext2/impl_for_vfs/inode.rs
+index 431bfd6fa..b8cf6bc2c 100644
+--- a/kernel/src/fs/fs_impls/ext2/impl_for_vfs/inode.rs
++++ b/kernel/src/fs/fs_impls/ext2/impl_for_vfs/inode.rs
+@@ -21,8 +21,8 @@ use crate::{
+         vfs::{
+             file_system::FileSystem,
+             inode::{
+-                Extension, FallocMode, FileOps, Inode, Metadata, MknodType, RenameMode,
+-                SymbolicLink,
++                Extension, FallocMode, FileOps, Inode, Metadata, MknodType, NewInodeAttrs,
++                RenameMode, SymbolicLink,
+             },
+             xattr::{XattrName, XattrNamespace, XattrSetFlags},
+         },
+@@ -171,18 +171,18 @@ impl Inode for Ext2Inode {
+         }
+     }
+ 
+-    fn create(&self, name: &str, type_: InodeType, mode: InodeMode) -> Result<Arc<dyn Inode>> {
+-        Ok(self.create(name, type_, mode.into())?)
++    fn create(&self, name: &str, type_: InodeType, attrs: NewInodeAttrs) -> Result<Arc<dyn Inode>> {
++        Ok(self.create(name, type_, attrs)?)
+     }
+ 
+-    fn mknod(&self, name: &str, mode: InodeMode, type_: MknodType) -> Result<Arc<dyn Inode>> {
++    fn mknod(&self, name: &str, attrs: NewInodeAttrs, type_: MknodType) -> Result<Arc<dyn Inode>> {
+         let (inode_type, device_id) = match type_ {
+             MknodType::CharDevice(dev_id) => (InodeType::CharDevice, Some(dev_id)),
+             MknodType::BlockDevice(dev_id) => (InodeType::BlockDevice, Some(dev_id)),
+             MknodType::NamedPipe => (InodeType::NamedPipe, None),
+         };
+ 
+-        let new_inode = self.create(name, inode_type, mode.into())?;
++        let new_inode = self.create(name, inode_type, attrs)?;
+         if let Some(device_id) = device_id {
+             // Store the ext2 special-file device encoding in `i_block`.
+             new_inode.set_device_id(device_id)?;
+diff --git a/kernel/src/fs/fs_impls/ext2/inode/dir/mod.rs b/kernel/src/fs/fs_impls/ext2/inode/dir/mod.rs
+index a9cab7242..b99ef0be4 100644
+--- a/kernel/src/fs/fs_impls/ext2/inode/dir/mod.rs
++++ b/kernel/src/fs/fs_impls/ext2/inode/dir/mod.rs
+@@ -10,7 +10,7 @@
+ mod dir_entry;
+ 
+ use self::dir_entry::{DOT_BYTE, DOT_DOT_BYTE, DirBlockView, DirEntryFileType, DirEntryHeader};
+-use super::{super::Ext2, FileFlags, FilePerm, Inode, InodeInner, MAX_LINK_COUNT};
++use super::{super::Ext2, FileFlags, Inode, InodeInner, MAX_LINK_COUNT};
+ use crate::fs::ext2::{prelude::*, utils};
+ 
+ /// Information about a candidate directory entry slot.
+@@ -105,7 +105,7 @@ impl Inode {
+         &self,
+         name: &str,
+         type_: InodeType,
+-        perm: FilePerm,
++        attrs: NewInodeAttrs,
+     ) -> Result<Arc<Inode>> {
+         if !matches!(
+             type_,
+@@ -139,7 +139,7 @@ impl Inode {
+         // concurrent `create` / `lookup_via_fs` on this directory.
+         // So the concurrent `lookup_via_fs` won't create a new `Arc<Inode>`
+         // from Inode desc and then insert it into inode cache.
+-        let child = fs.create_inode(self.ino, type_, perm)?;
++        let child = fs.create_inode(self.ino, type_, attrs)?;
+         let child_ino = child.ino();
+ 
+         let result = if is_dir {
+diff --git a/kernel/src/fs/fs_impls/ext2/prelude.rs b/kernel/src/fs/fs_impls/ext2/prelude.rs
+index 14c0a9e7f..8f2490440 100644
+--- a/kernel/src/fs/fs_impls/ext2/prelude.rs
++++ b/kernel/src/fs/fs_impls/ext2/prelude.rs
+@@ -27,6 +27,7 @@ pub(super) use crate::{
+     fs::{
+         file::InodeType,
+         utils::{DirentVisitor, Str16, Str64},
++        vfs::inode::NewInodeAttrs,
+     },
+     prelude::*,
+     time::UnixTime,
+diff --git a/kernel/src/fs/fs_impls/ext2/test_utils.rs b/kernel/src/fs/fs_impls/ext2/test_utils.rs
+index 9bb5ddf01..02f535d25 100644
+--- a/kernel/src/fs/fs_impls/ext2/test_utils.rs
++++ b/kernel/src/fs/fs_impls/ext2/test_utils.rs
+@@ -18,14 +18,19 @@ use ostd::mm::{FrameAllocOptions, HasSize, Segment, VmIo, io::util::HasVmReaderW
+ use super::{
+     block_group::RawBlockGroup,
+     fs::{Ext2, ROOT_INO},
+-    inode::{FilePerm, Inode, RAW_BLOCK_PTRS_LEN, RawInode},
++    inode::{Inode, RAW_BLOCK_PTRS_LEN, RawInode},
+     super_block::{
+         ErrorsBehavior, FsState, MAGIC_NUM, OsId, RawSuperBlock, RevLevel, SUPER_BLOCK_OFFSET,
+     },
+ };
+ use crate::{
+-    fs::{file::InodeType, fs_impls::ext2::super_block::SuperBlock, vfs::file_system::FsFlags},
++    fs::{
++        file::{InodeMode, InodeType},
++        fs_impls::ext2::super_block::SuperBlock,
++        vfs::{file_system::FsFlags, inode::NewInodeAttrs},
++    },
+     prelude::{return_errno_with_message, *},
++    process::{Gid, Uid},
+     time::clocks,
+ };
+ const DOT_BYTE: &[u8] = b".";
+@@ -744,8 +749,12 @@ impl Ext2FixtureBuilder {
+ // ===========================================================================
+ 
+ pub(super) fn create_file(dir: &Arc<Inode>, name: &str) -> Arc<Inode> {
+-    dir.create(name, InodeType::File, FilePerm::from_bits_truncate(0o644))
+-        .unwrap()
++    let attrs = NewInodeAttrs::new(
++        Uid::new_root(),
++        Gid::new_root(),
++        InodeMode::from_bits_truncate(0o644),
++    );
++    dir.create(name, InodeType::File, attrs).unwrap()
+ }
+ 
+ pub(super) fn default_fixture() -> (Ext2Fixture, Arc<Inode>) {
+diff --git a/kernel/src/fs/fs_impls/overlayfs/fs.rs b/kernel/src/fs/fs_impls/overlayfs/fs.rs
+index 20938b10b..6a89d3479 100644
+--- a/kernel/src/fs/fs_impls/overlayfs/fs.rs
++++ b/kernel/src/fs/fs_impls/overlayfs/fs.rs
+@@ -25,8 +25,8 @@ use crate::{
+         vfs::{
+             file_system::{FileSystem, FsEventSubscriberStats, SuperBlock},
+             inode::{
+-                Extension, FallocMode, FileOps, Inode, Metadata, MknodType, RenameMode,
+-                SymbolicLink,
++                Extension, FallocMode, FileOps, Inode, Metadata, MknodType, NewInodeAttrs,
++                RenameMode, SymbolicLink,
+             },
+             path::{FsPath, Path},
+             registry::{FsCreationCtx, FsProperties, FsType},
+@@ -241,7 +241,12 @@ impl OverlayInode {
+ 
+     /// Creates a new non-exist child `OverlayInode` in the upper layer.
+     /// If the parent directories do not exist, they will be created recursively in the upper layer.
+-    pub fn create(&self, name: &str, type_: InodeType, mode: InodeMode) -> Result<Arc<dyn Inode>> {
++    pub fn create(
++        &self,
++        name: &str,
++        type_: InodeType,
++        attrs: NewInodeAttrs,
++    ) -> Result<Arc<dyn Inode>> {
+         if self.type_ != InodeType::Dir {
+             return_errno!(Errno::ENOTDIR);
+         }
+@@ -278,7 +283,10 @@ impl OverlayInode {
+             }
+         }
+ 
+-        let new_upper = upper.create(name, type_, mode)?;
++        // The attributes were resolved against this overlay directory, which
++        // presents the same mode and group as its upper counterpart, so they are
++        // forwarded rather than resolved again in the upper layer.
++        let new_upper = upper.create(name, type_, attrs)?;
+         if upper_is_opaque {
+             new_upper.set_xattr(
+                 XattrName::try_from_full_name(OPAQUE_DIR_XATTR_NAME).unwrap(),
+@@ -394,7 +402,9 @@ impl OverlayInode {
+         }
+ 
+         if target_has_valid_lower {
+-            let whiteout = upper.create(&whiteout_name(name), InodeType::File, mkmod!(a+r, u+w))?;
++            let whiteout_attrs =
++                NewInodeAttrs::resolve(upper.as_ref(), InodeType::File, mkmod!(a+r, u+w))?;
++            let whiteout = upper.create(&whiteout_name(name), InodeType::File, whiteout_attrs)?;
+             // FIXME: Align the whiteout xattr behavior with Linux
+             whiteout.set_xattr(
+                 XattrName::try_from_full_name(WHITEOUT_XATTR_NAME).unwrap(),
+@@ -440,7 +450,9 @@ impl OverlayInode {
+ 
+         upper.rmdir(name)?;
+ 
+-        let whiteout = upper.create(&whiteout_name(name), InodeType::File, mkmod!(a+r, u+w))?;
++        let whiteout_attrs =
++            NewInodeAttrs::resolve(upper.as_ref(), InodeType::File, mkmod!(a+r, u+w))?;
++        let whiteout = upper.create(&whiteout_name(name), InodeType::File, whiteout_attrs)?;
+         // FIXME: Align the whiteout xattr behavior with Linux
+         whiteout.set_xattr(
+             XattrName::try_from_full_name(WHITEOUT_XATTR_NAME).unwrap(),
+@@ -496,12 +508,17 @@ impl OverlayInode {
+         upper.page_cache()
+     }
+ 
+-    pub fn mknod(&self, name: &str, mode: InodeMode, type_: MknodType) -> Result<Arc<dyn Inode>> {
++    pub fn mknod(
++        &self,
++        name: &str,
++        attrs: NewInodeAttrs,
++        type_: MknodType,
++    ) -> Result<Arc<dyn Inode>> {
+         if self.type_ != InodeType::Dir {
+             return_errno_with_message!(Errno::ENOTDIR, "not mknod on a dir");
+         }
+         let upper = self.build_upper_recursively_if_needed()?;
+-        upper.mknod(name, mode, type_)
++        upper.mknod(name, attrs, type_)
+     }
+ 
+     pub fn link(&self, old: &Arc<dyn Inode>, name: &str) -> Result<()> {
+@@ -814,8 +831,12 @@ impl OverlayInode {
+             .unwrap()
+             .build_upper_recursively_if_needed()?;
+ 
+-        let mode = self.get_top_valid_lower_inode().unwrap().mode()?;
+-        let new_upper = parent_upper.create(&self.name_upon_creation(), self.type_, mode)?;
++        // A copy-up reproduces an existing lower inode in the upper layer, so it
++        // keeps that inode's own identity instead of resolving a new one against
++        // the upper parent. `copy_up_metadata` below relies on the same identity.
++        let lower = self.get_top_valid_lower_inode().unwrap();
++        let attrs = NewInodeAttrs::new(lower.owner()?, lower.group()?, lower.mode()?);
++        let new_upper = parent_upper.create(&self.name_upon_creation(), self.type_, attrs)?;
+ 
+         // There must exist a valid lower inode if the upper is missing
+         assert!(!self.lowers.is_empty());
+@@ -991,8 +1012,8 @@ impl Inode for OverlayInode {
+     fn ctime(&self) -> Duration;
+     fn set_ctime(&self, time: Duration);
+     fn page_cache(&self) -> Option<PageCache>;
+-    fn create(&self, name: &str, type_: InodeType, mode: InodeMode) -> Result<Arc<dyn Inode>>;
+-    fn mknod(&self, name: &str, mode: InodeMode, type_: MknodType) -> Result<Arc<dyn Inode>>;
++    fn create(&self, name: &str, type_: InodeType, attrs: NewInodeAttrs) -> Result<Arc<dyn Inode>>;
++    fn mknod(&self, name: &str, attrs: NewInodeAttrs, type_: MknodType) -> Result<Arc<dyn Inode>>;
+     fn open(
+         &self,
+         access_mode: AccessMode,
+@@ -1259,6 +1280,10 @@ mod tests {
+         .unwrap()
+     }
+ 
++    fn test_attrs() -> NewInodeAttrs {
++        NewInodeAttrs::new(Uid::new_root(), Gid::new_root(), InodeMode::all())
++    }
++
+     fn create_overlay_fs() -> Arc<dyn FileSystem> {
+         crate::time::clocks::init_for_ktest();
+         crate::fs::vfs::init();
+@@ -1447,24 +1472,24 @@ mod tests {
+     fn whiteout_file() {
+         let fs = create_overlay_fs();
+         let root = fs.root_inode();
+-        let mode = InodeMode::all();
++        let attrs = test_attrs();
+ 
+-        let Err(e) = root.create("f1", InodeType::File, mode) else {
++        let Err(e) = root.create("f1", InodeType::File, attrs) else {
+             panic!();
+         };
+         assert_eq!(e.error(), Errno::EEXIST);
+         root.unlink("f1").unwrap();
+ 
+-        root.create("f1", InodeType::File, mode).unwrap();
++        root.create("f1", InodeType::File, attrs).unwrap();
+     }
+ 
+     #[ktest]
+     fn opaque_dir() {
+         let fs = create_overlay_fs();
+         let root = fs.root_inode();
+-        let mode = InodeMode::all();
++        let attrs = test_attrs();
+ 
+-        let Err(e) = root.create("d1", InodeType::Dir, mode) else {
++        let Err(e) = root.create("d1", InodeType::Dir, attrs) else {
+             panic!();
+         };
+         assert_eq!(e.error(), Errno::EEXIST);
+@@ -1474,8 +1499,8 @@ mod tests {
+         d1.unlink("f12").unwrap();
+ 
+         root.rmdir("d1").unwrap();
+-        let d1 = root.create("d1", InodeType::Dir, mode).unwrap();
+-        d1.create("f11", InodeType::File, mode).unwrap();
++        let d1 = root.create("d1", InodeType::Dir, attrs).unwrap();
++        d1.create("f11", InodeType::File, attrs).unwrap();
+     }
+ 
+     #[ktest]
+@@ -1594,9 +1619,10 @@ mod tests {
+         let d1 = root.lookup("d1").unwrap();
+         d1.set_mode(mode).unwrap();
+         assert_ne!(f1.ino(), d1.ino());
+-        d1.mknod("dev", mode, MknodType::NamedPipe).unwrap();
++        let attrs = test_attrs();
++        d1.mknod("dev", attrs, MknodType::NamedPipe).unwrap();
+ 
+-        let link = d1.create("link", InodeType::SymLink, mode).unwrap();
++        let link = d1.create("link", InodeType::SymLink, attrs).unwrap();
+         let link_str = "link_to_somewhere";
+         link.write_link(link_str).unwrap();
+         assert!(matches!(
+diff --git a/kernel/src/fs/fs_impls/procfs/template/dir.rs b/kernel/src/fs/fs_impls/procfs/template/dir.rs
+index 9da0eca7e..fc6445399 100644
+--- a/kernel/src/fs/fs_impls/procfs/template/dir.rs
++++ b/kernel/src/fs/fs_impls/procfs/template/dir.rs
+@@ -16,7 +16,8 @@ use crate::{
+         vfs::{
+             file_system::{FileSystem, SuperBlock},
+             inode::{
+-                Extension, FileOps, Inode, Metadata, MknodType, RenameMode, RevalidationPolicy,
++                Extension, FileOps, Inode, Metadata, MknodType, NewInodeAttrs, RenameMode,
++                RevalidationPolicy,
+             },
+             path::{is_dot, is_dotdot},
+         },
+@@ -185,11 +186,21 @@ impl<D: ProcDirOps + 'static> Inode for ProcDir<D> {
+         InodeType::Dir
+     }
+ 
+-    fn create(&self, _name: &str, _type_: InodeType, _mode: InodeMode) -> Result<Arc<dyn Inode>> {
++    fn create(
++        &self,
++        _name: &str,
++        _type_: InodeType,
++        _attrs: NewInodeAttrs,
++    ) -> Result<Arc<dyn Inode>> {
+         Err(Error::new(Errno::EPERM))
+     }
+ 
+-    fn mknod(&self, _name: &str, _mode: InodeMode, _type_: MknodType) -> Result<Arc<dyn Inode>> {
++    fn mknod(
++        &self,
++        _name: &str,
++        _attrs: NewInodeAttrs,
++        _type_: MknodType,
++    ) -> Result<Arc<dyn Inode>> {
+         Err(Error::new(Errno::EPERM))
+     }
+ 
+diff --git a/kernel/src/fs/fs_impls/ramfs/fs.rs b/kernel/src/fs/fs_impls/ramfs/fs.rs
+index c2821f0ae..99f220432 100644
+--- a/kernel/src/fs/fs_impls/ramfs/fs.rs
++++ b/kernel/src/fs/fs_impls/ramfs/fs.rs
+@@ -28,7 +28,7 @@ use crate::{
+             file_system::{FileSystem, FsEventSubscriberStats, SuperBlock},
+             inode::{
+                 Extension, FallocMode, FileOps, HardLinkability, Inode, Metadata, MknodType,
+-                RenameMode, SymbolicLink,
++                NewInodeAttrs, RenameMode, SymbolicLink,
+             },
+             path::{is_dot, is_dot_or_dotdot, is_dotdot},
+             registry::{FsCreationCtx, FsProperties, FsType},
+@@ -36,8 +36,7 @@ use crate::{
+         },
+     },
+     prelude::*,
+-    process::{Gid, Uid, posix_thread::AsPosixThread},
+-    thread::Thread,
++    process::{Gid, Uid},
+     time::clocks::RealTimeCoarseClock,
+     vm::page_cache::PageCache,
+ };
+@@ -881,7 +880,7 @@ impl Inode for RamInode {
+         Ok(())
+     }
+ 
+-    fn mknod(&self, name: &str, mode: InodeMode, type_: MknodType) -> Result<Arc<dyn Inode>> {
++    fn mknod(&self, name: &str, attrs: NewInodeAttrs, type_: MknodType) -> Result<Arc<dyn Inode>> {
+         if name.len() > NAME_MAX {
+             return_errno!(Errno::ENAMETOOLONG);
+         }
+@@ -894,7 +893,7 @@ impl Inode for RamInode {
+             return_errno_with_message!(Errno::EEXIST, "entry exists");
+         }
+ 
+-        let (uid, gid) = current_fs_ids();
++        let (uid, gid, mode) = (attrs.uid(), attrs.gid(), attrs.mode());
+         let new_inode = match type_ {
+             MknodType::CharDevice(dev_id) | MknodType::BlockDevice(dev_id) => {
+                 let dev_type = type_.device_type().unwrap();
+@@ -928,7 +927,7 @@ impl Inode for RamInode {
+         self.inner.open(access_mode, status_flags)
+     }
+ 
+-    fn create(&self, name: &str, type_: InodeType, mode: InodeMode) -> Result<Arc<dyn Inode>> {
++    fn create(&self, name: &str, type_: InodeType, attrs: NewInodeAttrs) -> Result<Arc<dyn Inode>> {
+         if name.len() > NAME_MAX {
+             return_errno!(Errno::ENAMETOOLONG);
+         }
+@@ -942,7 +941,7 @@ impl Inode for RamInode {
+         }
+ 
+         let fs = self.fs.upgrade().unwrap();
+-        let (uid, gid) = current_fs_ids();
++        let (uid, gid, mode) = (attrs.uid(), attrs.gid(), attrs.mode());
+         let new_inode = match type_ {
+             InodeType::File => RamInode::new_file(&fs, mode, uid, gid),
+             InodeType::SymLink => RamInode::new_symlink(&fs, mode, uid, gid),
+@@ -971,7 +970,7 @@ impl Inode for RamInode {
+ 
+     fn create_tmpfile(
+         &self,
+-        mode: InodeMode,
++        attrs: NewInodeAttrs,
+         hard_linkability: HardLinkability,
+     ) -> Result<Arc<dyn Inode>> {
+         if self.typ != InodeType::Dir {
+@@ -979,8 +978,13 @@ impl Inode for RamInode {
+         }
+ 
+         let fs = self.fs.upgrade().unwrap();
+-        let (uid, gid) = current_fs_ids();
+-        Ok(RamInode::new_tmpfile(&fs, mode, uid, gid, hard_linkability))
++        Ok(RamInode::new_tmpfile(
++            &fs,
++            attrs.mode(),
++            attrs.uid(),
++            attrs.gid(),
++            hard_linkability,
++        ))
+     }
+ 
+     fn link(&self, old: &Arc<dyn Inode>, name: &str) -> Result<()> {
+@@ -1450,16 +1454,6 @@ fn now() -> Duration {
+     RealTimeCoarseClock::get().read_time()
+ }
+ 
+-fn current_fs_ids() -> (Uid, Gid) {
+-    Thread::current()
+-        .and_then(|thread| {
+-            let posix_thread = thread.as_posix_thread()?;
+-            let credentials = posix_thread.credentials();
+-            Some((credentials.fsuid(), credentials.fsgid()))
+-        })
+-        .unwrap_or((Uid::new_root(), Gid::new_root()))
+-}
+-
+ pub(super) struct RamFsType;
+ 
+ impl FsType for RamFsType {
+diff --git a/kernel/src/fs/fs_impls/sysfs/inode.rs b/kernel/src/fs/fs_impls/sysfs/inode.rs
+index 0eaa64449..9598c36ab 100644
+--- a/kernel/src/fs/fs_impls/sysfs/inode.rs
++++ b/kernel/src/fs/fs_impls/sysfs/inode.rs
+@@ -7,7 +7,7 @@ use crate::{
+         utils::systree_inode::{SysTreeInodeTy, SysTreeNodeKind},
+         vfs::{
+             file_system::FileSystem,
+-            inode::{Extension, Inode, Metadata},
++            inode::{Extension, Inode, Metadata, NewInodeAttrs},
+         },
+     },
+     prelude::*,
+@@ -92,7 +92,12 @@ impl Inode for SysFsInode {
+         SysFs::singleton().clone()
+     }
+ 
+-    fn create(&self, _name: &str, _type_: InodeType, _mode: InodeMode) -> Result<Arc<dyn Inode>> {
++    fn create(
++        &self,
++        _name: &str,
++        _type_: InodeType,
++        _attrs: NewInodeAttrs,
++    ) -> Result<Arc<dyn Inode>> {
+         Err(Error::with_message(
+             Errno::EPERM,
+             "file creation under sysfs is not allowed",
+diff --git a/kernel/src/fs/fs_impls/virtiofs/inode/mod.rs b/kernel/src/fs/fs_impls/virtiofs/inode/mod.rs
+index ec914a362..4cba33f91 100644
+--- a/kernel/src/fs/fs_impls/virtiofs/inode/mod.rs
++++ b/kernel/src/fs/fs_impls/virtiofs/inode/mod.rs
+@@ -44,7 +44,8 @@ use crate::{
+         vfs::{
+             file_system::FileSystem,
+             inode::{
+-                Extension, FileOps, Inode, Metadata, RenameMode, RevalidationPolicy, SymbolicLink,
++                Extension, FileOps, Inode, Metadata, NewInodeAttrs, RenameMode, RevalidationPolicy,
++                SymbolicLink,
+             },
+         },
+     },
+@@ -368,7 +369,10 @@ impl Inode for VirtioFsInode {
+         Ok(fs.lookup_inode_from_cache(lookup_reply, request_attr_version)?)
+     }
+ 
+-    fn create(&self, name: &str, type_: InodeType, mode: InodeMode) -> Result<Arc<dyn Inode>> {
++    fn create(&self, name: &str, type_: InodeType, attrs: NewInodeAttrs) -> Result<Arc<dyn Inode>> {
++        // The server owns the file identities of this filesystem, so the
++        // resolved owner is not conveyed to it; only the mode is.
++        let mode = attrs.mode();
+         let fs = self.fs_ref();
+         let parent_nodeid = self.nodeid();
+         let create_reply = match type_ {
+diff --git a/kernel/src/fs/utils/systree_inode.rs b/kernel/src/fs/utils/systree_inode.rs
+index b340836be..a9bd9ce48 100644
+--- a/kernel/src/fs/utils/systree_inode.rs
++++ b/kernel/src/fs/utils/systree_inode.rs
+@@ -14,8 +14,8 @@ use crate::{
+         vfs::{
+             file_system::{FileSystem, SuperBlock},
+             inode::{
+-                Extension, FallocMode, FileOps, Inode, Metadata, MknodType, RenameMode,
+-                RevalidationPolicy, SymbolicLink,
++                Extension, FallocMode, FileOps, Inode, Metadata, MknodType, NewInodeAttrs,
++                RenameMode, RevalidationPolicy, SymbolicLink,
+             },
+         },
+     },
+@@ -491,11 +491,12 @@ impl<KInode: SysTreeInodeTy + Send + Sync + 'static> Inode for KInode {
+         &self,
+         name: &str,
+         _type_: InodeType,
+-        mode: InodeMode,
++        attrs: NewInodeAttrs,
+     ) -> Result<Arc<dyn Inode>> {
+         if name.len() > super::NAME_MAX {
+             return_errno!(Errno::ENAMETOOLONG);
+         }
++        let mode = attrs.mode();
+ 
+         let SysTreeNodeKind::Branch(branch_node) = &self.node_kind() else {
+             return_errno_with_message!(Errno::ENOTDIR, "self is not a dir");
+@@ -526,7 +527,7 @@ impl<KInode: SysTreeInodeTy + Send + Sync + 'static> Inode for KInode {
+     default fn mknod(
+         &self,
+         _name: &str,
+-        _mode: InodeMode,
++        _attrs: NewInodeAttrs,
+         _dev: MknodType,
+     ) -> Result<Arc<dyn Inode>> {
+         Err(Error::new(Errno::EPERM))
+diff --git a/kernel/src/fs/vfs/fs_apis/inode.rs b/kernel/src/fs/vfs/fs_apis/inode.rs
+index 6cdbd36ff..76b9c2f88 100644
+--- a/kernel/src/fs/vfs/fs_apis/inode.rs
++++ b/kernel/src/fs/vfs/fs_apis/inode.rs
+@@ -261,6 +261,129 @@ impl MknodType {
+             MknodType::BlockDevice(_) => Some(DeviceType::Block),
+         }
+     }
++
++    /// Returns the [`InodeType`] of the inode that this `MknodType` creates.
++    pub fn inode_type(&self) -> InodeType {
++        match self {
++            MknodType::NamedPipe => InodeType::NamedPipe,
++            MknodType::CharDevice(_) => InodeType::CharDevice,
++            MknodType::BlockDevice(_) => InodeType::BlockDevice,
++        }
++    }
++}
++
++/// The initial owner and mode that a newly created inode must start with.
++///
++/// A filesystem never derives these attributes itself. The VFS resolves them
++/// once, via [`NewInodeAttrs::resolve`], and hands the result down to
++/// [`Inode::create`], [`Inode::mknod`] and [`Inode::create_tmpfile`]. This keeps
++/// the set-group-ID inheritance policy in a single place, above every
++/// filesystem, and makes the resolved mode the only mode a filesystem can see.
++#[derive(Clone, Copy, Debug)]
++pub struct NewInodeAttrs {
++    uid: Uid,
++    gid: Gid,
++    mode: InodeMode,
++}
++
++impl NewInodeAttrs {
++    /// Creates attributes with an explicitly chosen owner.
++    ///
++    /// Use this only when the owner is already known and must not be derived
++    /// from the current credentials or the parent directory, e.g. when a stacked
++    /// filesystem forwards an already-resolved creation downwards. Ordinary
++    /// creation paths use [`Self::resolve`] instead.
++    pub fn new(uid: Uid, gid: Gid, mode: InodeMode) -> Self {
++        Self { uid, gid, mode }
++    }
++
++    pub fn uid(&self) -> Uid {
++        self.uid
++    }
++
++    pub fn gid(&self) -> Gid {
++        self.gid
++    }
++
++    pub fn mode(&self) -> InodeMode {
++        self.mode
++    }
++
++    /// Resolves the attributes of a new inode of `type_` created in `parent`
++    /// with the requested `mode`.
++    ///
++    /// The owner user ID is always the creator's filesystem user ID. The group
++    /// ID and the set-group-ID bit follow the set-group-ID directory rule:
++    /// - If `parent` has set-group-ID set, the new inode takes `parent`'s group
++    ///   ID rather than the creator's filesystem group ID. This is
++    ///   unconditional: no group membership or capability gates it.
++    ///   - A new directory additionally takes set-group-ID, so the rule keeps
++    ///     applying further down the subtree.
++    ///   - A new non-directory never gains set-group-ID. A set-group-ID
++    ///     explicitly requested in `mode` is stripped unless the creator can
++    ///     set it on the inherited group.
++    /// - Otherwise, the new inode takes the creator's filesystem group ID and
++    ///   the requested `mode` is used as is.
++    pub fn resolve(parent: &dyn Inode, type_: InodeType, mode: InodeMode) -> Result<Self> {
++        let (fsuid, fsgid) = current_fs_ids();
++
++        let parent_metadata = parent.metadata()?;
++        if !parent_metadata.mode.has_set_gid() {
++            return Ok(Self::new(fsuid, fsgid, mode));
++        }
++
++        let gid = parent_metadata.gid;
++        let mode = if type_ == InodeType::Dir {
++            mode | InodeMode::S_ISGID
++        } else if mode.has_set_gid() && mode.is_group_executable() && !can_set_gid_bit(gid) {
++            mode - InodeMode::S_ISGID
++        } else {
++            mode
++        };
++
++        Ok(Self::new(fsuid, gid, mode))
++    }
++}
++
++/// Returns the filesystem user and group IDs of the current thread.
++///
++/// Creation paths that run without a userspace thread, e.g. populating the
++/// initial ramfs, act as the root user.
++fn current_fs_ids() -> (Uid, Gid) {
++    Task::current()
++        .and_then(|task| {
++            let credentials = task.as_posix_thread()?.credentials();
++            Some((credentials.fsuid(), credentials.fsgid()))
++        })
++        .unwrap_or((Uid::new_root(), Gid::new_root()))
++}
++
++/// Returns whether the current thread may set the set-group-ID bit on an inode
++/// owned by the group `gid`.
++///
++/// This holds if the thread is a member of `gid`, or if it has the `CAP_FSETID`
++/// capability.
++fn can_set_gid_bit(gid: Gid) -> bool {
++    let Some(task) = Task::current() else {
++        return true;
++    };
++    let Some(posix_thread) = task.as_posix_thread() else {
++        return true;
++    };
++
++    let credentials = posix_thread.credentials();
++    if credentials.fsgid() == gid || credentials.groups().contains(&gid) {
++        return true;
++    }
++
++    let thread_local = task.as_thread_local().unwrap();
++    let user_ns = thread_local.borrow_user_ns();
++    lsm_hooks::on_capable(lsm_hooks::CapableContext::new(
++        user_ns.as_ref(),
++        posix_thread,
++        CapSet::FSETID,
++    ))
++    .is_ok()
+ }
+ 
+ bitflags! {
+@@ -408,19 +531,19 @@ pub trait Inode: Any + FileOps + Send + Sync {
+         None
+     }
+ 
+-    fn create(&self, name: &str, type_: InodeType, mode: InodeMode) -> Result<Arc<dyn Inode>> {
++    fn create(&self, name: &str, type_: InodeType, attrs: NewInodeAttrs) -> Result<Arc<dyn Inode>> {
+         Err(Error::new(Errno::ENOTDIR))
+     }
+ 
+     fn create_tmpfile(
+         &self,
+-        mode: InodeMode,
++        attrs: NewInodeAttrs,
+         hard_linkability: HardLinkability,
+     ) -> Result<Arc<dyn Inode>> {
+         Err(Error::new(Errno::EOPNOTSUPP))
+     }
+ 
+-    fn mknod(&self, name: &str, mode: InodeMode, type_: MknodType) -> Result<Arc<dyn Inode>> {
++    fn mknod(&self, name: &str, attrs: NewInodeAttrs, type_: MknodType) -> Result<Arc<dyn Inode>> {
+         Err(Error::new(Errno::ENOTDIR))
+     }
+ 
+diff --git a/kernel/src/fs/vfs/path/dentry.rs b/kernel/src/fs/vfs/path/dentry.rs
+index 4d6ec7c87..62dfb0ff6 100644
+--- a/kernel/src/fs/vfs/path/dentry.rs
++++ b/kernel/src/fs/vfs/path/dentry.rs
+@@ -14,7 +14,7 @@ use crate::{
+         self,
+         file::{InodeMode, InodeType},
+         vfs::{
+-            inode::{Inode, MknodType, RevalidationPolicy},
++            inode::{Inode, MknodType, NewInodeAttrs, RevalidationPolicy},
+             inode_ext::InodeExt,
+         },
+     },
+@@ -403,7 +403,8 @@ impl DirDentry<'_> {
+         mode: InodeMode,
+     ) -> Result<Arc<Dentry>> {
+         let children = self.validate_child_absent(name)?;
+-        let new_inode = self.inode.create(name, type_, mode)?;
++        let attrs = NewInodeAttrs::resolve(self.inode.as_ref(), type_, mode)?;
++        let new_inode = self.inode.create(name, type_, attrs)?;
+         let mut children = children.upgrade();
+         let new_child = Dentry::new(
+             new_inode,
+@@ -611,7 +612,8 @@ impl DirDentry<'_> {
+     ) -> Result<Arc<Dentry>> {
+         let children = self.validate_child_absent(name)?;
+         Self::check_mknod_capability(&type_)?;
+-        let inode = self.inode.mknod(name, mode, type_)?;
++        let attrs = NewInodeAttrs::resolve(self.inode.as_ref(), type_.inode_type(), mode)?;
++        let inode = self.inode.mknod(name, attrs, type_)?;
+         let new_child = Dentry::new(
+             inode,
+             DentryOptions::Named((String::from(name), self.this())),
+diff --git a/kernel/src/fs/vfs/path/mod.rs b/kernel/src/fs/vfs/path/mod.rs
+index a7daa6714..01c8a4b4b 100644
+--- a/kernel/src/fs/vfs/path/mod.rs
++++ b/kernel/src/fs/vfs/path/mod.rs
+@@ -22,7 +22,7 @@ use crate::{
+         pseudofs::NsInode,
+         vfs::{
+             file_system::{FileSystem, FsFlags},
+-            inode::{HardLinkability, Inode, Metadata, MknodType, RenameMode},
++            inode::{HardLinkability, Inode, Metadata, MknodType, NewInodeAttrs, RenameMode},
+             registry::FsAndRoot,
+             xattr::{XattrName, XattrNamespace, XattrSetFlags},
+         },
+@@ -84,7 +84,10 @@ impl Path {
+     ) -> Result<Self> {
+         let dir_dentry = self.dentry.as_dir_dentry_or_err()?;
+         self.check_dir_entry_mutation()?;
+-        let tmp_inode = self.inode().create_tmpfile(mode, hard_linkability)?;
++        // An unnamed temporary file has no directory entry, but it is still
++        // created in this directory, so it inherits the group in the same way.
++        let attrs = NewInodeAttrs::resolve(self.inode().as_ref(), InodeType::File, mode)?;
++        let tmp_inode = self.inode().create_tmpfile(attrs, hard_linkability)?;
+         let tmp_dentry = Dentry::new_anonymous(tmp_inode, &dir_dentry);
+         Ok(Self::new(self.mount.clone(), tmp_dentry))
+     }

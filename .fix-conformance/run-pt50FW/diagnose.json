@@ -1,0 +1,7 @@
+{
+  "verdict": "already-green",
+  "baseline": "On Linux, an unprivileged user calling chroot() must receive EPERM (errno 1). The test starts as root, switches to user 'nobody' via SETEUID, then attempts chroot() to a tmpdir path and expects EPERM.",
+  "asterinas_result": "Test passes. Asterinas correctly returns EPERM when an unprivileged process attempts to chroot(). Test output: 'chroot01: pass (0.014s)'",
+  "pool_entry_status": "Stale - the test is currently commented out in testcases/all.txt but passes on Asterinas at commit e8f2b9ca6",
+  "verification": "Ran chroot01 via CONFORMANCE_TEST_SELECTOR=chroot01 in Asterinas. Result from qemu.log shows pass. Baseline run on host Linux also passes with identical TPASS result."
+}

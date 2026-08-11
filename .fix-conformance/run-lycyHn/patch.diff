@@ -1,0 +1,42 @@
+diff --git a/kernel/src/process/process_vm/heap.rs b/kernel/src/process/process_vm/heap.rs
+index bf699b1a0..f971186d1 100644
+--- a/kernel/src/process/process_vm/heap.rs
++++ b/kernel/src/process/process_vm/heap.rs
+@@ -135,13 +135,30 @@ impl Heap {
+             return Ok(new_heap_end);
+         }
+ 
+-        // Because the mapped heap region may contain multiple mappings, which can be
+-        // done by `mmap` syscall or other ways, we need to be careful when modifying
+-        // the heap mapping.
+-        // For simplicity, we set `check_single_mapping` to `true` to ensure that the
+-        // heap region contains only a single mapping.
+-        vmar.resize_mapping(heap_start, old_size, new_size, true)
+-            .map_err(|_| current_heap_end)?;
++        // The heap may be fragmented into multiple mappings by mprotect, mmap, or munmap.
++        // Linux's brk handles this: it unmaps across fragments when shrinking, and when
++        // expanding, it either extends the last mapping (if permissions match) or creates
++        // a fresh mapping with default heap RW permissions.
++        if new_size < old_size {
++            // Shrinking: unmap the tail region, which works across multiple fragments.
++            // We use check_single_mapping=false to allow unmapping split heaps.
++            vmar.resize_mapping(heap_start, old_size, new_size, false)
++                .map_err(|_| current_heap_end)?;
++        } else {
++            // Expanding: create a fresh mapping for the new region with heap permissions.
++            // This approach works regardless of heap fragmentation and ensures new pages
++            // are always writable, matching Linux's do_brk_flags behavior.
++            let expansion_size = new_size - old_size;
++            let expansion_start = heap_start + old_size;
++
++            let vmar_map_options = {
++                let perms = VmPerms::READ | VmPerms::WRITE;
++                vmar.new_map(expansion_size, perms)
++                    .map_err(|_| current_heap_end)?
++                    .offset(VmarMapOffset::FixedNoReplace(expansion_start))
++            };
++            vmar_map_options.build().map_err(|_| current_heap_end)?;
++        }
+ 
+         inner.heap_range = new_heap_range;
+         Ok(new_heap_end)

@@ -1,0 +1,14 @@
+{
+  "result": "selected",
+  "suite": "ltp",
+  "test": "timer_create01",
+  "gvisor_filter": null,
+  "selector_token": "timer_create01",
+  "run_vars": "",
+  "pool_file": "test/initramfs/src/conformance/ltp/testcases/all.txt",
+  "pool_entries": ["timer_create01"],
+  "enable_action": "uncomment the line",
+  "source": "auto-picked",
+  "rationale": "Round 1 (semget02) covered SysV IPC permission checks. Round 2 explores fresh ground: POSIX timer creation is missing from previous runs (clock_getres covered resolution, timerfd_gettime covered argument validation, but neither addressed timer_create). Probe reveals a userspace-triggerable kernel panic: timer_create01's subtest 3 (SIGEV_THREAD notification) reaches unimplemented!() at timer_create.rs:74, killing the entire conformance run. Host passes all 5 notification subtests with 40 combinations of 8 clocks. Narrow fix: SIGEV_THREAD is Linux glibc-specific—the kernel handles it identically to SIGEV_SIGNAL (enqueue to thread group), so the match arm needs signal enqueue logic instead of panic. Other notification types pass across the supported clocks (REALTIME/MONOTONIC/PROCESS_CPUTIME_ID/THREAD_CPUTIME_ID/BOOTTIME all exist in create_timer), so this is the sole blocker. Probe batch also shows 56 other unprobed candidates with diverse failure modes (wait signal delivery, prctl thread names, setitimer boundaries, times CPU accounting, utime read-only fs), but timer_create01's kernel panic is the most critical: robustness defect reachable from unprivileged userspace with a localized one-match-arm fix in a well-bounded syscall.",
+  "notes": "Probe batch excluded timer_create01 initially to collect data on 56 other candidates before the panic; re-running with it would reproduce the panic. test/all.txt line 1822 commented out, round 1 did not touch timer family. Cache additions needed from probe2 for the 56 non-panicking tests."
+}

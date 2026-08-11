@@ -1,0 +1,9 @@
+{
+  "commit": "e4f9c242ee8cbbdbb43869c138186b8b038bff99",
+  "branch": "fix-ltp-brk01-S7ARh2",
+  "worktree": "/root/asterinas/.worktrees/run-S7ARh2",
+  "subject": "Enable `brk01` in the LTP conformance test suite",
+  "files": [
+    "test/initramfs/src/conformance/ltp/testcases/all.txt"
+  ]
+}

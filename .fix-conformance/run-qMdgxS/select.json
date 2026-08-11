@@ -1,0 +1,18 @@
+{
+  "result": "selected",
+  "suite": "gvisor",
+  "test": "readv_test",
+  "gvisor_filter": "ReadvTest.BadIovecBase_File:ReadvTest.BadIovecBase_Pipe:ReadvTest.IovecOutsideTaskAddressRangeInNonemptyArray",
+  "selector_token": "readv_test",
+  "run_vars": "CONFORMANCE_TEST_GVISOR_FILTER=ReadvTest.BadIovecBase_File:ReadvTest.BadIovecBase_Pipe:ReadvTest.IovecOutsideTaskAddressRangeInNonemptyArray",
+  "pool_file": "test/initramfs/src/conformance/gvisor/blocklists/readv_test",
+  "pool_entries": [
+    "ReadvTest.BadIovecBase_File",
+    "ReadvTest.BadIovecBase_Pipe",
+    "ReadvTest.IovecOutsideTaskAddressRangeInNonemptyArray"
+  ],
+  "enable_action": "delete these lines",
+  "source": "auto-picked",
+  "rationale": "All three cases fail the same way and look like one localized defect: readv returns success where Linux returns EFAULT for an unmapped iovec base. Probed on e8f2b9ca6 — BadIovecBase_File and BadIovecBase_Pipe both got 0 instead of -1/EFAULT (readv.cc:128, :136), and IovecOutsideTaskAddressRangeInNonemptyArray returned 284 instead of -1/EFAULT (readv.cc:255), i.e. it copied the first valid iovec and silently ignored the out-of-range second one. That points at one shared cause, iovec base addresses not being validated against the address space before the read, rather than a missing subsystem. All three pass on the host prebuilt (gvisor release-20260622.0), so the expectation is real Linux behavior. Chosen over the other candidates probed in the same boot: rlimits_test (5 failures spanning RLIMIT semantics plus /proc/pid/limits parsing, more than one defect), truncate_test (two cases hang ~10s each, suggesting a heavier problem), and lseek_test/link_test/symlink_test (each a single case needing /sys/devices SEEK_END, CAP_DAC_READ_SEARCH, or atime updates, all closer to absent features than to a narrow syscall bug). Suite choice: gvisor is entirely uncovered ground. All five committed rounds and all 608 prior select.cache records are LTP, so gvisor's 540 blocked cases across 50 files had never been probed. Also avoided epoll_test, whose blocked cycle-detection and RegularFiles cases overlap the defect run-rVlQYu just committed.",
+  "notes": "readv_test is already in TESTS (Makefile line 51), and these three lines are the first three of six in blocklists/readv_test, so the entry came from the default pool: verify with the default configuration, no workdir or extra-blocklist override. Two of the remaining three lines stay blocked (ReadvTestNoFixture.TruncatedAtMax and TruncatedAtMax_NoRandomSave, unprobed). The third, ReadvTest.NotReadable_Pipe, is a stale entry: it passed in Asterinas on e8f2b9ca6 while still blocked, so it is ready work for a later round, but it is a different defect class and is left out of this scope to keep the commit to one root cause. Recorded in select.cache as a stale-entry record. Note blocklists.exfat/readv_test blocks 27 other cases; unrelated to this run since the exfat pool is only consulted under CONFORMANCE_TEST_WORKDIR=/exfat. Two candidates were dropped without an Asterinas probe because they match zero cases in the prebuilt binaries (host tbroke): EventfdTest.SpliceFromPipePartialSucceeds and ChmodTest.FchmodDirSucceeds_NoRandomSave. CONFORMANCE_TEST_GVISOR_FILTER is global across the selector, so keep the selector to readv_test alone."
+}

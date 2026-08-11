@@ -1,0 +1,96 @@
+diff --git a/kernel/src/syscall/timer_create.rs b/kernel/src/syscall/timer_create.rs
+index 05d4da01f..b185315c5 100644
+--- a/kernel/src/syscall/timer_create.rs
++++ b/kernel/src/syscall/timer_create.rs
+@@ -55,24 +55,25 @@ pub fn sys_timer_create(
+             let sigev_notify = SigNotify::try_from(sig_event.sigev_notify)?;
+             let signo = sig_event.sigev_signo;
+             match sigev_notify {
+-                // Do nothing when the timer is expired.
++                // Do nothing when the timer is expired. `sigev_signo` is unused here, so it
++                // is not validated either.
+                 SigNotify::SIGEV_NONE => Box::new(|| {}),
+                 // Send a signal to the current process when the timer is expired.
+-                SigNotify::SIGEV_SIGNAL => {
++                //
++                // `SIGEV_THREAD` asks for `sigev_un._sigev_thread.function` to be run in a
++                // new thread. Spawning that thread is the C library's job, not the kernel's:
++                // the library creates the helper thread itself and only asks the kernel for a
++                // signal. So, as Linux does, the kernel treats `SIGEV_THREAD` exactly like
++                // `SIGEV_SIGNAL`.
++                SigNotify::SIGEV_SIGNAL | SigNotify::SIGEV_THREAD => {
+                     let process = current_process.clone();
+-                    let signal = KernelSignal::new(SigNum::try_from(signo as u8)?);
++                    let signo_u8 = u8::try_from(signo)
++                        .map_err(|_| Error::with_message(Errno::EINVAL, "invalid signal number"))?;
++                    let signal = KernelSignal::new(SigNum::try_from(signo_u8)?);
+                     Box::new(move || {
+                         process.enqueue_signal(Box::new(signal));
+                     })
+                 }
+-                // Spawn a POSIX thread to run the `sigev_function`, which is stored in
+-                // `sig_event.sigev_un._sigev_thread`.
+-                //
+-                // TODO: enable this instructions. Currently the system does not provide an API to spawn
+-                // a POSIX thread to run a specified function.
+-                SigNotify::SIGEV_THREAD => {
+-                    unimplemented!()
+-                }
+                 // Send a signal to the specified thread when the timer is expired.
+                 SigNotify::SIGEV_THREAD_ID => {
+                     let tid = sig_event.sigev_un.read_tid() as u32;
+@@ -86,7 +87,9 @@ pub fn sys_timer_create(
+                             "the target thread does not belong to the current process"
+                         );
+                     }
+-                    let signal = KernelSignal::new(SigNum::try_from(signo as u8)?);
++                    let signo_u8 = u8::try_from(signo)
++                        .map_err(|_| Error::with_message(Errno::EINVAL, "invalid signal number"))?;
++                    let signal = KernelSignal::new(SigNum::try_from(signo_u8)?);
+                     Box::new(move || {
+                         if let Some(posix_thread) = thread.as_posix_thread() {
+                             posix_thread.enqueue_signal(Box::new(signal));
+@@ -154,8 +157,10 @@ where
+                 match clock_type {
+                     DynamicClockType::Profiling => process_timer_manager.create_prof_timer(func),
+                     DynamicClockType::Virtual => process_timer_manager.create_virtual_timer(func),
+-                    // TODO: support scheduling clock and fd clock.
+-                    _ => unimplemented!(),
++                    // The scheduling clock can be read with `clock_gettime`, but, as in Linux,
++                    // no timer can be armed on it. (`DynamicClockType::FD` never reaches
++                    // here, since it decodes to `DynamicClockIdInfo::Fd`.)
++                    _ => return_errno_with_message!(Errno::EINVAL, "invalid clock ID"),
+                 }
+             }
+             DynamicClockIdInfo::Tid(tid, clock_type) => {
+@@ -166,10 +171,15 @@ where
+                 match clock_type {
+                     DynamicClockType::Profiling => posix_thread.create_prof_timer(func),
+                     DynamicClockType::Virtual => posix_thread.create_virtual_timer(func),
+-                    _ => unimplemented!(),
++                    // Ditto.
++                    _ => return_errno_with_message!(Errno::EINVAL, "invalid clock ID"),
+                 }
+             }
+-            DynamicClockIdInfo::Fd(_) => unimplemented!(),
++            // Asterinas has no dynamic POSIX clock devices, so no file descriptor can name a
++            // clock. TODO: Support timers on FD clocks once such devices exist.
++            DynamicClockIdInfo::Fd(_) => {
++                return_errno_with_message!(Errno::EINVAL, "invalid clock ID")
++            }
+         }
+     };
+     Ok(timer)
+diff --git a/test/initramfs/src/conformance/ltp/testcases/all.txt b/test/initramfs/src/conformance/ltp/testcases/all.txt
+index 5bef8afbd..c21c2c8b0 100644
+--- a/test/initramfs/src/conformance/ltp/testcases/all.txt
++++ b/test/initramfs/src/conformance/ltp/testcases/all.txt
+@@ -1716,7 +1716,7 @@ timerfd_create01
+ # timerfd_settime01
+ # timerfd_settime02
+ 
+-# timer_create01
++timer_create01
+ # timer_create02
+ timer_create03
+ 

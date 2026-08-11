@@ -1,0 +1,30 @@
+{
+  "result": "green",
+  "rounds": [
+    {
+      "hypothesis": "New directories and files are getting the creator's fsgid directly from credentials without checking if the parent directory has S_ISGID set. Both ramfs (the /tmp workdir) and ext2 call credentials.fsgid() in their create/mknod methods without any reference to the parent's mode. The VFS layer has the parent inode available at DirDentry::create and DirDentry::mknod but just passes mode verbatim down to the trait method. Linux uses inode_init_owner() to centralize this once in VFS.",
+      "change": "Introduced NewInodeAttrs struct in fs_apis/inode.rs to resolve uid, gid, and mode for new inodes. Its resolve() method implements the full set-group-ID directory rule: (1) gid is always fsuid; (2) in S_ISGID parent, new inode takes parent's gid unconditionally — directories also gain S_ISGID, non-directories inherit gid but an explicitly-requested S_ISGID is stripped unless creator is in that group or has CAP_FSETID; (3) non-S_ISGID parent uses fsgid. Extended Inode trait methods create(), mknod(), and create_tmpfile() to accept NewInodeAttrs instead of mode. Updated all filesystem implementations (ramfs, ext2, exfat, virtiofs, devpts, overlayfs, procfs, sysfs, systree) to consume the resolved attributes. Removed each filesystem's independent current_fs_ids logic, centralizing ownership resolution at the VFS boundary in dentry.rs create/mknod and path/mod.rs create_tmpfile.",
+      "outcome": "mkdir02 passes on both ramfs (/tmp, 0.015s) and ext2 (/ext2, 0.017s). All kernel unit tests pass."
+    }
+  ],
+  "changed_files": [
+    "kernel/src/fs/vfs/fs_apis/inode.rs",
+    "kernel/src/fs/vfs/path/dentry.rs",
+    "kernel/src/fs/vfs/path/mod.rs",
+    "kernel/src/fs/fs_impls/ramfs/fs.rs",
+    "kernel/src/fs/fs_impls/ext2/fs.rs",
+    "kernel/src/fs/fs_impls/ext2/impl_for_vfs/inode.rs",
+    "kernel/src/fs/fs_impls/ext2/inode/dir/mod.rs",
+    "kernel/src/fs/fs_impls/ext2/prelude.rs",
+    "kernel/src/fs/fs_impls/exfat/inode.rs",
+    "kernel/src/fs/fs_impls/virtiofs/inode/mod.rs",
+    "kernel/src/fs/fs_impls/devpts/mod.rs",
+    "kernel/src/fs/fs_impls/overlayfs/fs.rs",
+    "kernel/src/fs/fs_impls/procfs/template/dir.rs",
+    "kernel/src/fs/fs_impls/sysfs/inode.rs",
+    "kernel/src/fs/utils/systree_inode.rs"
+  ],
+  "layer": "VFS, above the filesystem, matching diagnose. The ownership resolution is centralized in NewInodeAttrs::resolve() and invoked once at DirDentry::create, DirDentry::mknod, and Path::create_tmpfile. The trait signature change to Inode::create/mknod/create_tmpfile forces every filesystem to accept the resolved owner rather than deriving it independently, which is why ramfs and ext2 both had the defect. The rule is now policy rather than a repeated implementation detail, and the mode carrying S_ISGID is the only mode a filesystem's create method can see.",
+  "generalizes": "mkdir, open(O_CREAT), mknodat (for regular files and devices), symlink, open(O_TMPFILE), and AF_UNIX bind all funnel through the same two VFS methods (DirDentry::create and mknod), so they all gain the rule identically. The fix applies to six filesystems (ramfs, ext2, exfat, virtiofs, devpts, overlayfs), though only ramfs and ext2 track per-inode uid/gid — exfat and virtiofs delegate ownership to mount options or a FUSE server, and devpts/procfs/sysfs stub out user creation. Kernel-internal creation paths (rootfs population, /dev device nodes) run as root in non-S_ISGID parents so the rule does not change their behavior. The rule also handles the paths mkdir02 does not test: non-directory inherits gid but not S_ISGID, explicitly-requested S_ISGID on non-directory is stripped when creator lacks membership/CAP_FSETID, and non-S_ISGID parent uses fsgid. These are all implemented in NewInodeAttrs::resolve based on the parent's mode and the new inode's type.",
+  "fix_summary": "Added a VFS-layer helper NewInodeAttrs that resolves the initial uid, gid, and mode for a new inode from the parent directory, requested type, and requested mode. The helper implements Linux's inode_init_owner semantics: uid is fsuid; gid and S_ISGID depend on whether the parent has S_ISGID set; when it does, the new inode inherits the parent's gid unconditionally, directories gain S_ISGID, and non-directories have explicitly-requested S_ISGID stripped unless the creator can set it. The Inode trait's create/mknod/create_tmpfile methods take the resolved attributes instead of a bare mode, so filesystems consume rather than derive ownership. This centralizes the policy once at the VFS boundary, above every filesystem, and removes the divergent current_fs_ids blocks from ramfs and ext2 that were causing the defect independently."
+}

@@ -1,0 +1,14 @@
+{
+  "result": "selected",
+  "suite": "ltp",
+  "test": "chroot01",
+  "gvisor_filter": null,
+  "selector_token": "chroot01",
+  "run_vars": "",
+  "pool_file": "test/initramfs/src/conformance/ltp/testcases/all.txt",
+  "pool_entries": ["chroot01"],
+  "enable_action": "uncomment the line",
+  "source": "auto-picked",
+  "rationale": "Stale-entry candidate from cache - test already passed in Asterinas at commit 68bdd4a99. Simple test checking unprivileged chroot() returns EPERM. This is a localized permission check test with no complex filesystem or subsystem dependencies.",
+  "notes": ""
+}

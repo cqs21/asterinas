@@ -1,0 +1,11 @@
+{
+  "commit": "24dc5d4e6bef24332d2d761666c3fbb208b3c53b",
+  "branch": "fix-ltp-renameat202-ps0EP2",
+  "worktree": "/root/asterinas/.worktrees/run-ps0EP2",
+  "subject": "Support `RENAME_EXCHANGE` in `ext2`",
+  "files": [
+    "kernel/src/fs/fs_impls/ext2/impl_for_vfs/inode.rs",
+    "kernel/src/fs/fs_impls/ext2/inode/dir/mod.rs",
+    "test/initramfs/src/conformance/ltp/testcases/blocked/ext2.txt"
+  ]
+}

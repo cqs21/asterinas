@@ -1,0 +1,7 @@
+{
+  "commit": "59aafcfd780804f81aa3c4e24cea4337f87a4013",
+  "branch": "fix-ltp-bind02-K7IxzT",
+  "worktree": "/root/asterinas/.worktrees/run-K7IxzT",
+  "subject": "Enable `bind02` in the LTP conformance suite",
+  "files": ["test/initramfs/src/conformance/ltp/testcases/all.txt"]
+}

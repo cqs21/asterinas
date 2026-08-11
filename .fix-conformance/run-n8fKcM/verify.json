@@ -1,0 +1,20 @@
+{
+  "status": "ok",
+  "target_test": {
+    "name": "semget02",
+    "case_results": null,
+    "passed": true
+  },
+  "still_blocked_absent": true,
+  "full_suite": {
+    "suite": "ltp",
+    "config": "default (run_vars empty, no CONFORMANCE_TEST_WORKDIR override, empty selector so the blocklist applies as in CI)",
+    "passed": true,
+    "summary": "Suite: syscalls, Runtime: 3m 18s, Runs: 544 -- Passed: 2704, Failed: 0, Broken: 0, Skipped: 52, Warnings: 0; 'All conformance tests passed.' (make run_kernel exit code 0). Target at qemu.log:426 'semget02: pass (0.018s)', with the already-enabled semaphore siblings semctl07, semget01 and semop03 still passing at lines 424, 425 and 427.",
+    "regressions": []
+  },
+  "pool_edit_check": "git diff on test/initramfs/src/conformance/ltp/testcases/all.txt before booting showed exactly one changed line: '# semget02' -> 'semget02' at line 1343. Matches pool_entries exactly; the neighbouring blocked entries semget05 (1344), semctl01-06/08/09 and semop01/02/04/05 were left commented.",
+  "still_blocked_evidence": "LTP filters at packaging time, so blocked entries are not copied into the initramfs and cannot appear at all: grep for semget05/semctl01/semop01 in qemu.log returns 0 hits. Enabled entries and result lines were also diffed set-wise, with no test running that was not enabled.",
+  "skip_note": "The 52 skipped subtests (17 tests carrying a TCONF) are pre-existing and unrelated to this change: same skip count as the most recent LTP full-suite verifies (run-atDPcd 52, run-7UHmXC 52, run-STzXZ3 52), and none of the 17 touch IPC. Passed rose from run-atDPcd's 2695 to 2704 on this branch's newer base plus semget02's 6 subtests.",
+  "unrun_entry_note": "all.txt has 545 enabled entries but the run reports 544, because munmap02 has no binary in the pinned LTP 20260529 prebuilt (bin/ holds munmap01, munmap03, munmap04) and is silently dropped at packaging. It is enabled identically at base_commit e8f2b9ca6, so this predates the change and is not a consequence of the pool edit."
+}

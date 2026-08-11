@@ -1,0 +1,16 @@
+{
+  "status": "ok",
+  "target_test": {
+    "name": "chroot01",
+    "case_results": null,
+    "passed": true
+  },
+  "still_blocked_absent": true,
+  "full_suite": {
+    "suite": "ltp",
+    "config": "default (no run_vars; CONFORMANCE_TEST_WORKDIR=/tmp, empty selector)",
+    "passed": true,
+    "summary": "Runs: 544, Passed: 2714, Failed: 0, Broken: 0, Skipped: 52, Warnings: 0 (runtime 3m 16s); 'All conformance tests passed.'",
+    "regressions": []
+  }
+}

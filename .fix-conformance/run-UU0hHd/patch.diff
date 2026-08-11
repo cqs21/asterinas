@@ -1,0 +1,57 @@
+diff --git a/kernel/src/fs/fs_impls/exfat/inode.rs b/kernel/src/fs/fs_impls/exfat/inode.rs
+index 96d5d2b3b..ddb1d5a79 100644
+--- a/kernel/src/fs/fs_impls/exfat/inode.rs
++++ b/kernel/src/fs/fs_impls/exfat/inode.rs
+@@ -135,6 +135,10 @@ struct ExfatInodeInner {
+     /// Important: To enlarge the page_cache, we need to update the page_cache size before we update the size of inode, to avoid extra data read.
+     /// To shrink the page_cache, we need to update the page_cache size after we update the size of inode, to avoid extra data write.
+     page_cache: PageCache,
++
++    /// Cached mode set by chmod. ExFAT doesn't persist UNIX permissions, but we store them
++    /// in memory to support chmod semantics for the lifetime of the mount.
++    cached_mode: Option<InodeMode>,
+ }
+ 
+ impl BlockAsPageCacheBackend for ExfatInode {
+@@ -254,8 +258,11 @@ impl ExfatInodeInner {
+     }
+ 
+     fn make_mode(&self) -> InodeMode {
+-        self.attr
+-            .make_mode(self.fs().mount_option(), InodeMode::all())
++        // Return cached mode if set by chmod, otherwise compute from FAT attributes
++        self.cached_mode.unwrap_or_else(|| {
++            self.attr
++                .make_mode(self.fs().mount_option(), InodeMode::all())
++        })
+     }
+ 
+     fn count_num_sub_inode_and_dir(&self, fs_guard: &MutexGuard<()>) -> Result<(usize, usize)> {
+@@ -890,6 +897,7 @@ impl ExfatInode {
+                 parent_hash: 0,
+                 fs: fs_weak,
+                 page_cache: PageCache::new_with_backend(size, weak_self.clone() as _).unwrap(),
++                cached_mode: None,
+             }),
+             extension: Extension::new(),
+         });
+@@ -1001,6 +1009,7 @@ impl ExfatInode {
+                 parent_hash,
+                 fs: fs_weak,
+                 page_cache: PageCache::new_with_backend(size, weak_self.clone() as _).unwrap(),
++                cached_mode: None,
+             }),
+             extension: Extension::new(),
+         });
+@@ -1461,7 +1470,10 @@ impl Inode for ExfatInode {
+     }
+ 
+     fn set_mode(&self, mode: InodeMode) -> Result<()> {
+-        //Pass through
++        // ExFAT doesn't persist UNIX permissions to disk, but we cache them in memory
++        // to support chmod semantics for the lifetime of the mount. This is an Asterinas
++        // extension beyond what Linux's exfat driver provides.
++        self.inner.write().cached_mode = Some(mode);
+         Ok(())
+     }
+ 

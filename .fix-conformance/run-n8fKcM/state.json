@@ -1,0 +1,21 @@
+{
+  "run_id": "run-n8fKcM",
+  "suite": "ltp",
+  "test": "semget02",
+  "gvisor_filter": null,
+  "worktree": "/root/asterinas/.worktrees/run-n8fKcM",
+  "osdk_bin": "/root/asterinas/.worktrees/run-n8fKcM/.osdk/bin",
+  "branch": "fix-ltp-semget02-n8fKcM",
+  "base_commit": "e8f2b9ca6",
+  "vnc_port": 8690,
+  "round": 1,
+  "rounds_total": 5,
+  "phases": {
+    "select": "done",
+    "diagnose": "done",
+    "fix": "done",
+    "verify": "done",
+    "commit": "done"
+  },
+  "outcome": "committed"
+}

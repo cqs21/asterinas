@@ -1,0 +1,11 @@
+{
+  "commit": "f7232bf56deffded4a839963856f09e3d9c85bf1",
+  "branch": "fix-ltp-prctl05-Du6S4W",
+  "worktree": "/root/asterinas/.worktrees/run-Du6S4W",
+  "subject": "Add truncating string reader for `prctl(PR_SET_NAME)`",
+  "files": [
+    "kernel/src/context.rs",
+    "kernel/src/syscall/prctl.rs",
+    "test/initramfs/src/conformance/ltp/testcases/all.txt"
+  ]
+}

@@ -1,0 +1,10 @@
+{
+  "commit": "fc3ef4db04164eb0c865bf5435b196e98e64b05c",
+  "branch": "fix-ltp-timer_create01-nQNo7j",
+  "worktree": "/root/asterinas/.worktrees/run-nQNo7j",
+  "subject": "Treat `SIGEV_THREAD` as `SIGEV_SIGNAL` in `sys_timer_create`",
+  "files": [
+    "kernel/src/syscall/timer_create.rs",
+    "test/initramfs/src/conformance/ltp/testcases/all.txt"
+  ]
+}

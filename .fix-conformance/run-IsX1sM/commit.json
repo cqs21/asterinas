@@ -1,0 +1,12 @@
+{
+  "commit": "9e36047faca9b4b624dc287d26e201782591e999",
+  "branch": "fix-ltp-llseek01-IsX1sM",
+  "worktree": "/root/asterinas/.worktrees/run-IsX1sM",
+  "subject": "Enforce `RLIMIT_FSIZE` on regular-file writes",
+  "files": [
+    "kernel/src/fs/file/inode_handle.rs",
+    "kernel/src/process/mod.rs",
+    "kernel/src/process/rlimit.rs",
+    "test/initramfs/src/conformance/ltp/testcases/all.txt"
+  ]
+}

@@ -1,0 +1,17 @@
+{
+  "result": "green",
+  "rounds": [
+    {
+      "hypothesis": "sys_timer_gettime validates NULL pointer before timer_id, causing EINVAL instead of EFAULT for NULL itimerspec_addr",
+      "change": "Removed lines 69-71 that check itimerspec_addr == 0 and return EINVAL early",
+      "outcome": "green: test passed with 3/3 assertions, 'All conformance tests passed.'"
+    }
+  ],
+  "changed_files": [
+    "kernel/src/syscall/timer_settime.rs",
+    "test/initramfs/src/conformance/ltp/testcases/all.txt"
+  ],
+  "layer": "syscall entry in kernel/src/syscall/timer_settime.rs - matches diagnose.json's owning_layer. This is the correct layer because POSIX defines the error priority at the syscall interface: EINVAL for invalid timer_id must be checked before EFAULT for bad userspace pointers.",
+  "generalizes": "This fix is correct for all callers because timer_gettime has only one syscall entry point. The change establishes the correct validation order: (1) timer_id lookup returns EINVAL for bad timer, (2) write_val naturally returns EFAULT for NULL/invalid pointer from the copyout operation. This matches Linux's behavior and POSIX semantics where resource validation precedes pointer validation. The fix does not special-case any particular pointer value or test input - it removes an incorrect early check to let the natural error flow proceed.",
+  "fix_summary": "Removed the NULL pointer pre-check from sys_timer_gettime to match Linux's behavior. Linux's sys_timer_gettime validates timer_id first, then attempts copyout via put_itimerspec64, which naturally returns EFAULT for bad pointers. Asterinas now follows the same pattern: validate timer_id (EINVAL if bad), then write_val produces EFAULT when the userspace write fails. This is designed against Asterinas's VmIo::write_val abstraction, which already handles bad pointers correctly by returning the appropriate error from the memory operation."
+}

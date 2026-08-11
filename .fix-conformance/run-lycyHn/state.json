@@ -1,0 +1,21 @@
+{
+  "run_id": "run-lycyHn",
+  "suite": "ltp",
+  "test": "brk02",
+  "gvisor_filter": null,
+  "worktree": "/root/asterinas/.worktrees/run-lycyHn",
+  "osdk_bin": "/root/asterinas/.worktrees/run-lycyHn/.osdk/bin",
+  "branch": "fix-ltp-brk02-lycyHn",
+  "base_commit": "e8f2b9ca6",
+  "vnc_port": 326,
+  "round": 9,
+  "rounds_total": 10,
+  "phases": {
+    "select": "done",
+    "diagnose": "done",
+    "fix": "done",
+    "verify": "done",
+    "commit": "done"
+  },
+  "outcome": "committed"
+}

@@ -1,0 +1,10 @@
+{
+  "commit": "3fa25ac12d02c37670aa97e677f64f6257c96525",
+  "branch": "fix-ltp-timer_gettime01-5G5q5b",
+  "worktree": "/root/asterinas/.worktrees/run-5G5q5b",
+  "subject": "Remove early NULL check in `timer_gettime` syscall",
+  "files": [
+    "kernel/src/syscall/timer_settime.rs",
+    "test/initramfs/src/conformance/ltp/testcases/all.txt"
+  ]
+}

@@ -1,0 +1,32 @@
+diff --git a/kernel/src/syscall/timerfd_gettime.rs b/kernel/src/syscall/timerfd_gettime.rs
+index bf4d93e88..e44ca1f10 100644
+--- a/kernel/src/syscall/timerfd_gettime.rs
++++ b/kernel/src/syscall/timerfd_gettime.rs
+@@ -14,10 +14,10 @@ pub fn sys_timerfd_gettime(
+     itimerspec_addr: Vaddr,
+     ctx: &Context,
+ ) -> Result<SyscallReturn> {
+-    if itimerspec_addr == 0 {
+-        return_errno_with_message!(Errno::EINVAL, "invalid pointer to return value");
+-    }
+-
++    // The FD must be fully validated before the user pointer is touched, so that
++    // FD errors (`EBADF`, then `EINVAL` for a non-timerfd) take precedence over
++    // pointer errors (`EFAULT`). A null pointer is not a distinct error condition:
++    // it is an unmapped address, reported as `EFAULT` by the user-space write below.
+     let file_table = ctx.thread_local.borrow_file_table();
+     let file_table_locked = file_table.unwrap().read();
+     let timerfd_file = file_table_locked.get_file(raw_fd.try_into()?)?;
+diff --git a/test/initramfs/src/conformance/ltp/testcases/all.txt b/test/initramfs/src/conformance/ltp/testcases/all.txt
+index 5bef8afbd..eaf97be15 100644
+--- a/test/initramfs/src/conformance/ltp/testcases/all.txt
++++ b/test/initramfs/src/conformance/ltp/testcases/all.txt
+@@ -1712,7 +1712,7 @@ timerfd01
+ timerfd02
+ # timerfd04
+ timerfd_create01
+-# timerfd_gettime01
++timerfd_gettime01
+ # timerfd_settime01
+ # timerfd_settime02
+ 

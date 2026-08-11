@@ -1,0 +1,21 @@
+{
+  "run_id": "run-UU0hHd",
+  "suite": "ltp",
+  "test": "chmod01",
+  "gvisor_filter": null,
+  "worktree": "/root/asterinas/.worktrees/run-UU0hHd",
+  "osdk_bin": "/root/asterinas/.worktrees/run-UU0hHd/.osdk/bin",
+  "branch": "fix-ltp-chmod01-UU0hHd",
+  "base_commit": "e8f2b9ca6",
+  "vnc_port": 1903,
+  "round": 1,
+  "rounds_total": 5,
+  "phases": {
+    "select": "done",
+    "diagnose": "done",
+    "fix": "done",
+    "verify": "done",
+    "commit": "done"
+  },
+  "outcome": "committed"
+}

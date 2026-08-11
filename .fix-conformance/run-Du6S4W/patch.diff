@@ -1,0 +1,72 @@
+diff --git a/kernel/src/context.rs b/kernel/src/context.rs
+index 133096794..c9d794a6f 100644
+--- a/kernel/src/context.rs
++++ b/kernel/src/context.rs
+@@ -226,6 +226,38 @@ impl<'a> CurrentUserSpace<'a> {
+                 )
+             })
+     }
++
++    /// Reads a C string from the user space, truncating it if it exceeds the maximum length.
++    ///
++    /// This method behaves like [`Self::read_cstring`], except that an over-long string is not
++    /// an error: the returned C string contains at most `max_len - 1` bytes, silently truncated.
++    ///
++    /// This matches Linux's `strncpy_from_user`, which reports an error only if the string cannot
++    /// be read. It is correct for fixed-size kernel name fields, such as the thread name set by
++    /// `prctl(PR_SET_NAME)`, where Linux truncates silently rather than rejecting an over-long name.
++    pub fn read_cstring_truncated(&self, vaddr: Vaddr, max_len: usize) -> Result<CString> {
++        let read_len = max_len.saturating_sub(1);
++        if read_len > 0 {
++            check_vaddr_lowerbound(vaddr)?;
++        }
++
++        let userspace_max_len = VMAR_CAP_ADDR.saturating_sub(vaddr).min(read_len);
++
++        let mut user_reader = self.reader(vaddr, userspace_max_len)?;
++        let (cstring, bytes_read) = user_reader.read_cstring_until_end(userspace_max_len)?;
++
++        // If no nul byte was found and the read window was clamped by the address space limit,
++        // the string runs off the end of user space, which is an error per Linux's behavior.
++        let nul_found = bytes_read == cstring.as_bytes_with_nul().len();
++        if !nul_found && userspace_max_len != read_len {
++            return_errno_with_message!(
++                Errno::EFAULT,
++                "the C string does not end before reaching the maximum userspace virtual address"
++            );
++        }
++
++        Ok(cstring)
++    }
+ }
+ 
+ impl VmIo for CurrentUserSpace<'_> {
+diff --git a/kernel/src/syscall/prctl.rs b/kernel/src/syscall/prctl.rs
+index 7e9b39e1e..9cf2e1747 100644
+--- a/kernel/src/syscall/prctl.rs
++++ b/kernel/src/syscall/prctl.rs
+@@ -63,9 +63,10 @@ pub fn sys_prctl(
+             credentials.set_keep_capabilities(keep_cap != 0)?;
+         }
+         PrctlCmd::PR_SET_NAME(read_addr) => {
++            // Linux truncates an over-long thread name silently instead of rejecting it.
+             let new_thread_name = ctx
+                 .user_space()
+-                .read_cstring(read_addr, MAX_THREAD_NAME_LEN)?;
++                .read_cstring_truncated(read_addr, MAX_THREAD_NAME_LEN)?;
+             let mut thread_name = ctx.posix_thread.thread_name().lock();
+             thread_name.set_name(&new_thread_name);
+         }
+diff --git a/test/initramfs/src/conformance/ltp/testcases/all.txt b/test/initramfs/src/conformance/ltp/testcases/all.txt
+index 5bef8afbd..72a1366b0 100644
+--- a/test/initramfs/src/conformance/ltp/testcases/all.txt
++++ b/test/initramfs/src/conformance/ltp/testcases/all.txt
+@@ -1105,7 +1105,7 @@ ppoll01
+ prctl01
+ prctl02
+ # prctl03 # FIXME: `SIGCHLD` must arrive by the time `wait()` returns. Otherwise, it is flaky.
+-# prctl05
++prctl05
+ # prctl06
+ prctl07
+ # prctl08

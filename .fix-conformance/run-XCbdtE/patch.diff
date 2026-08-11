@@ -1,0 +1,101 @@
+diff --git a/kernel/src/process/mod.rs b/kernel/src/process/mod.rs
+index 2948b3da5..766193b1e 100644
+--- a/kernel/src/process/mod.rs
++++ b/kernel/src/process/mod.rs
+@@ -9,6 +9,7 @@ mod namespace;
+ mod pid_file;
+ pub mod pid_table;
+ pub mod posix_thread;
++mod priority;
+ #[expect(clippy::module_inception)]
+ mod process;
+ mod process_filter;
+@@ -33,6 +34,7 @@ pub use namespace::{
+     user_ns::UserNamespace,
+ };
+ pub use pid_file::PidFile;
++pub use priority::check_set_priority_perm;
+ pub use process::{
+     ExitCode, INIT_PROCESS_PID, JobControl, Pgid, Pid, Process, ProcessGroup, ReapedChildrenStats,
+     Session, Sid, Terminal, broadcast_signal_async, enqueue_signal_async, spawn_init_process,
+diff --git a/kernel/src/process/priority.rs b/kernel/src/process/priority.rs
+new file mode 100644
+index 000000000..6fe8eafe3
+--- /dev/null
++++ b/kernel/src/process/priority.rs
+@@ -0,0 +1,47 @@
++// SPDX-License-Identifier: MPL-2.0
++
++//! Permission checks for changing the scheduling priority of a process.
++
++use super::{Process, credentials::capabilities::CapSet, posix_thread::AsPosixThread};
++use crate::{prelude::*, security::lsm::hooks as lsm_hooks};
++
++/// Checks whether the current thread is authorized to change the scheduling
++/// priority of the target process.
++///
++/// The current thread is authorized if its effective UID matches the real or
++/// the effective UID of the target process, or if it has the `SYS_NICE`
++/// capability in the target process's user namespace.
++///
++/// This check answers whether the target may be touched at all. It says nothing
++/// about whether the requested priority itself is permitted, which is subject to
++/// the resource limits of the target process and must be checked afterwards.
++// Reference: `set_one_prio_perm` in <https://elixir.bootlin.com/linux/v6.17/source/kernel/sys.c>.
++pub fn check_set_priority_perm(target_process: &Process, ctx: &Context) -> Result<()> {
++    // The nice value is a per-process attribute, so the credentials of the main
++    // thread represent the credentials of the target process.
++    let target_cred = target_process
++        .main_thread()
++        .as_posix_thread()
++        .unwrap()
++        .credentials();
++    let current_euid = ctx.posix_thread.credentials().euid();
++
++    if current_euid == target_cred.ruid() || current_euid == target_cred.euid() {
++        return Ok(());
++    }
++
++    if lsm_hooks::on_capable(lsm_hooks::CapableContext::new(
++        target_process.user_ns().lock().as_ref(),
++        ctx.posix_thread,
++        CapSet::SYS_NICE,
++    ))
++    .is_ok()
++    {
++        return Ok(());
++    }
++
++    return_errno_with_message!(
++        Errno::EPERM,
++        "changing the scheduling priority of the target process is not allowed"
++    )
++}
+diff --git a/kernel/src/syscall/set_priority.rs b/kernel/src/syscall/set_priority.rs
+index febc7273e..ecaa0f2d0 100644
+--- a/kernel/src/syscall/set_priority.rs
++++ b/kernel/src/syscall/set_priority.rs
+@@ -5,7 +5,7 @@ use core::sync::atomic::Ordering;
+ use super::SyscallReturn;
+ use crate::{
+     prelude::*,
+-    process::ResourceType::RLIMIT_NICE,
++    process::{ResourceType::RLIMIT_NICE, check_set_priority_perm},
+     sched::Nice,
+     syscall::get_priority::{PriorityTarget, get_processes},
+ };
+@@ -27,6 +27,14 @@ pub fn sys_set_priority(which: i32, who: u32, prio: i32, ctx: &Context) -> Resul
+ 
+     let processes = get_processes(prio_target)?;
+     for process in processes.iter() {
++        // Check permission. This must precede the resource limit check below,
++        // since being unauthorized to touch the target at all takes precedence
++        // over the requested priority being out of the permitted range.
++        //
++        // `PRIO_PGRP` and `PRIO_USER` may resolve to multiple processes with
++        // differing credentials, so the check is performed per process.
++        check_set_priority_perm(process, ctx)?;
++
+         let rlimit = process.resource_limits();
+         let limit = (rlimit.get_rlimit(RLIMIT_NICE).get_cur() as i8)
+             .try_into()

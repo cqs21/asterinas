@@ -1,0 +1,26 @@
+{
+  "commit": "1d4748d2ad3f27a0dda0cb452bf97bc14c987472",
+  "branch": "fix-ltp-mkdir02-YIMPAV",
+  "worktree": "/root/asterinas/.worktrees/run-YIMPAV",
+  "subject": "Implement S_ISGID inheritance for new inodes in VFS layer",
+  "files": [
+    "kernel/src/fs/fs_impls/configfs/test.rs",
+    "kernel/src/fs/fs_impls/devpts/mod.rs",
+    "kernel/src/fs/fs_impls/exfat/inode.rs",
+    "kernel/src/fs/fs_impls/ext2/fs.rs",
+    "kernel/src/fs/fs_impls/ext2/impl_for_vfs/inode.rs",
+    "kernel/src/fs/fs_impls/ext2/inode/dir/mod.rs",
+    "kernel/src/fs/fs_impls/ext2/prelude.rs",
+    "kernel/src/fs/fs_impls/ext2/test_utils.rs",
+    "kernel/src/fs/fs_impls/overlayfs/fs.rs",
+    "kernel/src/fs/fs_impls/procfs/template/dir.rs",
+    "kernel/src/fs/fs_impls/ramfs/fs.rs",
+    "kernel/src/fs/fs_impls/sysfs/inode.rs",
+    "kernel/src/fs/fs_impls/virtiofs/inode/mod.rs",
+    "kernel/src/fs/utils/systree_inode.rs",
+    "kernel/src/fs/vfs/fs_apis/inode.rs",
+    "kernel/src/fs/vfs/path/dentry.rs",
+    "kernel/src/fs/vfs/path/mod.rs",
+    "test/initramfs/src/conformance/ltp/testcases/all.txt"
+  ]
+}

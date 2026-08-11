@@ -1,0 +1,773 @@
+diff --git a/kernel/src/device/pty/master.rs b/kernel/src/device/pty/master.rs
+index 85ada2e7f..13216b996 100644
+--- a/kernel/src/device/pty/master.rs
++++ b/kernel/src/device/pty/master.rs
+@@ -19,6 +19,7 @@ use crate::{
+     prelude::*,
+     process::{
+         Terminal,
++        rlimit::ResourceType,
+         signal::{PollHandle, Pollable},
+     },
+     util::ioctl::{RawIoctl, dispatch_ioctl},
+@@ -209,7 +210,11 @@ impl PerOpenFileOps for PtyMaster {
+                     let file_table = thread_local.borrow_file_table();
+                     let mut file_table_locked = file_table.unwrap().write();
+                     // TODO: Deal with the `O_CLOEXEC` flag.
+-                    file_table_locked.insert(slave, FdFlags::empty())
++                    let current = current!();
++                    let nofile_rlimit = current
++                        .resource_limits()
++                        .get_rlimit(ResourceType::RLIMIT_NOFILE);
++                    file_table_locked.insert(slave, FdFlags::empty(), nofile_rlimit)?
+                 };
+                 return Ok(fd.into());
+             }
+diff --git a/kernel/src/fs/file/file_table.rs b/kernel/src/fs/file/file_table.rs
+index f26ed7a42..a0dfa37e5 100644
+--- a/kernel/src/fs/file/file_table.rs
++++ b/kernel/src/fs/file/file_table.rs
+@@ -10,7 +10,9 @@ use ostd::sync::RwArc;
+ 
+ use super::file_handle::FileLike;
+ use crate::{
+-    fs::vfs::range_lock::RangeLockOwner, prelude::*, process::posix_thread::FileTableRefMut,
++    fs::vfs::range_lock::RangeLockOwner,
++    prelude::*,
++    process::{posix_thread::FileTableRefMut, rlimit::RLimit64},
+ };
+ 
+ /// Represents a validated, non-negative file descriptor.
+@@ -136,33 +138,54 @@ impl FileTable {
+ 
+     /// Duplicates `fd` onto the lowest-numbered available descriptor equal to
+     /// or greater than `ceil_fd`.
++    ///
++    /// Returns `EMFILE` if the descriptor to allocate would reach the soft
++    /// `RLIMIT_NOFILE` limit, which bounds the descriptor numbers a process may hold.
+     pub fn dup_ceil(
+         &mut self,
+         fd: FileDesc,
+         ceil_fd: FileDesc,
+         flags: FdFlags,
++        nofile_rlimit: &RLimit64,
+     ) -> Result<FileDesc> {
+         let entry = self.duplicate_entry(fd, flags)?;
+ 
+-        // Get the lowest-numbered available fd equal to or greater than `ceil_fd`.
+-        let get_min_free_fd = || -> usize {
+-            let ceil_fd = ceil_fd.into();
+-            if self.table.get(ceil_fd).is_none() {
+-                return ceil_fd;
+-            }
++        let min_free_fd = self.min_free_fd(ceil_fd);
++        Self::check_nofile_rlimit(min_free_fd, nofile_rlimit)?;
+ 
+-            for idx in ceil_fd + 1..self.len() {
+-                if self.table.get(idx).is_none() {
+-                    return idx;
+-                }
+-            }
+-            self.len()
+-        };
+-
+-        let min_free_fd = get_min_free_fd();
+         self.table.put_at(min_free_fd, entry);
+-        // Resource limits guarantee the table never exceeds `i32::MAX` entries.
+-        Ok((min_free_fd as RawFileDesc).try_into().unwrap())
++        Ok(Self::to_file_desc(min_free_fd))
++    }
++
++    /// Returns the lowest-numbered available slot equal to or greater than `ceil_fd`.
++    fn min_free_fd(&self, ceil_fd: FileDesc) -> usize {
++        let ceil_fd = ceil_fd.into();
++        (ceil_fd..self.len())
++            .find(|&idx| self.table.get(idx).is_none())
++            .unwrap_or_else(|| self.len().max(ceil_fd))
++    }
++
++    /// Checks `fd` against the soft `RLIMIT_NOFILE` limit.
++    ///
++    /// Linux performs this check in its generic descriptor allocator, so every system call that
++    /// allocates a descriptor inherits it.
++    ///
++    /// Reference: <https://elixir.bootlin.com/linux/v6.16.9/source/fs/file.c#L512>
++    fn check_nofile_rlimit(fd: usize, nofile_rlimit: &RLimit64) -> Result<()> {
++        if fd as u64 >= nofile_rlimit.get_cur() {
++            return_errno_with_message!(Errno::EMFILE, "the `RLIMIT_NOFILE` limit is reached");
++        }
++        Ok(())
++    }
++
++    /// Converts an allocated slot index to a [`FileDesc`].
++    ///
++    /// `RLIMIT_NOFILE` is capped at [`SYSCTL_NR_OPEN`], and [`Self::check_nofile_rlimit`] rejects
++    /// any slot at or beyond the limit, so an allocated index always fits in `FileDesc`.
++    ///
++    /// [`SYSCTL_NR_OPEN`]: crate::process::rlimit::SYSCTL_NR_OPEN
++    fn to_file_desc(fd: usize) -> FileDesc {
++        (fd as RawFileDesc).try_into().unwrap()
+     }
+ 
+     /// Duplicates `fd` onto the exact descriptor number `new_fd`.
+@@ -187,10 +210,22 @@ impl FileTable {
+         Ok(FileTableEntry::new(file, flags))
+     }
+ 
+-    pub fn insert(&mut self, item: Arc<dyn FileLike>, flags: FdFlags) -> FileDesc {
++    /// Allocates the lowest-numbered available descriptor for `item`.
++    ///
++    /// Returns `EMFILE` if the descriptor to allocate would reach the soft
++    /// `RLIMIT_NOFILE` limit, which bounds the descriptor numbers a process may hold.
++    pub fn insert(
++        &mut self,
++        item: Arc<dyn FileLike>,
++        flags: FdFlags,
++        nofile_rlimit: &RLimit64,
++    ) -> Result<FileDesc> {
++        let min_free_fd = self.min_free_fd(FileDesc::ZERO);
++        Self::check_nofile_rlimit(min_free_fd, nofile_rlimit)?;
++
+         let entry = FileTableEntry::new(item, flags);
+-        // Resource limits guarantee the table never exceeds `i32::MAX` entries.
+-        (self.table.put(entry) as RawFileDesc).try_into().unwrap()
++        self.table.put_at(min_free_fd, entry);
++        Ok(Self::to_file_desc(min_free_fd))
+     }
+ 
+     pub fn close_file(&mut self, fd: FileDesc) -> Option<ClosedFile> {
+diff --git a/kernel/src/fs/fs_impls/pseudofs/nsfs.rs b/kernel/src/fs/fs_impls/pseudofs/nsfs.rs
+index 062176929..6a31a0ed0 100644
+--- a/kernel/src/fs/fs_impls/pseudofs/nsfs.rs
++++ b/kernel/src/fs/fs_impls/pseudofs/nsfs.rs
+@@ -25,6 +25,7 @@ use crate::{
+     prelude::*,
+     process::{
+         CloneFlags, Gid, Uid, UserNamespace,
++        rlimit::ResourceType,
+         signal::{PollHandle, Pollable},
+     },
+     util::ioctl::{RawIoctl, dispatch_ioctl},
+@@ -281,7 +282,11 @@ fn open_ns_as_file<T: NsCommonOps>(ns: &Arc<T>) -> Result<FileDesc> {
+     let thread_local = current_task.as_thread_local().unwrap();
+     let mut file_table_ref = thread_local.borrow_file_table_mut();
+     let mut file_table = file_table_ref.unwrap().write();
+-    let fd = file_table.insert(Arc::new(inode_handle), FdFlags::CLOEXEC);
++    let current = current!();
++    let nofile_rlimit = current
++        .resource_limits()
++        .get_rlimit(ResourceType::RLIMIT_NOFILE);
++    let fd = file_table.insert(Arc::new(inode_handle), FdFlags::CLOEXEC, nofile_rlimit)?;
+ 
+     Ok(fd)
+ }
+diff --git a/kernel/src/fs/mod.rs b/kernel/src/fs/mod.rs
+index ad0aa8931..f791d1e2a 100644
+--- a/kernel/src/fs/mod.rs
++++ b/kernel/src/fs/mod.rs
+@@ -18,6 +18,7 @@ use crate::{
+         vfs::path::{FsPath, PathResolver},
+     },
+     prelude::*,
++    process::rlimit::ResourceType,
+ };
+ 
+ pub fn init() {
+@@ -66,8 +67,18 @@ pub fn init_in_first_process(ctx: &Context) {
+ 
+     let mut file_table_ref = ctx.thread_local.borrow_file_table_mut();
+     let mut file_table = file_table_ref.unwrap().write();
++    let nofile_rlimit = ctx
++        .process
++        .resource_limits()
++        .get_rlimit(ResourceType::RLIMIT_NOFILE);
+ 
+-    file_table.insert(Arc::new(stdin), FdFlags::empty());
+-    file_table.insert(Arc::new(stdout), FdFlags::empty());
+-    file_table.insert(Arc::new(stderr), FdFlags::empty());
++    file_table
++        .insert(Arc::new(stdin), FdFlags::empty(), nofile_rlimit)
++        .unwrap();
++    file_table
++        .insert(Arc::new(stdout), FdFlags::empty(), nofile_rlimit)
++        .unwrap();
++    file_table
++        .insert(Arc::new(stderr), FdFlags::empty(), nofile_rlimit)
++        .unwrap();
+ }
+diff --git a/kernel/src/net/socket/unix/ctrl_msg.rs b/kernel/src/net/socket/unix/ctrl_msg.rs
+index 31f48480a..580b7b277 100644
+--- a/kernel/src/net/socket/unix/ctrl_msg.rs
++++ b/kernel/src/net/socket/unix/ctrl_msg.rs
+@@ -14,7 +14,10 @@ use crate::{
+     },
+     net::socket::util::{CControlHeader, ControlMessage, RecvFlags},
+     prelude::*,
+-    process::{UserNamespace, credentials::capabilities::CapSet, posix_thread::AsPosixThread},
++    process::{
++        UserNamespace, credentials::capabilities::CapSet, posix_thread::AsPosixThread,
++        rlimit::ResourceType,
++    },
+     security::lsm::hooks as lsm_hooks,
+     util::net::CSocketOptionLevel,
+ };
+@@ -133,12 +136,20 @@ impl FileMessage {
+ 
+         let current = Task::current().unwrap();
+         let file_table = current.as_thread_local().unwrap().borrow_file_table();
++        let process = current!();
++        let nofile_rlimit = process
++            .resource_limits()
++            .get_rlimit(ResourceType::RLIMIT_NOFILE);
+         for file in self.files[..nfiles].iter() {
+             // TODO: Deal with the `O_CLOEXEC` flag.
+-            let fd = file_table
+-                .unwrap()
+-                .write()
+-                .insert(file.clone(), FdFlags::empty());
++            // FIXME: When the `RLIMIT_NOFILE` limit is reached, Linux delivers the descriptors
++            // that did fit and reports only that number, whereas we fail the whole operation.
++            // Reference: <https://elixir.bootlin.com/linux/v6.16.9/source/net/core/scm.c#L307>
++            let fd = file_table.unwrap().write().insert(
++                file.clone(),
++                FdFlags::empty(),
++                nofile_rlimit,
++            )?;
+             // Perhaps we should remove the inserted files from the file table if we cannot write
+             // the file descriptor back to user space? However, even Linux cannot handle every
+             // corner case (https://elixir.bootlin.com/linux/v6.15.2/source/net/core/scm.c#L357).
+diff --git a/kernel/src/process/clone.rs b/kernel/src/process/clone.rs
+index e7f82f614..5654008ef 100644
+--- a/kernel/src/process/clone.rs
++++ b/kernel/src/process/clone.rs
+@@ -13,7 +13,7 @@ use ostd::{
+ use super::{
+     Credentials, Pid, Process, pid_table,
+     posix_thread::{AsPosixThread, PosixThreadBuilder},
+-    rlimit::ResourceLimits,
++    rlimit::{ResourceLimits, ResourceType},
+     signal::{constants::SIGCHLD, sig_disposition::SigDispositions, sig_num::SigNum},
+ };
+ use crate::{
+@@ -783,7 +783,11 @@ fn clone_pidfd(
+         let pid_file = PidFile::new(child.clone(), false);
+         let file_table = ctx.thread_local.borrow_file_table();
+         let mut file_table_locked = file_table.unwrap().write();
+-        file_table_locked.insert(Arc::new(pid_file), FdFlags::CLOEXEC)
++        let nofile_rlimit = ctx
++            .process
++            .resource_limits()
++            .get_rlimit(ResourceType::RLIMIT_NOFILE);
++        file_table_locked.insert(Arc::new(pid_file), FdFlags::CLOEXEC, nofile_rlimit)?
+     };
+ 
+     // Since `write_val` may sleep, we cannot hold the file table lock during its execution.
+diff --git a/kernel/src/syscall/accept.rs b/kernel/src/syscall/accept.rs
+index cebda1709..6946cb5f5 100644
+--- a/kernel/src/syscall/accept.rs
++++ b/kernel/src/syscall/accept.rs
+@@ -7,6 +7,7 @@ use crate::{
+         file_table::{FdFlags, RawFileDesc, get_file_fast},
+     },
+     prelude::*,
++    process::rlimit::ResourceType,
+     util::net::write_socket_addr_to_user,
+ };
+ 
+@@ -74,7 +75,11 @@ fn do_accept(
+ 
+     let fd = {
+         let mut file_table_locked = file_table.unwrap().write();
+-        file_table_locked.insert(connected_socket, fd_flags)
++        let nofile_rlimit = ctx
++            .process
++            .resource_limits()
++            .get_rlimit(ResourceType::RLIMIT_NOFILE);
++        file_table_locked.insert(connected_socket, fd_flags, nofile_rlimit)?
+     };
+ 
+     Ok(SyscallReturn::Return(fd.into()))
+diff --git a/kernel/src/syscall/dup.rs b/kernel/src/syscall/dup.rs
+index b0ba72a91..9d239e4f2 100644
+--- a/kernel/src/syscall/dup.rs
++++ b/kernel/src/syscall/dup.rs
+@@ -12,8 +12,16 @@ pub fn sys_dup(old_fd: RawFileDesc, ctx: &Context) -> Result<SyscallReturn> {
+ 
+     let file_table = ctx.thread_local.borrow_file_table();
+     let mut file_table_locked = file_table.unwrap().write();
+-    let new_fd =
+-        file_table_locked.dup_ceil(old_fd.try_into()?, FileDesc::ZERO, FdFlags::empty())?;
++    let nofile_rlimit = ctx
++        .process
++        .resource_limits()
++        .get_rlimit(ResourceType::RLIMIT_NOFILE);
++    let new_fd = file_table_locked.dup_ceil(
++        old_fd.try_into()?,
++        FileDesc::ZERO,
++        FdFlags::empty(),
++        nofile_rlimit,
++    )?;
+ 
+     Ok(SyscallReturn::Return(new_fd.into()))
+ }
+diff --git a/kernel/src/syscall/epoll.rs b/kernel/src/syscall/epoll.rs
+index 857876687..8c771e379 100644
+--- a/kernel/src/syscall/epoll.rs
++++ b/kernel/src/syscall/epoll.rs
+@@ -12,7 +12,9 @@ use crate::{
+         file_table::{FdFlags, RawFileDesc, get_file_fast},
+     },
+     prelude::*,
+-    process::{posix_thread::ContextPthreadAdminApi, signal::sig_mask::SigMask},
++    process::{
++        posix_thread::ContextPthreadAdminApi, rlimit::ResourceType, signal::sig_mask::SigMask,
++    },
+     time::timespec_t,
+ };
+ 
+@@ -44,7 +46,14 @@ pub fn sys_epoll_create1(flags: u32, ctx: &Context) -> Result<SyscallReturn> {
+ 
+     let epoll_file: Arc<EpollFile> = EpollFile::new();
+     let file_table = ctx.thread_local.borrow_file_table();
+-    let fd = file_table.unwrap().write().insert(epoll_file, fd_flags);
++    let nofile_rlimit = ctx
++        .process
++        .resource_limits()
++        .get_rlimit(ResourceType::RLIMIT_NOFILE);
++    let fd = file_table
++        .unwrap()
++        .write()
++        .insert(epoll_file, fd_flags, nofile_rlimit)?;
+     Ok(SyscallReturn::Return(fd.into()))
+ }
+ 
+diff --git a/kernel/src/syscall/eventfd.rs b/kernel/src/syscall/eventfd.rs
+index d7c3dc043..3d31aa460 100644
+--- a/kernel/src/syscall/eventfd.rs
++++ b/kernel/src/syscall/eventfd.rs
+@@ -26,7 +26,10 @@ use crate::{
+         pseudofs::AnonInodeFs,
+     },
+     prelude::*,
+-    process::signal::{PollHandle, Pollable, Pollee},
++    process::{
++        rlimit::ResourceType,
++        signal::{PollHandle, Pollable, Pollee},
++    },
+ };
+ 
+ pub fn sys_eventfd(init_val: u32, ctx: &Context) -> Result<SyscallReturn> {
+@@ -54,7 +57,11 @@ fn do_sys_eventfd2(init_val: u32, flags: Flags, ctx: &Context) -> Result<Syscall
+         FdFlags::empty()
+     };
+ 
+-    let fd = file_table_locked.insert(Arc::new(event_file), fd_flags);
++    let nofile_rlimit = ctx
++        .process
++        .resource_limits()
++        .get_rlimit(ResourceType::RLIMIT_NOFILE);
++    let fd = file_table_locked.insert(Arc::new(event_file), fd_flags, nofile_rlimit)?;
+     Ok(SyscallReturn::Return(fd.into()))
+ }
+ 
+diff --git a/kernel/src/syscall/fcntl.rs b/kernel/src/syscall/fcntl.rs
+index 86285828b..990493dd9 100644
+--- a/kernel/src/syscall/fcntl.rs
++++ b/kernel/src/syscall/fcntl.rs
+@@ -13,7 +13,7 @@ use crate::{
+         vfs::range_lock::{FileRange, OFFSET_MAX, RangeLockItem, RangeLockType},
+     },
+     prelude::*,
+-    process::{Pid, pid_table},
++    process::{Pid, ResourceType, pid_table},
+ };
+ 
+ pub fn sys_fcntl(raw_fd: RawFileDesc, cmd: i32, arg: u64, ctx: &Context) -> Result<SyscallReturn> {
+@@ -45,8 +45,29 @@ fn handle_dupfd(fd: FileDesc, arg: u64, flags: FdFlags, ctx: &Context) -> Result
+         .try_into()
+         .map_err(|_| Error::with_message(Errno::EINVAL, "invalid fd"))?;
+ 
++    let nofile_rlimit = ctx
++        .process
++        .resource_limits()
++        .get_rlimit(ResourceType::RLIMIT_NOFILE);
++
+     let file_table = ctx.thread_local.borrow_file_table();
+-    let new_fd = file_table.unwrap().write().dup_ceil(fd, ceil_fd, flags)?;
++    let mut file_table_locked = file_table.unwrap().write();
++
++    // `EBADF` takes precedence over the `EINVAL` below, because Linux looks the FD up before it
++    // validates the starting FD.
++    //
++    // Reference: <https://elixir.bootlin.com/linux/v6.16.9/source/fs/fcntl.c#L559>
++    file_table_locked.get_file(fd)?;
++
++    // A starting FD at or beyond the limit is an invalid argument, whereas a starting FD below the
++    // limit with no free FD at or above it yields `EMFILE` from the allocator.
++    //
++    // Reference: <https://elixir.bootlin.com/linux/v6.16.9/source/fs/fcntl.c#L59>
++    if u64::from(ceil_fd) >= nofile_rlimit.get_cur() {
++        return_errno_with_message!(Errno::EINVAL, "the starting FD exceeds the limit");
++    }
++
++    let new_fd = file_table_locked.dup_ceil(fd, ceil_fd, flags, nofile_rlimit)?;
+     Ok(SyscallReturn::Return(new_fd.into()))
+ }
+ 
+diff --git a/kernel/src/syscall/fsmount.rs b/kernel/src/syscall/fsmount.rs
+index c79980a8a..9c37e7a52 100644
+--- a/kernel/src/syscall/fsmount.rs
++++ b/kernel/src/syscall/fsmount.rs
+@@ -10,6 +10,7 @@ use crate::{
+         vfs::path::PerMountFlags,
+     },
+     prelude::*,
++    process::rlimit::ResourceType,
+ };
+ 
+ pub fn sys_fsmount(
+@@ -39,12 +40,16 @@ pub fn sys_fsmount(
+     let detached_mount =
+         fs_config.create_detached_mount(per_mount_flags, Arc::downgrade(current_mnt_ns))?;
+     let file = Arc::new(DetachedMountFile::new(detached_mount)) as Arc<dyn FileLike>;
++    let nofile_rlimit = ctx
++        .process
++        .resource_limits()
++        .get_rlimit(ResourceType::RLIMIT_NOFILE);
+     let fd = ctx
+         .thread_local
+         .borrow_file_table()
+         .unwrap()
+         .write()
+-        .insert(file, FdFlags::from(flags));
++        .insert(file, FdFlags::from(flags), nofile_rlimit)?;
+     Ok(SyscallReturn::Return(fd.into()))
+ }
+ 
+diff --git a/kernel/src/syscall/fsopen.rs b/kernel/src/syscall/fsopen.rs
+index b2c4c28ec..dce57efb3 100644
+--- a/kernel/src/syscall/fsopen.rs
++++ b/kernel/src/syscall/fsopen.rs
+@@ -7,6 +7,7 @@ use crate::{
+         vfs::registry::look_up,
+     },
+     prelude::*,
++    process::rlimit::ResourceType,
+ };
+ 
+ pub fn sys_fsopen(fs_name_addr: Vaddr, flags: u32, ctx: &Context) -> Result<SyscallReturn> {
+@@ -27,12 +28,16 @@ pub fn sys_fsopen(fs_name_addr: Vaddr, flags: u32, ctx: &Context) -> Result<Sysc
+     })?;
+ 
+     let file = Arc::new(FsConfigFile::new(fs_type)) as Arc<dyn FileLike>;
++    let nofile_rlimit = ctx
++        .process
++        .resource_limits()
++        .get_rlimit(ResourceType::RLIMIT_NOFILE);
+     let fd = ctx
+         .thread_local
+         .borrow_file_table()
+         .unwrap()
+         .write()
+-        .insert(file, FdFlags::from(flags));
++        .insert(file, FdFlags::from(flags), nofile_rlimit)?;
+     Ok(SyscallReturn::Return(fd.into()))
+ }
+ 
+diff --git a/kernel/src/syscall/inotify.rs b/kernel/src/syscall/inotify.rs
+index a9f544a28..571cfa1e7 100644
+--- a/kernel/src/syscall/inotify.rs
++++ b/kernel/src/syscall/inotify.rs
+@@ -13,6 +13,7 @@ use crate::{
+         },
+     },
+     prelude::*,
++    process::rlimit::ResourceType,
+     syscall::constants::MAX_FILENAME_LEN,
+ };
+ 
+@@ -36,7 +37,14 @@ fn do_inotify_init(flags: u32, ctx: &Context) -> Result<SyscallReturn> {
+     let is_nonblocking = flags.contains(InotifyFileFlags::NONBLOCK);
+     let file = InotifyFile::new(is_nonblocking)?;
+     let file_table = ctx.thread_local.borrow_file_table();
+-    let fd = file_table.unwrap().write().insert(file, fd_flags);
++    let nofile_rlimit = ctx
++        .process
++        .resource_limits()
++        .get_rlimit(ResourceType::RLIMIT_NOFILE);
++    let fd = file_table
++        .unwrap()
++        .write()
++        .insert(file, fd_flags, nofile_rlimit)?;
+     Ok(SyscallReturn::Return(fd.into()))
+ }
+ 
+diff --git a/kernel/src/syscall/memfd_create.rs b/kernel/src/syscall/memfd_create.rs
+index bfd477eee..451daf348 100644
+--- a/kernel/src/syscall/memfd_create.rs
++++ b/kernel/src/syscall/memfd_create.rs
+@@ -7,6 +7,7 @@ use crate::{
+         ramfs::memfd::{MAX_MEMFD_NAME_LEN, MemfdFlags, MemfdInodeHandle},
+     },
+     prelude::*,
++    process::rlimit::ResourceType,
+ };
+ 
+ pub fn sys_memfd_create(name_addr: Vaddr, flags: u32, ctx: &Context) -> Result<SyscallReturn> {
+@@ -46,7 +47,11 @@ pub fn sys_memfd_create(name_addr: Vaddr, flags: u32, ctx: &Context) -> Result<S
+ 
+         let memfd_file = InodeHandle::new_memfd(name.to_string_lossy().into_owned(), memfd_flags)?;
+ 
+-        file_table_locked.insert(Arc::new(memfd_file), fd_flags)
++        let nofile_rlimit = ctx
++            .process
++            .resource_limits()
++            .get_rlimit(ResourceType::RLIMIT_NOFILE);
++        file_table_locked.insert(Arc::new(memfd_file), fd_flags, nofile_rlimit)?
+     };
+ 
+     Ok(SyscallReturn::Return(fd.into()))
+diff --git a/kernel/src/syscall/open.rs b/kernel/src/syscall/open.rs
+index 5961d6714..651f03fa7 100644
+--- a/kernel/src/syscall/open.rs
++++ b/kernel/src/syscall/open.rs
+@@ -15,6 +15,7 @@ use crate::{
+         },
+     },
+     prelude::*,
++    process::rlimit::ResourceType,
+     syscall::constants::MAX_FILENAME_LEN,
+ };
+ 
+@@ -60,7 +61,11 @@ pub fn sys_openat(
+             } else {
+                 FdFlags::empty()
+             };
+-        file_table_locked.insert(file_handle.clone(), fd_flags)
++        let nofile_rlimit = ctx
++            .process
++            .resource_limits()
++            .get_rlimit(ResourceType::RLIMIT_NOFILE);
++        file_table_locked.insert(file_handle.clone(), fd_flags, nofile_rlimit)?
+     };
+     let file_like: Arc<dyn FileLike> = file_handle;
+     fs::vfs::notify::on_open(&file_like);
+diff --git a/kernel/src/syscall/pidfd_getfd.rs b/kernel/src/syscall/pidfd_getfd.rs
+index 0e5cbe0f7..94be7acb1 100644
+--- a/kernel/src/syscall/pidfd_getfd.rs
++++ b/kernel/src/syscall/pidfd_getfd.rs
+@@ -6,6 +6,7 @@ use crate::{
+     process::{
+         PidFile,
+         posix_thread::{AsPosixThread, alien_access::AlienAccessMode},
++        rlimit::ResourceType,
+     },
+     syscall::SyscallReturn,
+ };
+@@ -57,7 +58,11 @@ pub fn sys_pidfd_getfd(
+     // Duplicate the file descriptor into the caller's file descriptor table.
+     let new_fd = {
+         let mut file_table_locked = file_table.unwrap().write();
+-        file_table_locked.insert(target_file, FdFlags::CLOEXEC)
++        let nofile_rlimit = ctx
++            .process
++            .resource_limits()
++            .get_rlimit(ResourceType::RLIMIT_NOFILE);
++        file_table_locked.insert(target_file, FdFlags::CLOEXEC, nofile_rlimit)?
+     };
+ 
+     Ok(SyscallReturn::Return(new_fd.into()))
+diff --git a/kernel/src/syscall/pidfd_open.rs b/kernel/src/syscall/pidfd_open.rs
+index af84c964c..6f8038b2e 100644
+--- a/kernel/src/syscall/pidfd_open.rs
++++ b/kernel/src/syscall/pidfd_open.rs
+@@ -3,7 +3,7 @@
+ use crate::{
+     fs::file::{StatusFlags, file_table::FdFlags},
+     prelude::*,
+-    process::{Pid, PidFile, pid_table},
++    process::{Pid, PidFile, pid_table, rlimit::ResourceType},
+     syscall::SyscallReturn,
+ };
+ 
+@@ -29,7 +29,11 @@ pub fn sys_pidfd_open(pid: Pid, flags: u32, ctx: &Context) -> Result<SyscallRetu
+         let mut file_table_locked = file_table.unwrap().write();
+         // "the close-on-exec flag is set on the file descriptor."
+         // Reference: <https://man7.org/linux/man-pages/man2/pidfd_open.2.html>.
+-        file_table_locked.insert(pid_file, FdFlags::CLOEXEC)
++        let nofile_rlimit = ctx
++            .process
++            .resource_limits()
++            .get_rlimit(ResourceType::RLIMIT_NOFILE);
++        file_table_locked.insert(pid_file, FdFlags::CLOEXEC, nofile_rlimit)?
+     };
+ 
+     Ok(SyscallReturn::Return(pid_fd.into()))
+diff --git a/kernel/src/syscall/pipe.rs b/kernel/src/syscall/pipe.rs
+index 620849cb6..a0b83bcb5 100644
+--- a/kernel/src/syscall/pipe.rs
++++ b/kernel/src/syscall/pipe.rs
+@@ -12,6 +12,7 @@ use crate::{
+         pipe,
+     },
+     prelude::*,
++    process::rlimit::ResourceType,
+ };
+ 
+ pub fn sys_pipe2(fds: Vaddr, flags: u32, ctx: &Context) -> Result<SyscallReturn> {
+@@ -36,9 +37,24 @@ pub fn sys_pipe2(fds: Vaddr, flags: u32, ctx: &Context) -> Result<SyscallReturn>
+ 
+     let file_table = ctx.thread_local.borrow_file_table();
+     let mut file_table_locked = file_table.unwrap().write();
++    let nofile_rlimit = ctx
++        .process
++        .resource_limits()
++        .get_rlimit(ResourceType::RLIMIT_NOFILE);
+ 
+-    let reader_fd = file_table_locked.insert(pipe_reader, fd_flags);
+-    let writer_fd = file_table_locked.insert(pipe_writer, fd_flags);
++    let reader_fd = file_table_locked.insert(pipe_reader, fd_flags, nofile_rlimit)?;
++    // The reader FD must not survive a failure to allocate the writer FD, since user space never
++    // learns its number and so could never close it.
++    let writer_result = file_table_locked.insert(pipe_writer, fd_flags, nofile_rlimit);
++    let writer_fd = match writer_result {
++        Ok(writer_fd) => writer_fd,
++        Err(err) => {
++            let closed_file = file_table_locked.close_file(reader_fd);
++            drop(file_table_locked);
++            drop(closed_file);
++            return Err(err);
++        }
++    };
+     let pipe_fds = PipeFds {
+         reader_raw_fd: reader_fd.into(),
+         writer_raw_fd: writer_fd.into(),
+diff --git a/kernel/src/syscall/signalfd.rs b/kernel/src/syscall/signalfd.rs
+index 9cc792f48..452daff55 100644
+--- a/kernel/src/syscall/signalfd.rs
++++ b/kernel/src/syscall/signalfd.rs
+@@ -24,6 +24,7 @@ use crate::{
+     prelude::*,
+     process::{
+         posix_thread::{AsPosixThread, PosixThread},
++        rlimit::ResourceType,
+         signal::{
+             HandlePendingSignal, PollHandle, Pollable, Poller,
+             constants::{SIGKILL, SIGSTOP},
+@@ -96,7 +97,14 @@ fn create_new_signalfd(
+     };
+ 
+     let file_table = ctx.thread_local.borrow_file_table();
+-    let fd = file_table.unwrap().write().insert(signal_file, fd_flags);
++    let nofile_rlimit = ctx
++        .process
++        .resource_limits()
++        .get_rlimit(ResourceType::RLIMIT_NOFILE);
++    let fd = file_table
++        .unwrap()
++        .write()
++        .insert(signal_file, fd_flags, nofile_rlimit)?;
+     Ok(fd.into())
+ }
+ 
+diff --git a/kernel/src/syscall/socket.rs b/kernel/src/syscall/socket.rs
+index 4988a1c49..45dad8729 100644
+--- a/kernel/src/syscall/socket.rs
++++ b/kernel/src/syscall/socket.rs
+@@ -12,6 +12,7 @@ use crate::{
+         vsock::VsockStreamSocket,
+     },
+     prelude::*,
++    process::rlimit::ResourceType,
+     util::net::{CSocketAddrFamily, Protocol, SOCK_TYPE_MASK, SockFlags, SockType},
+ };
+ 
+@@ -101,7 +102,11 @@ pub fn sys_socket(domain: i32, type_: i32, protocol: i32, ctx: &Context) -> Resu
+         } else {
+             FdFlags::empty()
+         };
+-        file_table_locked.insert(file_like, fd_flags)
++        let nofile_rlimit = ctx
++            .process
++            .resource_limits()
++            .get_rlimit(ResourceType::RLIMIT_NOFILE);
++        file_table_locked.insert(file_like, fd_flags, nofile_rlimit)?
+     };
+ 
+     Ok(SyscallReturn::Return(fd.into()))
+diff --git a/kernel/src/syscall/socketpair.rs b/kernel/src/syscall/socketpair.rs
+index 247424262..0a37a655b 100644
+--- a/kernel/src/syscall/socketpair.rs
++++ b/kernel/src/syscall/socketpair.rs
+@@ -10,6 +10,7 @@ use crate::{
+     },
+     net::socket::unix::{UnixDatagramSocket, UnixStreamSocket},
+     prelude::*,
++    process::rlimit::ResourceType,
+     util::net::{CSocketAddrFamily, Protocol, SOCK_TYPE_MASK, SockFlags, SockType},
+ };
+ 
+@@ -61,8 +62,23 @@ pub fn sys_socketpair(
+         } else {
+             FdFlags::empty()
+         };
+-        let fd_a = file_table_locked.insert(socket_a, fd_flags);
+-        let fd_b = file_table_locked.insert(socket_b, fd_flags);
++        let nofile_rlimit = ctx
++            .process
++            .resource_limits()
++            .get_rlimit(ResourceType::RLIMIT_NOFILE);
++        let fd_a = file_table_locked.insert(socket_a, fd_flags, nofile_rlimit)?;
++        // The first FD must not survive a failure to allocate the second one, since user space
++        // never learns its number and so could never close it.
++        let fd_b_result = file_table_locked.insert(socket_b, fd_flags, nofile_rlimit);
++        let fd_b = match fd_b_result {
++            Ok(fd_b) => fd_b,
++            Err(err) => {
++                let closed_file = file_table_locked.close_file(fd_a);
++                drop(file_table_locked);
++                drop(closed_file);
++                return Err(err);
++            }
++        };
+         SocketFds(fd_a.into(), fd_b.into())
+     };
+     ctx.user_space().write_val(sv, &socket_fds)?;
+diff --git a/kernel/src/syscall/timerfd_create.rs b/kernel/src/syscall/timerfd_create.rs
+index b1272d94f..1a43bdb29 100644
+--- a/kernel/src/syscall/timerfd_create.rs
++++ b/kernel/src/syscall/timerfd_create.rs
+@@ -4,6 +4,7 @@ use super::SyscallReturn;
+ use crate::{
+     fs::file::file_table::FdFlags,
+     prelude::*,
++    process::rlimit::ResourceType,
+     time::{
+         clockid_t,
+         timerfd::{TFDFlags, TimerfdFile},
+@@ -24,7 +25,11 @@ pub fn sys_timerfd_create(clockid: clockid_t, flags: i32, ctx: &Context) -> Resu
+         } else {
+             FdFlags::empty()
+         };
+-        file_table_locked.insert(Arc::new(timerfd_file), fd_flags)
++        let nofile_rlimit = ctx
++            .process
++            .resource_limits()
++            .get_rlimit(ResourceType::RLIMIT_NOFILE);
++        file_table_locked.insert(Arc::new(timerfd_file), fd_flags, nofile_rlimit)?
+     };
+ 
+     Ok(SyscallReturn::Return(fd.into()))
+diff --git a/test/initramfs/src/conformance/ltp/testcases/all.txt b/test/initramfs/src/conformance/ltp/testcases/all.txt
+index 5bef8afbd..9fed8eed2 100644
+--- a/test/initramfs/src/conformance/ltp/testcases/all.txt
++++ b/test/initramfs/src/conformance/ltp/testcases/all.txt
+@@ -996,7 +996,7 @@ nice03
+ open01
+ # open02
+ open03
+-# open04
++open04
+ # open06
+ open07
+ # open08

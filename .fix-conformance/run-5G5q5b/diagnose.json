@@ -1,0 +1,15 @@
+{
+  "verdict": "bug",
+  "baseline": "timer_gettime01 makes 3 assertions on Linux (LTP 20260529): (1) timer_gettime with valid timer and itimerspec pointer succeeds and returns all-zero timespec values for an unarmed timer, (2) timer_gettime with invalid timer_id (-1) fails with EINVAL, (3) timer_gettime with valid timer but NULL itimerspec pointer fails with EFAULT.",
+  "failing_assertion": "Assertion 3 at timer_gettime01.c:72-76: timer_gettime(timer, NULL) expects return -1 with errno EFAULT. Asterinas returns -1 with errno EINVAL instead.",
+  "impl": {
+    "file": "kernel/src/syscall/timer_settime.rs",
+    "lines": "64-91"
+  },
+  "root_cause": "sys_timer_gettime (lines 64-91) validates itimerspec_addr != 0 at line 69 before looking up the timer at line 72. When the pointer is NULL, it returns EINVAL at line 70 without ever reaching the write_val call at line 88 that would naturally produce EFAULT. The NULL pointer check appears to have been copied from sys_timer_settime just above (line 20), where it is correct—Linux's sys_timer_settime does reject a NULL new_setting with EINVAL per POSIX. But for sys_timer_gettime, Linux has no such pre-check: it validates the timer_id first (EINVAL only for bad timer), then attempts the copyout, which fails in put_itimerspec64 with EFAULT for a NULL pointer.",
+  "invariant": "timer_gettime must validate the timer_id before attempting to copy data to userspace, so that an invalid timer returns EINVAL and a NULL output pointer returns EFAULT from the copy operation itself, not from an explicit NULL check.",
+  "owning_layer": "syscall entry in kernel/src/syscall/timer_settime.rs",
+  "linux_reference": "Linux kernel's sys_timer_gettime (kernel/time/posix-timers.c, do_timer_gettime function) has no NULL pointer pre-check. It calls kc->timer_get(timr, &cur_setting64) to read the timer state, then put_itimerspec64(&cur_setting64, setting) to copy out. The EFAULT comes from put_itimerspec64's copy_to_user, not from an early validation. Timer lookup happens before copyout, so EINVAL for bad timer_id precedes EFAULT for bad pointer.",
+  "other_callers": "This is the only syscall entry point for timer_gettime. No other code paths call this function. The defect is isolated to this single syscall handler, so the fix scope is narrow.",
+  "suggested_direction": "Remove the NULL pointer check at lines 69-71. Let the timer_id validation happen first (lines 72-74), then let write_val at line 88 naturally return EFAULT when attempting to write to a NULL pointer. This matches Linux's behavior: EINVAL for invalid timer takes precedence over EFAULT for invalid pointer."
+}

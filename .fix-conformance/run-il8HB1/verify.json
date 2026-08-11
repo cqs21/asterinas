@@ -1,0 +1,16 @@
+{
+  "status": "ok",
+  "target_test": {
+    "name": "capset02",
+    "case_results": null,
+    "passed": true
+  },
+  "still_blocked_absent": true,
+  "full_suite": {
+    "suite": "ltp",
+    "config": "",
+    "passed": true,
+    "summary": "Suite: syscalls, Runtime: 3m 18s, Runs: 544, Passed: 2695, Failed: 0, Broken: 0, Skipped: 57, Warnings: 0",
+    "regressions": []
+  }
+}

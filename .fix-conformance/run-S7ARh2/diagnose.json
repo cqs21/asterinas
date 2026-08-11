@@ -1,0 +1,18 @@
+{
+  "verdict": "already-green",
+  "baseline": "brk() syscall correctly sets the program break to requested addresses. Test performs 33 iterations of growing (current+inc), maintaining (current), and shrinking (current-inc) the heap, where inc = 2*pagesize-1. Each brk() call returns the new break address matching the request, and newly allocated memory is writable.",
+  "asterinas_result": "TPASS: brk() works fine (both libc and syscall variants pass)",
+  "test_details": {
+    "suite": "ltp",
+    "test": "brk01",
+    "execution_time": "0.019s",
+    "variants_tested": 2,
+    "assertions": [
+      "brk() sets break to requested address",
+      "newly allocated heap memory is writable",
+      "heap can be grown, maintained, and shrunk repeatedly"
+    ]
+  },
+  "reason_for_stale_pool_entry": "The test passes completely in Asterinas at commit e8f2b9ca6. Both the libc wrapper (brk/sbrk) and direct syscall variants succeed. The brk() implementation correctly handles growing and shrinking the heap across 33 iterations. The pool entry in testcases/all.txt is stale and should be enabled.",
+  "recommendation": "Enable by uncommenting the line in test/initramfs/src/conformance/ltp/testcases/all.txt"
+}

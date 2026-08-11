@@ -1,0 +1,14 @@
+{
+  "verdict": "already-green",
+  "baseline": "capset() returns EFAULT for bad address header/data, EINVAL for bad version, and EPERM for capability violations (pE not in pP, pP not in old pP, pI not in bounding set or old pI)",
+  "asterinas_result": "All 6 test cases pass: EFAULT for bad addresses, EINVAL for bad version, EPERM for all three capability constraint violations",
+  "notes": "The test passed completely on Asterinas at commit e8f2b9ca6. The pool entry in test/initramfs/src/conformance/ltp/testcases/all.txt is stale and should remain commented out or be removed from consideration. All capset() error handling is correctly implemented.",
+  "test_assertions": [
+    "capset() with bad address header returns EFAULT",
+    "capset() with bad address data returns EFAULT",
+    "capset() with bad version returns EINVAL",
+    "capset() with pE not in pP returns EPERM",
+    "capset() with pP not in old pP returns EPERM",
+    "capset() with pI not in bounding set or old pI returns EPERM"
+  ]
+}

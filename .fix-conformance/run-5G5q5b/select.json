@@ -1,0 +1,14 @@
+{
+  "result": "selected",
+  "suite": "ltp",
+  "test": "timer_gettime01",
+  "gvisor_filter": null,
+  "selector_token": "timer_gettime01",
+  "run_vars": "",
+  "pool_file": "test/initramfs/src/conformance/ltp/testcases/all.txt",
+  "pool_entries": ["timer_gettime01"],
+  "enable_action": "uncomment the line",
+  "source": "auto-picked",
+  "rationale": "Probed in Asterinas at e8f2b9ca6: 2 passed, 1 failed, 0 broken/skipped. The single failing assertion is timer_gettime01.c:76, which calls timer_gettime(timer, NULL) and expects EFAULT; Asterinas returns EINVAL. kernel/src/syscall/timer_settime.rs:69-71 rejects itimerspec_addr == 0 up front with EINVAL. Linux's sys_timer_gettime has no such NULL pre-check: it looks the timer up (EINVAL only for a bad timer id) and then copies out, so a NULL pointer fails in put_itimerspec64 with EFAULT. The EINVAL-on-NULL guard is correct for sys_timer_settime just above it (Linux does reject a NULL new_setting there) and looks to have been copied into gettime, where it does not belong. So this is one wrong errno on one early-return line, in one file, and the test's other two assertions already pass -- the narrowest defect in this round's probe. No prior round touched timer_settime.rs (timer_create01 touched timer_create.rs, timerfd_gettime01 touched timerfd_gettime.rs, clock_getres01 touched the clock/vdso paths), so this is fresh ground.",
+  "notes": "Round 4 of 5, real defect preferred over a stale entry, as directed. Host baseline: passes clean, 3/3 assertions (LTP 20260529). Only one test variant runs on x86_64 -- __NR_timer_gettime64 is undefined there, so the time64 variant is compiled out and 3 assertions is the full run. Probed 13 candidates in one boot; all 15 candidates this round pass on the host. Other real defects found and recorded to select.cache, not picked: getcpu01 (returns cpuid 123 where 0 is expected -- plausibly a vDSO path issue, wider than one errno) and open04 (RLIMIT_NOFILE not enforced, open() succeeds where EMFILE is due). Rejected as missing-feature ENOSYS, which diagnose would retire: mlock01, munlock01, mincore01, remap_file_pages01. pathconf02 and mprotect01 came back broken (TBROK) rather than failing and were not investigated further. Six stale entries observed passing and written to select.cache as ready work for later rounds: madvise07, readdir01, realpath01, sigtimedwait01, timer_settime01, vhangup01. Probe note: run_ltp_test.sh gates per-assertion output behind KIRK_VERBOSE=1, which the Makefile does not plumb through; I flipped that default temporarily to read the failures and reverted it, and the worktree is clean apart from .osdk/. Two runs also needed cleanup after the first boot was launched without AUTO_TEST=conformance and idled at a shell holding the ext2.img write lock."
+}

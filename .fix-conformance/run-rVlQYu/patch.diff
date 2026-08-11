@@ -1,0 +1,307 @@
+diff --git a/kernel/src/device/fb.rs b/kernel/src/device/fb.rs
+index 0c6b6c933..318c82618 100644
+--- a/kernel/src/device/fb.rs
++++ b/kernel/src/device/fb.rs
+@@ -498,6 +498,13 @@ impl PerOpenFileOps for FbHandle {
+         true
+     }
+ 
++    fn supports_event_polling(&self) -> bool {
++        // Linux's `fb_fops` has no `.poll` hook, so framebuffers are
++        // unconditionally ready.
++        // Reference: <https://elixir.bootlin.com/linux/v6.11/source/drivers/video/fbdev/core/fb_chrdev.c#L406-L424>.
++        false
++    }
++
+     fn mappable(&self) -> Result<Mappable> {
+         let iomem = self.framebuffer.io_mem();
+         Ok(Mappable::IoMem(iomem.clone()))
+diff --git a/kernel/src/device/mem/file.rs b/kernel/src/device/mem/file.rs
+index 9a394a2a4..8760be244 100644
+--- a/kernel/src/device/mem/file.rs
++++ b/kernel/src/device/mem/file.rs
+@@ -144,4 +144,13 @@ impl PerOpenFileOps for MemFile {
+     fn is_offset_aware(&self) -> bool {
+         false
+     }
++
++    fn supports_event_polling(&self) -> bool {
++        // `/dev/random` blocks until entropy is available, so in Linux it has a
++        // `.poll` hook. `/dev/urandom`, `/dev/null`, `/dev/zero` and `/dev/full`
++        // have none, so they are always ready.
++        // Reference: <https://elixir.bootlin.com/linux/v6.11/source/drivers/char/random.c#L1555-L1576>.
++        // Reference: <https://elixir.bootlin.com/linux/v6.11/source/drivers/char/mem.c#L648-L687>.
++        matches!(self, MemFile::Random)
++    }
+ }
+diff --git a/kernel/src/device/misc/hwrng.rs b/kernel/src/device/misc/hwrng.rs
+index 11a6ac71d..dfaafe188 100644
+--- a/kernel/src/device/misc/hwrng.rs
++++ b/kernel/src/device/misc/hwrng.rs
+@@ -148,6 +148,11 @@ impl PerOpenFileOps for HwRngFile {
+     fn is_offset_aware(&self) -> bool {
+         false
+     }
++
++    fn supports_event_polling(&self) -> bool {
++        // As noted in `poll` above, this file is unconditionally ready.
++        false
++    }
+ }
+ 
+ fn current_device() -> Result<Arc<EntropyDevice>> {
+diff --git a/kernel/src/device/misc/tdxguest.rs b/kernel/src/device/misc/tdxguest.rs
+index 8c8f9be97..fa7dbfa20 100644
+--- a/kernel/src/device/misc/tdxguest.rs
++++ b/kernel/src/device/misc/tdxguest.rs
+@@ -183,6 +183,13 @@ impl PerOpenFileOps for TdxGuestFile {
+         false
+     }
+ 
++    fn supports_event_polling(&self) -> bool {
++        // This is an ioctl-only device. Linux's `tdx_guest_fops` has no `.poll`
++        // hook, so the device is unconditionally ready.
++        // Reference: <https://elixir.bootlin.com/linux/v6.11/source/drivers/virt/coco/tdx-guest/tdx-guest.c#L285-L289>.
++        false
++    }
++
+     fn ioctl(&self, raw_ioctl: RawIoctl) -> Result<i32> {
+         use ioctl_defs::*;
+ 
+diff --git a/kernel/src/device/registry/block.rs b/kernel/src/device/registry/block.rs
+index 8f6ec40e7..b7a030546 100644
+--- a/kernel/src/device/registry/block.rs
++++ b/kernel/src/device/registry/block.rs
+@@ -209,6 +209,13 @@ impl PerOpenFileOps for OpenBlockFile {
+         Ok(Some(self.0.metadata().nr_sectors * SECTOR_SIZE))
+     }
+ 
++    fn supports_event_polling(&self) -> bool {
++        // Like regular files, block devices are unconditionally ready. Linux's
++        // `def_blk_fops` has no `.poll` hook.
++        // Reference: <https://elixir.bootlin.com/linux/v6.11/source/block/fops.c#L860-L877>.
++        false
++    }
++
+     fn ioctl(&self, raw_ioctl: RawIoctl) -> Result<i32> {
+         use ioctl_defs::*;
+ 
+diff --git a/kernel/src/events/epoll/file.rs b/kernel/src/events/epoll/file.rs
+index 7ebd08eb8..f56f7c226 100644
+--- a/kernel/src/events/epoll/file.rs
++++ b/kernel/src/events/epoll/file.rs
+@@ -73,6 +73,30 @@ impl EpollFile {
+         let file = get_file_fast!(&mut file_table, fd).into_owned();
+         drop(file_table);
+ 
++        // Only files that support event polling can be monitored. The rest are
++        // unconditionally ready, so there is no event to wait for.
++        //
++        // Note that such files are still usable with `poll`/`select`, which report
++        // them as ready. Linux draws the same distinction with a `NULL`
++        // `f_op->poll`, which `vfs_poll` treats as always ready but
++        // `file_can_poll` rejects here.
++        // Reference: <https://elixir.bootlin.com/linux/v6.11/source/fs/eventpoll.c#L2278-L2280>.
++        if !file.supports_event_polling() {
++            return_errno_with_message!(Errno::EPERM, "the file does not support epoll");
++        }
++
++        // An epoll file cannot monitor itself, as that would be a cycle. This
++        // compares file descriptions rather than file descriptors, so a `dup` of
++        // the epoll file descriptor is rejected as well. Monitoring a *different*
++        // epoll file remains allowed, since nesting epoll files is legal.
++        // Reference: <https://elixir.bootlin.com/linux/v6.11/source/fs/eventpoll.c#L2290-L2292>.
++        if file
++            .downcast_ref::<Self>()
++            .is_some_and(|target| core::ptr::eq(target, self))
++        {
++            return_errno_with_message!(Errno::EINVAL, "an epoll file cannot monitor itself");
++        }
++
+         match *cmd {
+             EpollCtl::Add(fd, ep_event, ep_flags) => {
+                 self.add_interest(fd, file, ep_event, ep_flags)
+diff --git a/kernel/src/fs/file/file_handle.rs b/kernel/src/fs/file/file_handle.rs
+index c198f25a2..5f109b361 100644
+--- a/kernel/src/fs/file/file_handle.rs
++++ b/kernel/src/fs/file/file_handle.rs
+@@ -154,6 +154,32 @@ pub trait FileLike: Pollable + Send + Sync + Any {
+         None
+     }
+ 
++    /// Returns whether this file type supports event polling.
++    ///
++    /// A file type supports event polling if its readiness can change over time,
++    /// so that [`Pollable::poll`] has an underlying object to report and a
++    /// registered [`PollHandle`] has something to be notified about. Pipes,
++    /// sockets, and TTYs are such file types.
++    ///
++    /// The remaining file types are unconditionally ready: there is nothing to
++    /// wait for, so [`Pollable::poll`] reports a constant `IN | OUT`. Regular
++    /// files, directories, and `/dev/null` are such file types.
++    ///
++    /// Both kinds can be used with `poll`/`select`, which report the latter as
++    /// ready. But only file types that support event polling can be registered in
++    /// an epoll interest list, since epoll exists to report readiness *changes*.
++    /// Linux draws the same line using a `NULL` `f_op->poll`: `vfs_poll`
++    /// substitutes the constant `DEFAULT_POLLMASK` for it, while `file_can_poll`
++    /// reports that the file cannot be epoll-registered.
++    ///
++    /// Reference: <https://elixir.bootlin.com/linux/v6.11/source/include/linux/poll.h#L75-L83>.
++    ///
++    /// [`Pollable::poll`]: crate::process::signal::Pollable::poll
++    /// [`PollHandle`]: crate::process::signal::PollHandle
++    fn supports_event_polling(&self) -> bool {
++        true
++    }
++
+     /// Returns the common state shared by file-like objects.
+     fn common(&self) -> &FileCommon;
+ 
+diff --git a/kernel/src/fs/file/fs_config_file.rs b/kernel/src/fs/file/fs_config_file.rs
+index bd0925a8e..effa01cc6 100644
+--- a/kernel/src/fs/file/fs_config_file.rs
++++ b/kernel/src/fs/file/fs_config_file.rs
+@@ -259,6 +259,12 @@ impl FileLike for FsConfigFile {
+         AccessMode::O_RDWR
+     }
+ 
++    fn supports_event_polling(&self) -> bool {
++        // Linux's `fscontext_fops` has no `.poll` hook.
++        // Reference: <https://elixir.bootlin.com/linux/v6.11/source/fs/fsopen.c#L78-L82>.
++        false
++    }
++
+     fn common(&self) -> &FileCommon {
+         &self.common
+     }
+@@ -326,6 +332,12 @@ impl FileLike for DetachedMountFile {
+         AccessMode::O_RDONLY
+     }
+ 
++    fn supports_event_polling(&self) -> bool {
++        // A detached mount file is an `O_PATH`-like handle with no file operations
++        // at all, so there is nothing to poll.
++        false
++    }
++
+     fn common(&self) -> &FileCommon {
+         &self.common
+     }
+diff --git a/kernel/src/fs/file/inode_handle.rs b/kernel/src/fs/file/inode_handle.rs
+index e7c95f61f..b903d8560 100644
+--- a/kernel/src/fs/file/inode_handle.rs
++++ b/kernel/src/fs/file/inode_handle.rs
+@@ -467,6 +467,15 @@ impl FileLike for InodeHandle {
+         inode.fallocate(mode, offset, len)
+     }
+ 
++    fn supports_event_polling(&self) -> bool {
++        // Without a per-open file object, `poll` returns the unconditionally ready
++        // mask, so there is nothing to be notified about. This is the case for
++        // regular files and directories.
++        self.open_file
++            .as_ref()
++            .is_some_and(|open_file| open_file.supports_event_polling())
++    }
++
+     fn common(&self) -> &FileCommon {
+         &self.common
+     }
+@@ -575,6 +584,18 @@ pub trait PerOpenFileOps: Pollable + FileOps + Any + Send + Sync + 'static {
+         // support them.
+         SettableStatusFlags::minimal()
+     }
++
++    /// Returns whether this opened file supports event polling.
++    ///
++    /// See [`FileLike::supports_event_polling`], whose answer for an inode-backed
++    /// file is this method's. Implementors whose [`Pollable::poll`] returns a
++    /// constant mask must override this to return `false`.
++    ///
++    /// [`FileLike::supports_event_polling`]: super::FileLike::supports_event_polling
++    /// [`Pollable::poll`]: crate::process::signal::Pollable::poll
++    fn supports_event_polling(&self) -> bool {
++        true
++    }
+ }
+ 
+ fn do_seek_util(offset: &Mutex<usize>, pos: SeekFrom, end: Option<usize>) -> Result<usize> {
+diff --git a/kernel/src/fs/fs_impls/procfs/pid/task/maps.rs b/kernel/src/fs/fs_impls/procfs/pid/task/maps.rs
+index 63c049aed..98c620b21 100644
+--- a/kernel/src/fs/fs_impls/procfs/pid/task/maps.rs
++++ b/kernel/src/fs/fs_impls/procfs/pid/task/maps.rs
+@@ -127,4 +127,10 @@ impl PerOpenFileOps for MapsFileHandle {
+     fn is_offset_aware(&self) -> bool {
+         true
+     }
++
++    fn supports_event_polling(&self) -> bool {
++        // Like other procfs text files, this file is unconditionally ready.
++        // Reference: <https://elixir.bootlin.com/linux/v6.11/source/fs/proc/task_mmu.c#L389-L394>.
++        false
++    }
+ }
+diff --git a/kernel/src/fs/fs_impls/procfs/pid/task/mem.rs b/kernel/src/fs/fs_impls/procfs/pid/task/mem.rs
+index 9a0a643c0..c73461922 100644
+--- a/kernel/src/fs/fs_impls/procfs/pid/task/mem.rs
++++ b/kernel/src/fs/fs_impls/procfs/pid/task/mem.rs
+@@ -133,4 +133,11 @@ impl PerOpenFileOps for MemFileHandle {
+     fn is_offset_aware(&self) -> bool {
+         true
+     }
++
++    fn supports_event_polling(&self) -> bool {
++        // Linux's `proc_mem_operations` has no `.poll` hook, so `/proc/[pid]/mem`
++        // is unconditionally ready.
++        // Reference: <https://elixir.bootlin.com/linux/v6.11/source/fs/proc/base.c#L929-L935>.
++        false
++    }
+ }
+diff --git a/kernel/src/fs/fs_impls/pseudofs/nsfs.rs b/kernel/src/fs/fs_impls/pseudofs/nsfs.rs
+index 062176929..3f205a7b4 100644
+--- a/kernel/src/fs/fs_impls/pseudofs/nsfs.rs
++++ b/kernel/src/fs/fs_impls/pseudofs/nsfs.rs
+@@ -191,6 +191,13 @@ impl<T: NsCommonOps> PerOpenFileOps for NsFile<T> {
+         Ok(())
+     }
+ 
++    fn supports_event_polling(&self) -> bool {
++        // Linux's `ns_file_operations` has no `.poll` hook, so ns files are
++        // unconditionally ready.
++        // Reference: <https://elixir.bootlin.com/linux/v6.11/source/fs/nsfs.c#L23-L27>.
++        false
++    }
++
+     fn ioctl(&self, raw_ioctl: RawIoctl) -> Result<i32> {
+         use ioctl_defs::*;
+ 
+diff --git a/kernel/src/fs/fs_impls/virtiofs/dir.rs b/kernel/src/fs/fs_impls/virtiofs/dir.rs
+index ec4e77b31..6c2f452a6 100644
+--- a/kernel/src/fs/fs_impls/virtiofs/dir.rs
++++ b/kernel/src/fs/fs_impls/virtiofs/dir.rs
+@@ -85,4 +85,11 @@ impl PerOpenFileOps for VirtioFsDir {
+     fn is_offset_aware(&self) -> bool {
+         true
+     }
++
++    fn supports_event_polling(&self) -> bool {
++        // Like other directories, this one is unconditionally ready. Linux's
++        // `fuse_dir_operations` has no `.poll` hook, unlike `fuse_file_operations`.
++        // Reference: <https://elixir.bootlin.com/linux/v6.11/source/fs/fuse/dir.c#L2151-L2160>.
++        false
++    }
+ }
+diff --git a/test/initramfs/src/conformance/ltp/testcases/all.txt b/test/initramfs/src/conformance/ltp/testcases/all.txt
+index 5bef8afbd..56bf2153d 100644
+--- a/test/initramfs/src/conformance/ltp/testcases/all.txt
++++ b/test/initramfs/src/conformance/ltp/testcases/all.txt
+@@ -181,7 +181,7 @@ epoll_create1_01
+ epoll_create1_02
+ epoll01
+ epoll_ctl01
+-# epoll_ctl02
++epoll_ctl02
+ epoll_ctl03
+ # epoll_ctl04
+ # epoll_ctl05

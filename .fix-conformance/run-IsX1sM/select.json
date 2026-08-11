@@ -1,0 +1,14 @@
+{
+  "result": "selected",
+  "suite": "ltp",
+  "test": "llseek01",
+  "gvisor_filter": null,
+  "selector_token": "llseek01",
+  "run_vars": "",
+  "pool_file": "test/initramfs/src/conformance/ltp/testcases/all.txt",
+  "pool_entries": ["llseek01"],
+  "enable_action": "uncomment the line",
+  "source": "auto-picked",
+  "rationale": "llseek01 checks that lseek() may position past RLIMIT_FSIZE while a write() at that offset must fail. Asterinas already enforces RLIMIT_FSIZE in sys_truncate (kernel/src/syscall/truncate.rs check_length) and sys_fallocate, but sys_write/write_at has no such check and no SIGXFSZ delivery, so the write past the limit almost certainly succeeds instead of returning EFBIG. That is one localized defect in the write path with an existing in-tree pattern to copy, not a missing subsystem. Host passes (cached host record, LTP 20260529) and I re-probed it fail on this run's base_commit e8f2b9ca6, so the older cached fail is confirmed current. No other run has taken it: the nine finished runs cover fsync03, socket01, setpriority02, dup02, timerfd_gettime01, clock_getres01, renameat202, gvisor/readv_test and epoll_ctl02, and none touches RLIMIT_FSIZE enforcement.",
+  "notes": "Probed 8 candidates in one boot on e8f2b9ca6; all still fail, so no stale pool entries were found among them. clock_gettime04, fdatasync02, getcpu01, mkdir02, semget02 = fail; pathconf02 and statfs03 = broken (both need directory search-permission denial as non-root, and Asterinas' path lookup does not check MAY_EXEC on path components, so they are broader than one defect). All 8 probe records appended to select.cache. Rejected fdatasync02 despite it looking small: it overlaps the already-committed fsync03 fix in run-7UHmXC (rejecting fsync/fdatasync on pipes and FIFOs) and would likely conflict. Rejected mprotect01 because its EACCES case needs mmap of /dev/zero, and the mem device in kernel/src/device/mem/file.rs implements no mappable(), so that is missing support rather than a bug."
+}

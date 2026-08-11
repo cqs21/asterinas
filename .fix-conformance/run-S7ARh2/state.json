@@ -1,0 +1,22 @@
+{
+  "run_id": "run-S7ARh2",
+  "suite": "ltp",
+  "test": "brk01",
+  "gvisor_filter": null,
+  "worktree": "/root/asterinas/.worktrees/run-S7ARh2",
+  "osdk_bin": "/root/asterinas/.worktrees/run-S7ARh2/.osdk/bin",
+  "branch": "fix-ltp-brk01-S7ARh2",
+  "base_commit": "e8f2b9ca6",
+  "vnc_port": 604,
+  "round": 4,
+  "rounds_total": 5,
+  "phases": {
+    "select": "done",
+    "diagnose": "done",
+    "fix": "done",
+    "verify": "done",
+    "commit": "done",
+    "fix_skipped": "already-green"
+  },
+  "outcome": "committed"
+}

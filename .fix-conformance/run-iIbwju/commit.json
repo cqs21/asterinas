@@ -1,0 +1,20 @@
+{
+  "commit": "b9ba49e939ab2c8bd2c3ba1702c87dae702cee8c",
+  "branch": "fix-ltp-clock_getres01-iIbwju",
+  "worktree": "/root/asterinas/.worktrees/run-iIbwju",
+  "subject": "Implement `clock_getres` and fix the vDSO clock resolution",
+  "files": [
+    "kernel/src/syscall/arch/generic.rs",
+    "kernel/src/syscall/arch/x86.rs",
+    "kernel/src/syscall/clock_getres.rs",
+    "kernel/src/syscall/clock_gettime.rs",
+    "kernel/src/syscall/mod.rs",
+    "kernel/src/time/clocks/cpu_clock.rs",
+    "kernel/src/time/clocks/system_wide.rs",
+    "kernel/src/time/core/mod.rs",
+    "kernel/src/time/mod.rs",
+    "kernel/src/vdso.rs",
+    "test/initramfs/src/conformance/ltp/testcases/all.txt"
+  ],
+  "notes": "make format made no changes; make check exited 0 with no clippy, typo, or license-header findings (log at /tmp/check-iIbwju.log; the only warning is rustup's benign 'default toolchain implicitly overridden' notice). Staged exactly the 10 kernel files from fix.json's changed_files plus the one pool edit -- diffstat 11 files, 158 insertions, 23 deletions, matching the pre-commit staged diff. test/initramfs/src/regression/ is untouched relative to base e8f2b9ca6 and carries no scratch files; the scratch resolution checker used during the fix stayed in /tmp and was never committed. git status in the worktree now shows only the untracked .osdk/ directory, which is this run's own per-run OSDK install created by the skill's setup (SKILL.md:198), not a build or repro artifact. Not pushed; no PR opened; nothing amended. Commit message states the invariant (a clock's resolution is a property of the clock, identical across syscall and vDSO paths), names the owning layer (the POSIX clock abstraction in kernel/src/time, above the syscall handlers, with the three consumers that need the value), and cites Linux's clockid_to_kclock / kc->clock_getres / __cvdso_clock_getres_common as the reason that layer choice is correct rather than as the justification on its own. gvisor_filter is null, so no per-case note was needed."
+}

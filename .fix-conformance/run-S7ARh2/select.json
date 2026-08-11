@@ -1,0 +1,14 @@
+{
+  "result": "selected",
+  "suite": "ltp",
+  "test": "brk01",
+  "gvisor_filter": null,
+  "selector_token": "brk01",
+  "run_vars": "",
+  "pool_file": "test/initramfs/src/conformance/ltp/testcases/all.txt",
+  "pool_entries": ["brk01"],
+  "enable_action": "uncomment the line",
+  "source": "auto-picked",
+  "rationale": "Cache shows this test already passes in Asterinas on commit e8f2b9ca6 (stale-entry). Simple brk() syscall test that grows and shrinks the heap. Ready to enable with just a pool edit.",
+  "notes": ""
+}

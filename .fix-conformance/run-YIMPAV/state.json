@@ -1,0 +1,21 @@
+{
+  "run_id": "run-YIMPAV",
+  "suite": "ltp",
+  "test": "mkdir02",
+  "gvisor_filter": null,
+  "worktree": "/root/asterinas/.worktrees/run-YIMPAV",
+  "osdk_bin": "/root/asterinas/.worktrees/run-YIMPAV/.osdk/bin",
+  "branch": "fix-ltp-mkdir02-YIMPAV",
+  "base_commit": "e8f2b9ca6",
+  "vnc_port": 9854,
+  "round": 10,
+  "rounds_total": 10,
+  "phases": {
+    "select": "done",
+    "diagnose": "done",
+    "fix": "done",
+    "verify": "done",
+    "commit": "done"
+  },
+  "outcome": "committed"
+}

@@ -1,0 +1,25 @@
+{
+  "status": "ok",
+  "target_test": { "name": "renameat202", "case_results": null, "passed": true },
+  "still_blocked_absent": true,
+  "full_suite": {
+    "suite": "ltp",
+    "config": "CONFORMANCE_TEST_WORKDIR=/ext2",
+    "passed": true,
+    "summary": "TEST SUMMARY  Passed: 2398 / Failed: 0 / Broken: 0; 'All conformance tests passed.'; make run_kernel exit 0",
+    "regressions": []
+  },
+  "pool_edit": {
+    "file": "test/initramfs/src/conformance/ltp/testcases/blocked/ext2.txt",
+    "action": "delete the line",
+    "removed_lines": ["renameat202"],
+    "pre_boot_check": "git diff on the pool file showed exactly one removed line, 'renameat202', matching pool_entries exactly. 'renameat201' survives as the file's only remaining entry. blocked/exfat.txt:54 (renameat202) left untouched, as select.json required.",
+    "verified": true
+  },
+  "notes": "Ran the one configuration the entry was blocked under, with no selector, so the harness applied blocked/ext2.txt as the CI path does. renameat202 appears in the passing output ('renameat202: pass (0.015s)') under its runtest flags '-i 10', so all ten loops passed and the swap is correct in both alternating directions, which was the risk called out in select.json. renameat201 does not appear anywhere in qemu.log, confirming it is still blocked and that the pool edit removed no more than the one intended line - so the fix's side-effect green on renameat201 (observed in the fix phase under an explicit selector) is not being smuggled in here; it stays for a future round with its host-pass and probe-fail measurements already cached. No test that passed before now fails: 0 failed and 0 broken across 2398 passing assertions, versus the pre-fix baseline of Passed: 0 / Failed: 8 for this test. Changed files remain exactly the two from fix.json plus the pool file; git diff --stat shows no unrelated edits.",
+  "changed_files": [
+    "kernel/src/fs/fs_impls/ext2/impl_for_vfs/inode.rs",
+    "kernel/src/fs/fs_impls/ext2/inode/dir/mod.rs",
+    "test/initramfs/src/conformance/ltp/testcases/blocked/ext2.txt"
+  ]
+}

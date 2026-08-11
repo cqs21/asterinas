@@ -1,0 +1,10 @@
+{
+  "commit": "dba0f6f8d1e837519b203eab262bb35dcaec5339",
+  "branch": "fix-ltp-dup02-atDPcd",
+  "worktree": "/root/asterinas/.worktrees/run-atDPcd",
+  "subject": "Enable `dup02` in the LTP conformance test list",
+  "files": ["test/initramfs/src/conformance/ltp/testcases/all.txt"],
+  "already_green": true,
+  "kernel_change": false,
+  "notes": "fix phase was skipped (diagnose verdict already-green), so there is no fix.json and no patch.diff; the pool edit uncommenting dup02 in all.txt is the whole commit. make format produced no changes beyond that edit and make check passed with exit 0. Only the pool file was staged; test/initramfs/src/regression/ has no leftover repro files and no tracked file remains modified. The single remaining untracked path is .osdk/, the harness-installed cargo-osdk toolchain directory, which predates this phase and is not part of the change. Not pushed, no PR opened."
+}

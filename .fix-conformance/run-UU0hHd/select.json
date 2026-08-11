@@ -1,0 +1,14 @@
+{
+  "result": "selected",
+  "suite": "ltp",
+  "test": "chmod01",
+  "gvisor_filter": null,
+  "selector_token": "chmod01",
+  "run_vars": "CONFORMANCE_TEST_WORKDIR=/exfat",
+  "pool_file": "test/initramfs/src/conformance/ltp/testcases/blocked/exfat.txt",
+  "pool_entries": ["chmod01"],
+  "enable_action": "delete the line",
+  "source": "auto-picked",
+  "rationale": "chmod01 tests basic chmod(2) syscall functionality for changing file and directory mode permissions. The test verifies that chmod succeeds with various mode values (0, 07, 070, 0700, 0777, 02777, 04777, 06777) and that the resulting permissions match what was set. This is a fundamental filesystem operation that should be straightforward to fix if it's failing due to permission handling in the exfat filesystem layer. The test passed on host Linux (confirmed via direct execution), indicating it's a valid test case. Selected from the exfat blocklist as it represents a localized chmod implementation issue rather than a complex subsystem defect.",
+  "notes": "Test confirmed to pass on host Linux (LTP version 20260529). Unable to probe in Asterinas due to build time constraints, but the simplicity and specificity of this test (basic chmod semantics) makes it a good candidate for a focused fix."
+}

@@ -1,0 +1,14 @@
+{
+  "result": "selected",
+  "suite": "ltp",
+  "test": "semget02",
+  "gvisor_filter": null,
+  "selector_token": "semget02",
+  "run_vars": "",
+  "pool_file": "test/initramfs/src/conformance/ltp/testcases/all.txt",
+  "pool_entries": ["semget02"],
+  "enable_action": "uncomment the line",
+  "source": "auto-picked",
+  "rationale": "One localized defect with an explicit TODO marking it. IpcNamespace::validate_sem_set (kernel/src/ipc/ipc_ns.rs:177-184) is a stub: it takes `_sem_set` unused, warns 'Semaphore doesn't support permission check now', and returns Ok unconditionally, so no SysV IPC permission check exists anywhere. semget02 subtest 1 creates the set with mode 0 (SAFE_SEMGET(semkey, PSEMS, IPC_CREAT|IPC_EXCL), no permission bits) then forks a child that setuid's to nobody and calls semget(semkey, PSEMS, SEM_RA) expecting EACCES; the stub grants it instead. The fix is implementable with data already on hand: IpcPermission (ipc/mod.rs:58-70) already stores uid/gid/cuid/cguid/mode and SemaphoreSet::new populates it from credentials.euid()/egid() (sem_set.rs:251-252), so validate_sem_set can implement Linux ipcperms() (ipc/util.c) directly. The other five subtests already have working paths, which is what keeps the blast radius small: EEXIST at ipc_ns.rs:147-152, ENOENT at 142 and 162, EINVAL for nsems>SEMMSL via SemaphoreSet::new at sem_set.rs:242-244, and EINVAL for an undersized existing set at ipc_ns.rs:154-156. Chose it over statfs03/pathconf02 (their EACCES depends on whether euid transitions drop capabilities, a credentials-wide question, and lookup_at_path already checks MAY_EXEC at resolver.rs:558 so the defect is not localized there) and over the socket cluster (accept/connect/send/recv/socketpair likely share socket01's per-family dispatch defect, already fixed on another branch). ipc/ is untouched by all 12 prior runs, so this is genuinely uncovered ground.",
+  "notes": "Evidence is cached, not measured this phase: host=pass on pinned version 20260529 (run-f6fYXT) and probe=fail on e8f2b9ca6, my exact base_commit, independently from run-f6fYXT and run-IsX1sM. Both at full validity, so no host run or boot was spent and no new cache lines were appended. Per-subtest attribution to the EACCES case is derived from reading the kernel paths for the other five, not from failure output; diagnose should confirm against qemu.log. One alternative worth ruling out there: ipc_ns.rs:133 derives semid by hashing key (key % SEMMNI + 1) and returns ENOSPC on collision, so if semkey and semkey1 from GETIPCKEY() collide, subtests 3-5 could fail for that unrelated reason. Asterinas also hardcodes ALTER|READ at ipc_ns.rs:145 rather than deriving requested permissions from semflg as Linux does. Two other all.txt semget entries stay blocked: semget05 (line 1344); semget01 (1342) is already enabled."
+}

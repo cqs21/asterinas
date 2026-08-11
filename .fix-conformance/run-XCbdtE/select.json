@@ -1,0 +1,14 @@
+{
+  "result": "selected",
+  "suite": "ltp",
+  "test": "setpriority02",
+  "gvisor_filter": null,
+  "selector_token": "setpriority02",
+  "run_vars": "",
+  "pool_file": "test/initramfs/src/conformance/ltp/testcases/all.txt",
+  "pool_entries": ["setpriority02"],
+  "enable_action": "uncomment the line",
+  "source": "auto-picked",
+  "rationale": "Pure setpriority(2) errno semantics across 7 subtests, no subsystem Asterinas lacks. Host baseline is a clean 7/7 pass on LTP 20260529; probed in Asterinas at base commit e8f2b9ca6 and it fails. The defect looks localized and already partly visible by reading: sys_set_priority in kernel/src/syscall/set_priority.rs contains no credential check whatsoever (no euid/ruid/EPERM anywhere in the file), so the EPERM subtest (unprivileged process targeting pid 1) has no code path that could produce it. The EACCES arm exists but is derived from RLIMIT_NICE, whose init value is 0 (kernel/src/process/rlimit.rs:20), and prio is clamped rather than validated. get_priority.rs already supplies the PriorityTarget/Which plumbing and the ESRCH arms, so the work is confined to one syscall file plus the shared target resolver. Rounds 1-6 took fsync03, dup02, clock_getres01, epoll_ctl02, timerfd_gettime01, gvisor readv_test, socket01, renameat202 - none touched the priority/nice syscalls, so this is uncovered ground.",
+  "notes": "Probed 4 candidates plus a control in 2 boots; all measurements appended to select.cache. setpriority01, statfs03 and fcntl27 also fail at e8f2b9ca6 with clean host passes and stay available as alternatives; setpriority01 shares this syscall and may well fall out of the same fix (it needs setpriority to actually take effect and round-trip through getpriority, which the FIXME at set_priority.rs:38-40 flags as only updating the per-process nice and not the fair-scheduler thread state - a strictly larger job, so it is deliberately out of scope here). statfs01 was observed PASSING in Asterinas while still commented out in all.txt, recorded as a stale-entry for a future round. mprotect01 came back 'broken' rather than 'fail' - a harness/setup problem, not a plain assertion failure. Per-case kirk output is not visible in the default run: run_ltp_test.sh only passes --verbose when KIRK_VERBOSE=1, and that variable is not plumbed through the root Makefile, so phase 2 will need to read /tmp/result.json or result.log inside the guest to get the per-subtest breakdown. Verify configuration is the default: the entry is in all.txt, so no CONFORMANCE_TEST_WORKDIR override."
+}

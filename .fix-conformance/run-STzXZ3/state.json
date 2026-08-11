@@ -1,0 +1,21 @@
+{
+  "run_id": "run-STzXZ3",
+  "suite": "ltp",
+  "test": "socket01",
+  "gvisor_filter": null,
+  "worktree": "/root/asterinas/.worktrees/run-STzXZ3",
+  "osdk_bin": "/root/asterinas/.worktrees/run-STzXZ3/.osdk/bin",
+  "branch": "fix-ltp-socket01-STzXZ3",
+  "base_commit": "e8f2b9ca6",
+  "vnc_port": 7361,
+  "round": 5,
+  "rounds_total": 10,
+  "phases": {
+    "select": "done",
+    "diagnose": "done",
+    "fix": "done",
+    "verify": "done",
+    "commit": "done"
+  },
+  "outcome": "committed"
+}

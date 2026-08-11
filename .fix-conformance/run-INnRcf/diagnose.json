@@ -1,0 +1,17 @@
+{
+  "verdict": "already-green",
+  "baseline": "Host Linux: all 20 madvise behaviors pass (TPASS). Each behavior returns 0: MADV_NORMAL, MADV_RANDOM, MADV_SEQUENTIAL, MADV_WILLNEED, MADV_DONTNEED, MADV_REMOVE, MADV_DONTFORK, MADV_DOFORK, MADV_HWPOISON, MADV_MERGEABLE, MADV_UNMERGEABLE, MADV_HUGEPAGE, MADV_NOHUGEPAGE, MADV_DONTDUMP, MADV_DODUMP, MADV_FREE, MADV_WIPEONFORK, MADV_KEEPONFORK, MADV_COLD, MADV_PAGEOUT",
+  "failing_assertion": "None. Asterinas reports 10 TPASS + 10 TCONF (skipped), yielding 0 failed/broken/warnings, which the runner accepts as pass. The test explicitly treats EINVAL as TCONF (not a failure) at madvise01.c:104-105.",
+  "impl": {
+    "file": "kernel/src/syscall/madvise.rs",
+    "lines": "8-49, especially 31-46 (behavior dispatch) and 100-110 (DUMMY_MADVISE list)"
+  },
+  "root_cause": "10 of 20 advice values (MADV_NORMAL, MADV_RANDOM, MADV_SEQUENTIAL, MADV_WILLNEED, MADV_FREE, MADV_MERGEABLE, MADV_UNMERGEABLE, MADV_HUGEPAGE, MADV_NOHUGEPAGE from DUMMY_MADVISE + MADV_DONTNEED handled separately) verify the range is fully mapped and return 0, producing TPASS. The other 10 (MADV_REMOVE, MADV_DONTFORK, MADV_DOFORK, MADV_HWPOISON, MADV_DONTDUMP, MADV_DODUMP, MADV_WIPEONFORK, MADV_KEEPONFORK, MADV_COLD, MADV_PAGEOUT) hit the fallthrough case at line 45 and return EINVAL, which the test interprets as \"not supported\" (TCONF). The LTP runner's pass criteria (failed==0, broken==0, warnings==0) are met, so the test passes.",
+  "verdict_notes": "There is a genuine feature gap vs Linux: 10 advice values remain unimplemented. MADV_REMOVE, MADV_DONTFORK/MADV_DOFORK, MADV_HWPOISON, MADV_DONTDUMP/MADV_DODUMP, MADV_WIPEONFORK/MADV_KEEPONFORK, and MADV_COLD/MADV_PAGEOUT all succeed (return 0) on Linux, but Asterinas returns EINVAL. However, this test is explicitly designed to tolerate missing advice support, so the test passes. MADV_DONTNEED actually calls vmar.discard_pages(), so it's not a pure no-op. Enabling madvise01 in all.txt is safe, but does not prove madvise completeness.",
+  "invariant": null,
+  "owning_layer": null,
+  "linux_reference": "Linux implements these in mm/madvise.c madvise_vma_behavior(); the unimplemented ones are real VMA-flag or page-reclaim operations (MADV_DONTFORK/DOFORK set VM_DONTCOPY, MADV_WIPEONFORK sets VM_WIPEONFORK, MADV_DONTDUMP sets VM_DONTDUMP, MADV_REMOVE punches a hole via vfs_fallocate, MADV_COLD/PAGEOUT drive reclaim). None is required for this test to pass.",
+  "other_callers": "Not applicable for this verdict; no defect is being fixed. The unimplemented advice values are reachable by any process calling madvise(2), but they fail closed with EINVAL rather than producing wrong behavior.",
+  "suggested_direction": "No kernel change needed. Uncomment line 1031 (madvise01) in test/initramfs/src/conformance/ltp/testcases/all.txt to enable the test.",
+  "verify_configuration": "Default (no workdir override), as the pool file is testcases/all.txt. Phase 4 will run the whole LTP suite with madvise01 uncommented."
+}

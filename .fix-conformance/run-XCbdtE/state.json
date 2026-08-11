@@ -1,0 +1,21 @@
+{
+  "run_id": "run-XCbdtE",
+  "suite": "ltp",
+  "test": "setpriority02",
+  "gvisor_filter": null,
+  "worktree": "/root/asterinas/.worktrees/run-XCbdtE",
+  "osdk_bin": "/root/asterinas/.worktrees/run-XCbdtE/.osdk/bin",
+  "branch": "fix-ltp-setpriority02-XCbdtE",
+  "base_commit": "e8f2b9ca6",
+  "vnc_port": 3748,
+  "round": 7,
+  "rounds_total": 10,
+  "phases": {
+    "select": "done",
+    "diagnose": "done",
+    "fix": "done",
+    "verify": "done",
+    "commit": "done"
+  },
+  "outcome": "committed"
+}

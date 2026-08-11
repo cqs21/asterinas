@@ -1,0 +1,30 @@
+{
+  "status": "ok",
+  "target_test": {
+    "name": "open04",
+    "case_results": null,
+    "passed": true
+  },
+  "still_blocked_absent": true,
+  "full_suite": {
+    "suite": "ltp",
+    "config": "default (no CONFORMANCE_TEST_WORKDIR, empty CONFORMANCE_TEST_EXTRA_BLOCKLISTS, empty selector)",
+    "passed": true,
+    "summary": "Suite: syscalls, Runtime: 3m 17s, Runs: 544, Passed: 2599, Failed: 0, Broken: 0, Skipped: 57, Warnings: 0; 'All conformance tests passed.'; make exit 0",
+    "regressions": []
+  },
+  "pool_edit": {
+    "file": "test/initramfs/src/conformance/ltp/testcases/all.txt",
+    "action": "uncommented the line",
+    "entries": ["open04"],
+    "pre_boot_check": "git diff on the pool file showed exactly one changed line, '- # open04' / '+ open04' at line 999. Enabled count went 544 -> 545, matching the single added entry."
+  },
+  "log": "/tmp/verify-ubLFfF-full.log",
+  "command": "PATH=/root/asterinas/.worktrees/run-ubLFfF/.osdk/bin:$PATH VNC_PORT=4281 make run_kernel AUTO_TEST=conformance CONFORMANCE_TEST_SUITE=ltp CARGO_OSDK=/root/asterinas/.worktrees/run-ubLFfF/.osdk/bin/cargo-osdk",
+  "evidence": {
+    "target_line": "open04: pass  (0.143s)",
+    "result_line_tally": "526 pass / 18 skip / 0 fail / 0 broken across the per-case lines",
+    "no_unexpected_tests_ran": "Every test with a result line is an enabled entry in all.txt; nothing blocked leaked into the run."
+  },
+  "notes": "Pre-existing, explained discrepancy: 545 enabled entries yield 544 runs because munmap02 no longer exists in LTP 20260529 (the pinned version), so it has no binary to run. This is a stale all.txt entry unrelated to this fix; the user directed that it be ignored rather than chased, so the blocklist was not touched for it. It is not a bad-pool-edit and not a regression. Neighbouring open* entries left blocked (open02, open06, open08) stayed commented and correctly did not appear in the run."
+}

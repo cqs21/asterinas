@@ -1,0 +1,44 @@
+{
+  "status": "ok",
+  "target_test": {
+    "name": "readv_test",
+    "case_results": {
+      "ReadvTest.BadIovecBase_File": true,
+      "ReadvTest.BadIovecBase_Pipe": true,
+      "ReadvTest.IovecOutsideTaskAddressRangeInNonemptyArray": true
+    },
+    "passed": true
+  },
+  "still_blocked_absent": true,
+  "full_suite": {
+    "suite": "gvisor",
+    "config": "default (no CONFORMANCE_TEST_WORKDIR or CONFORMANCE_TEST_EXTRA_BLOCKLISTS override); empty selector so the blocklist applies",
+    "passed": true,
+    "summary": "qemu.log:10779 '81 of 81 test cases passed.' followed by qemu.log:10780 'All conformance tests passed.'; make exit code 0. Zero '[  FAILED  ]' lines in the whole log across all 81 packaged binaries.",
+    "regressions": []
+  },
+  "pool_edit": {
+    "file": "test/initramfs/src/conformance/gvisor/blocklists/readv_test",
+    "action": "deleted the 3 lines in pool_entries",
+    "pre_boot_diff_check": "git diff on the pool file removes exactly ReadvTest.BadIovecBase_File, ReadvTest.BadIovecBase_Pipe and ReadvTest.IovecOutsideTaskAddressRangeInNonemptyArray, and nothing else. The 3 remaining lines (ReadvTest.NotReadable_Pipe, ReadvTestNoFixture.TruncatedAtMax, ReadvTestNoFixture.TruncatedAtMax_NoRandomSave) survive untouched; the file's missing trailing newline is unchanged."
+  },
+  "evidence": {
+    "command": "PATH=/root/asterinas/.worktrees/run-qMdgxS/.osdk/bin:$PATH VNC_PORT=4029 make run_kernel AUTO_TEST=conformance CONFORMANCE_TEST_SUITE=gvisor CONFORMANCE_TEST_GVISOR_FILTER=ReadvTest.BadIovecBase_File:ReadvTest.BadIovecBase_Pipe:ReadvTest.IovecOutsideTaskAddressRangeInNonemptyArray CARGO_OSDK=/root/asterinas/.worktrees/run-qMdgxS/.osdk/bin/cargo-osdk",
+    "readv_test_block": "qemu.log:10344-10419. The runner took the no-selector path, so it built the negative filter '-ReadvTest.NotReadable_Pipe:ReadvTestNoFixture.TruncatedAtMax:ReadvTestNoFixture.TruncatedAtMax_NoRandomSave:' from the edited blocklist (run_gvisor_test.sh:46-49) and ignored CONFORMANCE_TEST_GVISOR_FILTER, which is the CI path being verified. 30 of the binary's 33 cases ran and '[  PASSED  ] 30 tests.' - the 3 skipped are exactly the 3 that stay blocked.",
+    "still_blocked_check": "The only occurrence of NotReadable_Pipe or TruncatedAtMax anywhere in qemu.log is the gtest_filter line itself (qemu.log:10345); no '[ RUN      ]' line for any of them, so the blocklist edit did not take out more than the 3 target lines.",
+    "guards_confirmed_in_same_run": [
+      "ReadvTest.NullIovecInNonemptyArray",
+      "ReadvTest.ZeroIovecs_File",
+      "ReadvTest.ZeroIovecs_Pipe",
+      "ReadvTest.BadIovecsPointer_File",
+      "ReadvTest.BadIovecsPointer_Pipe",
+      "ReadvTest.ZeroBuffer"
+    ],
+    "sibling_iovec_binaries_green": "preadv_test, preadv2_test, pwritev_test, pwritev2_test, readv_socket_test and the socket binaries all appear in the passing 81, so the five other callers of copy_iovs_and_convert are exercised by this run too."
+  },
+  "changed_files": [
+    "kernel/src/util/iovec.rs",
+    "test/initramfs/src/conformance/gvisor/blocklists/readv_test",
+    "test/initramfs/src/regression/io/file_io/iovec_err.c"
+  ]
+}

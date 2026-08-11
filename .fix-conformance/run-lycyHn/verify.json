@@ -1,0 +1,16 @@
+{
+  "status": "ok",
+  "target_test": {
+    "name": "brk02",
+    "case_results": null,
+    "passed": true
+  },
+  "still_blocked_absent": true,
+  "full_suite": {
+    "suite": "ltp",
+    "config": "",
+    "passed": true,
+    "summary": "Passed: 2616 / Failed: 0 / Broken: 0 / Skipped: 57 / Warnings: 0",
+    "regressions": []
+  }
+}

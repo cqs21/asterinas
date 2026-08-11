@@ -1,0 +1,21 @@
+{
+  "run_id": "run-FAFjvy",
+  "suite": "ltp",
+  "test": "alarm02",
+  "gvisor_filter": null,
+  "worktree": "/root/asterinas/.worktrees/run-FAFjvy",
+  "osdk_bin": "/root/asterinas/.worktrees/run-FAFjvy/.osdk/bin",
+  "branch": "fix-ltp-alarm02-FAFjvy",
+  "base_commit": "e8f2b9ca6",
+  "vnc_port": 9735,
+  "round": 1,
+  "rounds_total": 3,
+  "phases": {
+    "select": "done",
+    "diagnose": "done",
+    "fix": "done",
+    "verify": "done",
+    "commit": "done"
+  },
+  "outcome": "committed"
+}

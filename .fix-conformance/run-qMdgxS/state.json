@@ -1,0 +1,21 @@
+{
+  "run_id": "run-qMdgxS",
+  "suite": "gvisor",
+  "test": "readv_test",
+  "gvisor_filter": "ReadvTest.BadIovecBase_File:ReadvTest.BadIovecBase_Pipe:ReadvTest.IovecOutsideTaskAddressRangeInNonemptyArray",
+  "worktree": "/root/asterinas/.worktrees/run-qMdgxS",
+  "osdk_bin": "/root/asterinas/.worktrees/run-qMdgxS/.osdk/bin",
+  "branch": "fix-gvisor-readv_test-qMdgxS",
+  "base_commit": "e8f2b9ca6",
+  "vnc_port": 4029,
+  "round": 4,
+  "rounds_total": 10,
+  "phases": {
+    "select": "done",
+    "diagnose": "done",
+    "fix": "done",
+    "verify": "done",
+    "commit": "done"
+  },
+  "outcome": "committed"
+}

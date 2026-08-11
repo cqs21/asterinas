@@ -1,0 +1,16 @@
+{
+  "status": "ok",
+  "target_test": {
+    "name": "bind02",
+    "case_results": null,
+    "passed": true
+  },
+  "still_blocked_absent": true,
+  "full_suite": {
+    "suite": "ltp",
+    "config": "default (no workdir override)",
+    "passed": true,
+    "summary": "All conformance tests passed. (526 tests passed, 0 failed)",
+    "regressions": []
+  }
+}

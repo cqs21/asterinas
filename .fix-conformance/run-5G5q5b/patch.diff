@@ -1,0 +1,27 @@
+diff --git a/kernel/src/syscall/timer_settime.rs b/kernel/src/syscall/timer_settime.rs
+index 46fb48e3e..d499101ca 100644
+--- a/kernel/src/syscall/timer_settime.rs
++++ b/kernel/src/syscall/timer_settime.rs
+@@ -66,9 +66,6 @@ pub fn sys_timer_gettime(
+     itimerspec_addr: Vaddr,
+     ctx: &Context,
+ ) -> Result<SyscallReturn> {
+-    if itimerspec_addr == 0 {
+-        return_errno_with_message!(Errno::EINVAL, "invalid pointer to return value");
+-    }
+     let Some(timer) = ctx.process.timer_manager().find_posix_timer(timer_id) else {
+         return_errno_with_message!(Errno::EINVAL, "invalid timer ID");
+     };
+diff --git a/test/initramfs/src/conformance/ltp/testcases/all.txt b/test/initramfs/src/conformance/ltp/testcases/all.txt
+index 5bef8afbd..df42f2591 100644
+--- a/test/initramfs/src/conformance/ltp/testcases/all.txt
++++ b/test/initramfs/src/conformance/ltp/testcases/all.txt
+@@ -1724,7 +1724,7 @@ timer_create03
+ timer_delete02
+ 
+ # timer_getoverrun01
+-# timer_gettime01
++timer_gettime01
+ 
+ # timer_settime01
+ # timer_settime02

@@ -1,0 +1,20 @@
+{
+  "commit": "18d4739b4488906e8571432cbcf4b004c9c4fd97",
+  "branch": "fix-ltp-semget02-n8fKcM",
+  "worktree": "/root/asterinas/.worktrees/run-n8fKcM",
+  "subject": "Enforce System V IPC permissions on semaphore access",
+  "files": [
+    "kernel/src/ipc/mod.rs",
+    "kernel/src/ipc/ipc_ns.rs",
+    "kernel/src/ipc/semaphore/system_v/mod.rs",
+    "kernel/src/ipc/semaphore/system_v/sem.rs",
+    "kernel/src/syscall/semctl.rs",
+    "kernel/src/syscall/semget.rs",
+    "test/initramfs/src/conformance/ltp/testcases/all.txt"
+  ],
+  "checks": "`make format` produced no changes. `make check` exit 0 (trailing whitespace, workspace lints, rustfmt --check, clippy, typos, license headers). No lint fixes were needed, so no fix round was spent.",
+  "ktest_note": "Guarded against the prior run's failure mode explicitly. Repo-wide grep for the changed APIs (`with_sem_set`, `get_or_create_sem_set`, `validate_sem_set`, `PermissionMode`, `IpcPermission`) found call sites only in the six kernel files already in the commit; there are no `#[cfg(ktest)]` blocks anywhere under `kernel/src/ipc/` or in the two syscall files. `make check` runs `cargo osdk clippy --ktests` via tools/clippy_check.sh:77, but served it from cache, so the six changed files were touched and `RUSTFLAGS=-Dwarnings cargo osdk clippy --ktests -- --no-deps` re-run from scratch: `aster-kernel` recompiled and exited 0, confirming the commit builds clean under `--cfg ktest`.",
+  "staging_note": "The seven paths were staged by name, never `git add -A`. `git status` afterwards showed nothing else staged. The only untracked path in the worktree is `.osdk/` (the cargo-osdk toolchain install the run's osdk_bin points at, created by earlier phases) and it was deliberately left out. No repro artifact exists in test/initramfs/src/regression/ — `git status --untracked-files=all test/` reports only the tracked all.txt edit.",
+  "pool_edit": "test/initramfs/src/conformance/ltp/testcases/all.txt line 1343, `# semget02` -> `semget02`; a one-line change, with semget05 (1344) and the semctl/semop neighbours left commented.",
+  "worktree_clean": true
+}

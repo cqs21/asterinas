@@ -1,0 +1,26 @@
+{
+  "status": "ok",
+  "target_test": {
+    "name": "personality01",
+    "case_results": null,
+    "passed": true
+  },
+  "still_blocked_absent": true,
+  "full_suite": {
+    "suite": "ltp",
+    "config": "default (run_vars empty: no CONFORMANCE_TEST_SELECTOR, no CONFORMANCE_TEST_WORKDIR override, no CONFORMANCE_TEST_EXTRA_BLOCKLISTS) -- the CI path that applies the blocklist, and the correct configuration for an all.txt entry",
+    "passed": true,
+    "summary": "Suite: syscalls, Runtime: 3m 15s, Runs: 544 -- Passed: 2550, Failed: 0, Broken: 0, Skipped: 52, Warnings: 0; 'All conformance tests passed.' and make run_kernel exit code 0. Target at qemu.log:324 'personality01: pass  (0.096s)'. Per-test tally over the 544 runs: 527 pass, 17 skip, zero fail/broken/warning lines.",
+    "regressions": []
+  },
+  "pool_edit": {
+    "file": "test/initramfs/src/conformance/ltp/testcases/all.txt",
+    "diff": "1 insertion, 1 deletion: line 1051 '# personality01' -> 'personality01'. Pre-boot git diff check confirmed the removed line equals pool_entries exactly; line 1052 '# personality02' left commented, as diagnose directed. No other file in the worktree is modified (git status shows only this file plus the untracked .osdk/ build dir).",
+    "is_entire_change": true
+  },
+  "regression_evidence": "Three independent checks, since diagnose's verdict was already-green and there is no kernel change that could regress anything. (1) The suite's own gate: Failed 0, Broken 0, Warnings 0. A regression requires a failure, and there were none. (2) Skip set: the 17 tests kirk labels 'skip' are byte-identical, by name, to three prior green full-suite runs (run-atDPcd, run-rVlQYu, run-n8fKcM), so nothing flipped from pass to skip. (3) Pass set: diffed by name against those same three runs, the only differences are each run's own target (dup02, epoll_ctl02, semget02 -- enabled there, not here) and personality01 (enabled here, not there). All other ~526 passing tests match exactly.",
+  "still_blocked_check": "all.txt still holds 958 commented-out entries. Compared that set against the 544 tests that produced a result line in qemu.log: the intersection is empty, so no still-blocked test leaked into the run. personality02, the adjacent line and the easiest one to take out by accident, appears zero times in qemu.log.",
+  "run_count_note": "545 uncommented entries in all.txt but Runs: 544. Not caused by this edit and not a defect in it: the missing name is munmap02, which is uncommented at base commit e8f2b9ca6 (line 976), is in no blocklist, and simply does not exist in the pinned LTP 20260529 prebuilt -- /nix/store/hik6kb512ia3p14lc2vwzb292d4k306a-ltp-20260529/testcases/bin ships munmap01, munmap03 and munmap04 only. Packaging silently drops the stale name. Every prior LTP full-suite record in .fix-conformance reports the same Runs: 544 from the same 545-entry post-edit file, so the off-by-one is pre-existing and stable. Worth someone's attention as a separate cleanup, out of scope here.",
+  "assertion_count_note": "Passed: 2550 is the suite-wide assertion aggregate and is noisy between runs -- prior green records range from 2392 to 2704 with Failed: 0 throughout -- so it is not a useful regression signal on its own, which is why the per-test pass/skip set diff above is the evidence used. The kirk undercount caveat does not bite personality01: diagnose's selector run reported Passed 19, matching the host's 19 exactly, and qemu.log carries only kirk's aggregate rather than per-TPASS lines in the full-suite path.",
+  "notes": "Verified in worktree /root/asterinas/.worktrees/run-KgPVlh on branch fix-ltp-personality01-KgPVlh. Command: PATH=<osdk_bin>:$PATH VNC_PORT=1468 make run_kernel AUTO_TEST=conformance CONFORMANCE_TEST_SUITE=ltp CARGO_OSDK=<osdk_bin>/cargo-osdk. Ready for commit: the blocklist edit is the whole diff."
+}

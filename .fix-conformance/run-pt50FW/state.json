@@ -1,0 +1,21 @@
+{
+  "run_id": "run-pt50FW",
+  "suite": "ltp",
+  "test": "chroot01",
+  "gvisor_filter": null,
+  "worktree": "/root/asterinas/.worktrees/run-pt50FW",
+  "osdk_bin": "/root/asterinas/.worktrees/run-pt50FW/.osdk/bin",
+  "branch": "fix-ltp-chroot01-pt50FW",
+  "base_commit": "e8f2b9ca6",
+  "vnc_port": 8338,
+  "round": 3,
+  "rounds_total": 3,
+  "phases": {
+    "select": "done",
+    "diagnose": "done",
+    "fix": "done",
+    "verify": "done",
+    "commit": "done"
+  },
+  "outcome": "committed"
+}

@@ -1,0 +1,16 @@
+{
+  "status": "ok",
+  "target_test": {
+    "name": "dup02",
+    "case_results": null,
+    "passed": true
+  },
+  "still_blocked_absent": true,
+  "full_suite": {
+    "suite": "ltp",
+    "config": "default (empty run_vars, no CONFORMANCE_TEST_WORKDIR override, empty selector)",
+    "passed": true,
+    "summary": "Suite: syscalls, Runtime: 3m 17s, Runs: 544 -- Passed: 2695, Failed: 0, Broken: 0, Skipped: 52, Warnings: 0; 'All conformance tests passed.' (make exit 0)",
+    "regressions": []
+  }
+}

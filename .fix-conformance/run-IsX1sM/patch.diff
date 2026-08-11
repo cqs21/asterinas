@@ -1,0 +1,157 @@
+diff --git a/kernel/src/fs/file/inode_handle.rs b/kernel/src/fs/file/inode_handle.rs
+index e7c95f61f..2695aa446 100644
+--- a/kernel/src/fs/file/inode_handle.rs
++++ b/kernel/src/fs/file/inode_handle.rs
+@@ -22,7 +22,16 @@ use crate::{
+         },
+     },
+     prelude::*,
+-    process::signal::{PollHandle, Pollable},
++    process::{
++        RLIM_INFINITY, ResourceType,
++        posix_thread::AsPosixThread,
++        signal::{
++            PollHandle, Pollable,
++            constants::SIGXFSZ,
++            signals::user::{UserSignal, UserSignalKind},
++        },
++    },
++    thread::Thread,
+     util::ioctl::RawIoctl,
+ };
+ 
+@@ -101,6 +110,77 @@ impl InodeHandle {
+         (inode.as_ref(), is_offset_aware)
+     }
+ 
++    /// Checks a write at `offset` against `RLIMIT_FSIZE` and limits `reader` accordingly.
++    ///
++    /// The limit bounds how many bytes a file may hold, so it is evaluated against the
++    /// *starting* offset of the write rather than against its end:
++    /// - If the offset is at or beyond the soft limit, nothing is transferred, `EFBIG` is
++    ///   returned and `SIGXFSZ` is raised on the calling thread.
++    /// - Otherwise the write is permitted, but `reader` is limited so that at most
++    ///   `limit - offset` bytes are transferred. This is an ordinary short write, with
++    ///   neither an error nor a signal.
++    ///
++    /// This mirrors Linux's `generic_write_check_limits`, which every regular-file write
++    /// path reaches via `generic_write_checks`.
++    /// Reference: <https://elixir.bootlin.com/linux/v6.16.9/source/fs/read_write.c>.
++    ///
++    /// The limit applies only to writes that can grow a file's contents, i.e. to regular
++    /// files whose bytes live in a page cache. Writes to devices, pipes and sockets do
++    /// not store bytes in a file, and pseudo-filesystem writes (procfs, sysfs) address
++    /// kernel state rather than file contents -- most notably `/proc/[pid]/mem`, whose
++    /// offsets are user-space addresses and would otherwise be rejected outright. Linux
++    /// likewise reaches `generic_write_checks` from real filesystems only.
++    fn check_fsize_limit(&self, offset: usize, reader: &mut VmReader) -> Result<()> {
++        // A zero-length write never extends the file, so it can never hit the limit.
++        if !reader.has_remain() {
++            return Ok(());
++        }
++
++        // Impose no limit if there is no process to read the limit from, as is the case
++        // in kernel-mode unit tests.
++        let current_thread = Thread::current();
++        let Some(posix_thread) = current_thread
++            .as_ref()
++            .and_then(|thread| thread.as_posix_thread())
++        else {
++            return Ok(());
++        };
++
++        let limit = posix_thread
++            .process()
++            .resource_limits()
++            .get_rlimit(ResourceType::RLIMIT_FSIZE)
++            .get_cur();
++        // The limit is unset in the common case. Return early before querying the inode,
++        // so that the checks below cost nothing unless a limit is actually in effect.
++        if limit == RLIM_INFINITY {
++            return Ok(());
++        }
++
++        let inode = self.path().inode();
++        if !inode.type_().is_regular_file() || inode.page_cache().is_none() {
++            return Ok(());
++        }
++
++        if offset as u64 >= limit {
++            posix_thread.enqueue_signal(Box::new(UserSignal::new(
++                SIGXFSZ,
++                UserSignalKind::Kill,
++                posix_thread.process().pid(),
++                posix_thread.credentials().ruid(),
++            )));
++            return_errno_with_message!(
++                Errno::EFBIG,
++                "the write offset is at or beyond the maximum file size"
++            );
++        }
++
++        let writable_len = limit - offset as u64;
++        reader.limit(writable_len.try_into().unwrap_or(usize::MAX));
++
++        Ok(())
++    }
++
+     /// Returns the `FileOps` for positional I/O, rejecting files
+     /// that do not support `pread`/`pwrite`.
+     fn file_ops_for_positional_io(&self) -> Result<&dyn FileOps> {
+@@ -305,6 +385,8 @@ impl FileLike for InodeHandle {
+             *offset = self.path().size();
+         }
+ 
++        self.check_fsize_limit(*offset, reader)?;
++
+         let len = file_ops.write_at(*offset, reader, status_flags)?;
+         *offset += len;
+ 
+@@ -338,6 +420,8 @@ impl FileLike for InodeHandle {
+             offset = self.path().size();
+         }
+ 
++        self.check_fsize_limit(offset, reader)?;
++
+         file_ops.write_at(offset, reader, status_flags)
+     }
+ 
+diff --git a/kernel/src/process/mod.rs b/kernel/src/process/mod.rs
+index 2948b3da5..2bec784ad 100644
+--- a/kernel/src/process/mod.rs
++++ b/kernel/src/process/mod.rs
+@@ -39,7 +39,7 @@ pub use process::{
+ };
+ pub use process_filter::ProcessFilter;
+ pub use process_vm::{INIT_STACK_SIZE, LockedHeap, ProcessVm, VmarSnapshot};
+-pub use rlimit::ResourceType;
++pub use rlimit::{RLIM_INFINITY, ResourceType};
+ pub use stats::collect_process_creation_count;
+ pub use term_status::TermStatus;
+ pub use wait::{WaitOptions, WaitStatus, do_wait};
+diff --git a/kernel/src/process/rlimit.rs b/kernel/src/process/rlimit.rs
+index 155e97de5..7c55aaaa7 100644
+--- a/kernel/src/process/rlimit.rs
++++ b/kernel/src/process/rlimit.rs
+@@ -15,7 +15,7 @@ use crate::{
+ 
+ // Constants for the boot-time rlimit defaults
+ // See https://github.com/torvalds/linux/blob/fac04efc5c793dccbd07e2d59af9f90b7fc0dca4/include/asm-generic/resource.h#L11
+-const RLIM_INFINITY: u64 = u64::MAX;
++pub const RLIM_INFINITY: u64 = u64::MAX;
+ const INIT_RLIMIT_NPROC: u64 = 0;
+ const INIT_RLIMIT_NICE: u64 = 0;
+ const INIT_RLIMIT_SIGPENDING: u64 = 0;
+diff --git a/test/initramfs/src/conformance/ltp/testcases/all.txt b/test/initramfs/src/conformance/ltp/testcases/all.txt
+index 5bef8afbd..263cebcc2 100644
+--- a/test/initramfs/src/conformance/ltp/testcases/all.txt
++++ b/test/initramfs/src/conformance/ltp/testcases/all.txt
+@@ -770,7 +770,7 @@ listxattr03
+ # llistxattr02
+ llistxattr03
+ 
+-# llseek01
++llseek01
+ llseek02
+ llseek03
+ 

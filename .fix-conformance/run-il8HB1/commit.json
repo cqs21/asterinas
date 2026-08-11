@@ -1,0 +1,7 @@
+{
+  "commit": "2d7dbef3851f06c53ef494d78231b5df55f46345",
+  "branch": "fix-ltp-capset02-il8HB1",
+  "worktree": "/root/asterinas/.worktrees/run-il8HB1",
+  "subject": "Enable `capset02` in the LTP conformance pool",
+  "files": ["test/initramfs/src/conformance/ltp/testcases/all.txt"]
+}

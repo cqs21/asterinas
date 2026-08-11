@@ -1,0 +1,14 @@
+{
+  "result": "selected",
+  "suite": "ltp",
+  "test": "bind02",
+  "gvisor_filter": null,
+  "selector_token": "bind02",
+  "run_vars": "",
+  "pool_file": "test/initramfs/src/conformance/ltp/testcases/all.txt",
+  "pool_entries": ["# bind02"],
+  "enable_action": "uncomment the line",
+  "source": "auto-picked",
+  "rationale": "Stale entry from cache: observed passing in Asterinas at commit 68bdd4a99 (run-7UHmXC). This is a basic socket bind() syscall test from the highest-priority pool (all.txt). The fix is just a pool edit since the test already passes.",
+  "notes": ""
+}

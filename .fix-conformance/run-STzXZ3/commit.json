@@ -1,0 +1,16 @@
+{
+  "commit": "f5c2082e3ff7cfe76e1515b9ed092e2b1b1756df",
+  "branch": "fix-ltp-socket01-STzXZ3",
+  "worktree": "/root/asterinas/.worktrees/run-STzXZ3",
+  "subject": "Report `socket` argument errors on the axis that failed",
+  "files": [
+    "kernel/src/net/socket/create.rs",
+    "kernel/src/net/socket/mod.rs",
+    "kernel/src/syscall/socket.rs",
+    "kernel/src/syscall/socketpair.rs",
+    "kernel/src/util/net/mod.rs",
+    "kernel/src/util/net/socket.rs",
+    "test/initramfs/src/conformance/ltp/testcases/all.txt"
+  ],
+  "notes": "make format changed nothing (git status identical before and after). make check passed with exit code 0; the only warning in its output is rustup's routine 'default toolchain implicitly overridden' notice from the toolchain file, not a lint. No lint fixes were needed, so no fix round was spent. Staged the six kernel paths and the one pool path by name rather than with `git add -A`, so the untracked .osdk/ build directory stayed out; it is the only thing left in git status and is the expected OSDK artifact directory. test/initramfs/src/regression/ is clean with no repro file surviving -- verified with `git status --porcelain` on that path (empty) as well as by the commit's file list. One commit, containing both the kernel fix and the all.txt edit together. Message describes the kernel change in the subject, not the test name; the body states the invariant (three rejection axes, each owning its own errno, and EAFNOSUPPORT never returned after a family is recognized) and the owning layer (per-family socket-creation dispatch below the syscall entry points, matching diagnose's owning_layer and fix.json's layer). Linux is cited as the reason the behavior is right -- the net_proto_family::create hook placement and the socketpair EPROTONOSUPPORT-vs-EOPNOTSUPP ordering measured on this container's 6.8 kernel -- and the body also records where the fix deliberately does not generalize (raw IP, IPv6 datagram, vsock datagram remain missing features with TODOs) and that socketpair01 stays blocked despite going green. gvisor_filter is null for this LTP run, so no case-subset note was needed. Nothing was pushed, no PR opened, and no prior commit amended."
+}

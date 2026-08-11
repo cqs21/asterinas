@@ -1,0 +1,13 @@
+{
+  "status": "ok",
+  "target_test": { "name": "epoll_ctl02", "case_results": null, "passed": true },
+  "still_blocked_absent": true,
+  "full_suite": {
+    "suite": "ltp",
+    "config": "default (no CONFORMANCE_TEST_WORKDIR override; run_vars empty)",
+    "passed": true,
+    "summary": "Runs: 544 -- Passed: 2596, Failed: 0, Broken: 0, Skipped: 52, Warnings: 0. 'All conformance tests passed.' and make exit 0. Runtime 3m20s (boot total 4m7s).",
+    "regressions": []
+  },
+  "notes": "Pool edit verified with git diff on test/initramfs/src/conformance/ltp/testcases/all.txt before booting: the single changed line is '# epoll_ctl02' -> 'epoll_ctl02' at all.txt:184, exactly pool_entries and nothing else. Command run from the worktree /root/asterinas/.worktrees/run-rVlQYu with no selector, so the harness applied the blocklist as in CI: PATH=<osdk_bin>:$PATH VNC_PORT=9203 make run_kernel AUTO_TEST=conformance CONFORMANCE_TEST_SUITE=ltp CARGO_OSDK=<osdk_bin>/cargo-osdk. qemu.log confirms CONFORMANCE_TEST_SELECTOR= and CONFORMANCE_TEST_WORKDIR=/tmp (no blocklist file applies for the all.txt pool). Target at qemu.log:98 'epoll_ctl02: pass (0.013s)', with the neighbouring already-enabled epoll_ctl01 and epoll_ctl03 still passing at lines 97 and 99. Zero failed and zero broken across the whole run, so no test that passed before now fails; a grep for ': fail' and ': brok' over qemu.log returns nothing. still_blocked_absent is true by construction: gvisor_filter is null and the all.txt pool leaves nothing partially blocked for this binary. The 52 skipped entries are the stale-entry skips already recorded in select.json's notes, not new. Run count went 543 -> 544, the one added test."
+}

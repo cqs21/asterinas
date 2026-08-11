@@ -1,0 +1,9 @@
+{
+  "commit": "5b218ae241d4df351c2eec772b4878cb9bf76838",
+  "branch": "fix-ltp-madvise01-INnRcf",
+  "worktree": "/root/asterinas/.worktrees/run-INnRcf",
+  "subject": "Enable `madvise01` in the LTP conformance blocklist",
+  "files": [
+    "test/initramfs/src/conformance/ltp/testcases/all.txt"
+  ]
+}

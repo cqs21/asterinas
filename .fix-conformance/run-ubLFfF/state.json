@@ -1,0 +1,21 @@
+{
+  "run_id": "run-ubLFfF",
+  "suite": "ltp",
+  "test": "open04",
+  "gvisor_filter": null,
+  "worktree": "/root/asterinas/.worktrees/run-ubLFfF",
+  "osdk_bin": "/root/asterinas/.worktrees/run-ubLFfF/.osdk/bin",
+  "branch": "fix-ltp-open04-ubLFfF",
+  "base_commit": "e8f2b9ca6",
+  "vnc_port": 4281,
+  "round": 5,
+  "rounds_total": 5,
+  "phases": {
+    "select": "done",
+    "diagnose": "done",
+    "fix": "done",
+    "verify": "done",
+    "commit": "done"
+  },
+  "outcome": "committed"
+}

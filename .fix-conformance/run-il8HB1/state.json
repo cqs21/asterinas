@@ -1,0 +1,21 @@
+{
+  "run_id": "run-il8HB1",
+  "suite": "ltp",
+  "test": "capset02",
+  "gvisor_filter": null,
+  "worktree": "/root/asterinas/.worktrees/run-il8HB1",
+  "osdk_bin": "/root/asterinas/.worktrees/run-il8HB1/.osdk/bin",
+  "branch": "fix-ltp-capset02-il8HB1",
+  "base_commit": "e8f2b9ca6",
+  "vnc_port": 6940,
+  "round": 2,
+  "rounds_total": 3,
+  "phases": {
+    "select": "done",
+    "diagnose": "done",
+    "fix": "done",
+    "verify": "done",
+    "commit": "done"
+  },
+  "outcome": "committed"
+}

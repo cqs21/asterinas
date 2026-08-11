@@ -1,0 +1,21 @@
+{
+  "run_id": "run-5G5q5b",
+  "suite": "ltp",
+  "test": "timer_gettime01",
+  "gvisor_filter": null,
+  "worktree": "/root/asterinas/.worktrees/run-5G5q5b",
+  "osdk_bin": "/root/asterinas/.worktrees/run-5G5q5b/.osdk/bin",
+  "branch": "fix-ltp-timer_gettime01-5G5q5b",
+  "base_commit": "e8f2b9ca6",
+  "vnc_port": 3402,
+  "round": 4,
+  "rounds_total": 5,
+  "phases": {
+    "select": "done",
+    "diagnose": "done",
+    "fix": "done",
+    "verify": "done",
+    "commit": "done"
+  },
+  "outcome": "committed"
+}

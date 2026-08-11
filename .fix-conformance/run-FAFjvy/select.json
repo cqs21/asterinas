@@ -1,0 +1,14 @@
+{
+  "result": "selected",
+  "suite": "ltp",
+  "test": "alarm02",
+  "gvisor_filter": null,
+  "selector_token": "alarm02",
+  "run_vars": "",
+  "pool_file": "test/initramfs/src/conformance/ltp/testcases/all.txt",
+  "pool_entries": ["alarm02"],
+  "enable_action": "uncomment the line",
+  "source": "auto-picked",
+  "rationale": "alarm02 is a stale-entry candidate from the cache (commit 68bdd4a99) - it already passes in Asterinas but is still commented out in all.txt. This is the readiest work: the test is proven to work, requires only uncommenting the line to enable, and involves basic alarm/signal functionality which is a narrow, well-understood syscall semantic. No other run has worked on this test.",
+  "notes": ""
+}

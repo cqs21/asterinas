@@ -1,0 +1,16 @@
+{
+  "status": "ok",
+  "target_test": {
+    "name": "madvise01",
+    "case_results": null,
+    "passed": true
+  },
+  "still_blocked_absent": true,
+  "full_suite": {
+    "suite": "ltp",
+    "config": "default (no workdir override)",
+    "passed": true,
+    "summary": "Suite: syscalls, Runtime: 3m 19s, Runs: 544, Results: Passed: 2560, Failed: 0, Broken: 0, Skipped: 62, Warnings: 0",
+    "regressions": []
+  }
+}

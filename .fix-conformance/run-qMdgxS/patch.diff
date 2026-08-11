@@ -1,0 +1,182 @@
+diff --git a/kernel/src/util/iovec.rs b/kernel/src/util/iovec.rs
+index e70aeeb76..2ddbedffa 100644
+--- a/kernel/src/util/iovec.rs
++++ b/kernel/src/util/iovec.rs
+@@ -2,7 +2,7 @@
+ 
+ use ostd::{
+     Error as OstdError,
+-    mm::{Infallible, VmSpace},
++    mm::{Infallible, MAX_USERSPACE_VADDR, VmSpace},
+ };
+ 
+ use crate::prelude::*;
+@@ -43,8 +43,15 @@ impl TryFrom<UserIoVec> for IoVec {
+ 
+ impl IoVec {
+     /// Returns whether the `IoVec` points to an empty user buffer.
++    ///
++    /// Only the length determines emptiness. In particular, a zero base address does _not_ make
++    /// the buffer empty: Linux never rejects a base address just for being null, so a buffer with
++    /// a null base and a non-zero length must still be accessed, and the access will then fail
++    /// with [`Errno::EFAULT`] because the address is not mapped. See the comments in
++    /// [`CurrentUserSpace::reader`] for more details about this delayed buffer validation
++    /// behavior.
+     const fn is_empty(&self) -> bool {
+-        self.len == 0 || self.base == 0
++        self.len == 0
+     }
+ 
+     fn reader<'a>(&self, vm_space: &'a VmSpace) -> Result<VmReader<'a>> {
+@@ -54,6 +61,26 @@ impl IoVec {
+     fn writer<'a>(&self, vm_space: &'a VmSpace) -> Result<VmWriter<'a>> {
+         Ok(vm_space.writer(self.base, self.len)?)
+     }
++
++    /// Checks that the user buffer lies within the user address space.
++    ///
++    /// This performs the same range check as [`VmSpace::reader`] and [`VmSpace::writer`], so that
++    /// checking a buffer here can never disagree with converting it to a reader or a writer later.
++    ///
++    /// Note that this check applies to empty buffers too, which is why it cannot be left to the
++    /// reader/writer conversion: an empty buffer is never converted, but Linux still rejects the
++    /// whole I/O vector if such a buffer has an out-of-range base address, because its
++    /// `access_ok` in `__import_iovec` is not gated on the length.
++    fn check_range(&self) -> Result<()> {
++        if self.base.saturating_add(self.len) > MAX_USERSPACE_VADDR {
++            return_errno_with_message!(
++                Errno::EFAULT,
++                "the I/O buffer is outside the user address space"
++            );
++        }
++
++        Ok(())
++    }
+ }
+ 
+ /// The maximum number of buffers in the I/O vector.
+@@ -88,16 +115,29 @@ fn copy_iovs_and_convert<'a, T: 'a>(
+ 
+     let vm_space = user_space.vmar().vm_space();
+ 
++    // Copy the whole I/O vector first, so that the length of every buffer is validated before the
++    // address of any buffer is. Linux does the same, in `iovec_from_user` and `__import_iovec`
++    // respectively, and the order is observable: if one buffer has a negative length and another
++    // has an invalid address, the reported error is [`Errno::EINVAL`] rather than
++    // [`Errno::EFAULT`].
++    let mut iovs = Vec::with_capacity(count);
++    for idx in 0..count {
++        let addr = start_addr + idx * size_of::<UserIoVec>();
++        let uiov: UserIoVec = vm_space.reader(addr, size_of::<UserIoVec>())?.read_val()?;
++        iovs.push(IoVec::try_from(uiov)?);
++    }
++
++    // Then check the address range of every buffer, including the empty ones, before converting
++    // any of them. Conversion never moves data, so returning an error here leaves the whole I/O
++    // vector untouched, which is the all-or-nothing behavior that Linux exhibits.
++    for iov in &iovs {
++        iov.check_range()?;
++    }
++
+     let mut v = Vec::with_capacity(count);
+     let mut max_len = MAX_TOTAL_IOV_BYTES;
+ 
+-    for idx in 0..count {
+-        let mut iov = {
+-            let addr = start_addr + idx * size_of::<UserIoVec>();
+-            let uiov: UserIoVec = vm_space.reader(addr, size_of::<UserIoVec>())?.read_val()?;
+-            IoVec::try_from(uiov)?
+-        };
+-
++    for mut iov in iovs {
+         // Truncate the buffer if the number of bytes exceeds `MAX_TOTAL_IOV_BYTES`.
+         // See comments above the `MAX_TOTAL_IOV_BYTES` constant for more details.
+         if iov.len > max_len {
+diff --git a/test/initramfs/src/conformance/gvisor/blocklists/readv_test b/test/initramfs/src/conformance/gvisor/blocklists/readv_test
+index 586bdf3ce..2206c90c5 100644
+--- a/test/initramfs/src/conformance/gvisor/blocklists/readv_test
++++ b/test/initramfs/src/conformance/gvisor/blocklists/readv_test
+@@ -1,6 +1,3 @@
+-ReadvTest.BadIovecBase_File
+-ReadvTest.BadIovecBase_Pipe
+-ReadvTest.IovecOutsideTaskAddressRangeInNonemptyArray
+ ReadvTest.NotReadable_Pipe
+ ReadvTestNoFixture.TruncatedAtMax
+ ReadvTestNoFixture.TruncatedAtMax_NoRandomSave
+\ No newline at end of file
+diff --git a/test/initramfs/src/regression/io/file_io/iovec_err.c b/test/initramfs/src/regression/io/file_io/iovec_err.c
+index 0f98b68c8..34635f57c 100644
+--- a/test/initramfs/src/regression/io/file_io/iovec_err.c
++++ b/test/initramfs/src/regression/io/file_io/iovec_err.c
+@@ -60,6 +60,71 @@ FN_TEST(writev)
+ }
+ END_TEST()
+ 
++// The base address of a buffer is validated for _every_ entry of the I/O vector, including the
++// empty ones, and no data is transferred if any entry is invalid. Meanwhile, a null base address
++// is not invalid by itself: a buffer with a null base and a non-zero length must be accessed, and
++// the access then fails because the address is not mapped.
++FN_TEST(bad_iov_base)
++{
++	const char *file_path = "/tmp/iovec_err_bad_base";
++	int fd;
++	struct iovec iov[2];
++
++	fd = TEST_SUCC(open(file_path, O_RDWR | O_CREAT | O_TRUNC, 0600));
++	TEST_RES(write(fd, "0123456789", 10), _ret == 10);
++
++	// A null base with a zero length transfers nothing and succeeds.
++	iov[0] = (struct iovec){ .iov_base = NULL, .iov_len = 0 };
++	TEST_RES(readv(fd, iov, 1), _ret == 0);
++	TEST_RES(writev(fd, iov, 1), _ret == 0);
++
++	// A null base with a zero length does not stop the other entries.
++	iov[0] = (struct iovec){ .iov_base = NULL, .iov_len = 0 };
++	iov[1] = (struct iovec){ .iov_base = buf, .iov_len = sizeof(buf) };
++	TEST_SUCC(lseek(fd, 0, SEEK_SET));
++	TEST_RES(readv(fd, iov, 2), _ret == 10);
++
++	// An out-of-range base fails the whole call even at a zero length, and
++	// even when it is not the first entry. Since nothing is transferred, the
++	// valid entry alongside it is left untouched.
++	iov[0] =
++		(struct iovec){ .iov_base = (void *)UINTPTR_MAX, .iov_len = 0 };
++	iov[1] = (struct iovec){ .iov_base = buf, .iov_len = sizeof(buf) };
++	TEST_SUCC(lseek(fd, 0, SEEK_SET));
++	TEST_ERRNO(readv(fd, iov, 2), EFAULT);
++	TEST_ERRNO(writev(fd, iov, 2), EFAULT);
++
++	iov[0] = (struct iovec){ .iov_base = buf, .iov_len = sizeof(buf) };
++	iov[1] =
++		(struct iovec){ .iov_base = (void *)UINTPTR_MAX, .iov_len = 0 };
++	TEST_SUCC(lseek(fd, 0, SEEK_SET));
++	TEST_ERRNO(readv(fd, iov, 2), EFAULT);
++	TEST_ERRNO(writev(fd, iov, 2), EFAULT);
++
++	// An invalid length is reported as `EINVAL` even if another entry also
++	// has an invalid base address, because all lengths are validated before
++	// any base address is.
++	iov[0] =
++		(struct iovec){ .iov_base = (void *)UINTPTR_MAX, .iov_len = 0 };
++	iov[1] = (struct iovec){ .iov_base = buf, .iov_len = -1234 };
++	TEST_ERRNO(readv(fd, iov, 2), EINVAL);
++	TEST_ERRNO(writev(fd, iov, 2), EINVAL);
++
++	// A null base with a non-zero length is not an empty buffer: it must be
++	// accessed, and the access then reports `EFAULT` rather than a
++	// successful transfer of zero bytes. These come last because a faulting
++	// transfer leaves the file offset and size unspecified.
++	iov[0] = (struct iovec){ .iov_base = NULL, .iov_len = sizeof(buf) };
++	TEST_SUCC(lseek(fd, 0, SEEK_SET));
++	TEST_ERRNO(readv(fd, iov, 1), EFAULT);
++	TEST_SUCC(lseek(fd, 0, SEEK_SET));
++	TEST_ERRNO(writev(fd, iov, 1), EFAULT);
++
++	TEST_SUCC(close(fd));
++	TEST_SUCC(unlink(file_path));
++}
++END_TEST()
++
+ FN_TEST(preadv2_pwritev2_invalid_flags)
+ {
+ 	const char *file_path = "/tmp/iovec_err_invalid_flags";

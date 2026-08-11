@@ -1,0 +1,18 @@
+{
+  "commit": "7d943ac6882e60b2b86998a339537348c00aee0d",
+  "branch": "fix-ltp-setpriority02-XCbdtE",
+  "worktree": "/root/asterinas/.worktrees/run-XCbdtE",
+  "subject": "Require ownership or `CAP_SYS_NICE` to lower a process's priority",
+  "files": [
+    "kernel/src/process/priority.rs",
+    "kernel/src/process/mod.rs",
+    "kernel/src/syscall/set_priority.rs",
+    "test/initramfs/src/conformance/ltp/testcases/all.txt"
+  ],
+  "checks": {
+    "make_format": "ran, changed nothing",
+    "make_check": "exit 0, no rustfmt/clippy/typos/license findings",
+    "lint_fixes": "none needed"
+  },
+  "notes": "One commit holding both the kernel fix and the pool edit. Staged the four paths explicitly; git status in the worktree shows only the untracked .osdk/ build directory, and test/initramfs/src/regression/ has no leftover repro file. Body states the invariant (authorization by euid-vs-target-ruid/euid or CAP_SYS_NICE, decided before the RLIMIT_NICE check) and the owning layer (process-credential layer, beside check_signal_perm and check_rlimit_perm), cites Linux's set_one_prio_perm placement in kernel/sys.c as the reason that layer is right, and records that setpriority01 stays blocked. gvisor_filter was null, so no case-subset note applies. Not pushed, no PR opened."
+}

@@ -1,0 +1,30 @@
+{
+  "status": "ok",
+  "target_test": {
+    "name": "setpriority02",
+    "case_results": null,
+    "passed": true
+  },
+  "still_blocked_absent": true,
+  "full_suite": {
+    "suite": "ltp",
+    "config": "default (no CONFORMANCE_TEST_WORKDIR override, empty selector)",
+    "passed": true,
+    "summary": "Suite: syscalls, Runtime: 3m 16s, Runs: 544 -- Passed: 2597 / Failed: 0 / Broken: 0 / Skipped: 57 / Warnings: 0; 'All conformance tests passed.'; make exit 0",
+    "regressions": []
+  },
+  "pool_edit": {
+    "file": "test/initramfs/src/conformance/ltp/testcases/all.txt",
+    "action": "uncommented the line",
+    "entries": ["setpriority02"],
+    "pre_boot_check": "git diff showed exactly one changed line, '# setpriority02' -> 'setpriority02'. The adjacent '# setpriority01' remained commented, as required: setpriority01 is deliberately out of scope (it needs setpriority to round-trip through getpriority, which the FIXME at set_priority.rs:46-48 flags as unfixed). It did not appear anywhere in qemu.log, confirming the edit took out no extra line."
+  },
+  "evidence": {
+    "target_line": "qemu.log:469 -- 'setpriority02: pass  (0.027s)'",
+    "summary_line": "qemu.log:620-631",
+    "run_command": "PATH=<osdk_bin>:$PATH VNC_PORT=3748 make run_kernel AUTO_TEST=conformance CONFORMANCE_TEST_SUITE=ltp CARGO_OSDK=<osdk_bin>/cargo-osdk",
+    "skips": "18 test binaries skipped (57 subtests): bind04, clock_nanosleep01, clone304, epoll_pwait06, fsconfig01, fsconfig02, fsopen02, getrandom05, getrusage02, ioprio_set01, mremap07, prctl02, sched_setparam03, select01, select03, sendfile09, sendfile09_64, sigpending02. All pre-existing -- the two on the patched surface, ioprio_set01 and sched_setparam03, were already recorded as skipped by the fix phase's regression sweep before this edit, so no test was newly converted from pass to skip.",
+    "hygiene": "tools/format_all.sh --check silent (exit 0). Final change is 4 files / 59 insertions / 2 deletions: kernel/src/process/priority.rs (new, 47 lines), kernel/src/process/mod.rs (+2 export), kernel/src/syscall/set_priority.rs (+10 call and comment), all.txt (1 line uncommented)."
+  },
+  "notes": "Ran the one configuration the entry was blocked under -- the entry came from all.txt, so the default with no workdir override, and with an empty selector so the harness applies the blocklist (the CI path). gvisor_filter is null and LTP's unit of work is the whole test, so case_results is null and still_blocked_absent is true by construction for this pool file. No regression anywhere in the 544-run suite, so nothing goes back to the fix phase; the run is ready for commit."
+}

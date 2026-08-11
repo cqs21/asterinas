@@ -1,0 +1,21 @@
+{
+  "run_id": "run-iIbwju",
+  "suite": "ltp",
+  "test": "clock_getres01",
+  "gvisor_filter": null,
+  "worktree": "/root/asterinas/.worktrees/run-iIbwju",
+  "osdk_bin": "/root/asterinas/.worktrees/run-iIbwju/.osdk/bin",
+  "branch": "fix-ltp-clock_getres01-iIbwju",
+  "base_commit": "e8f2b9ca6",
+  "vnc_port": 5127,
+  "round": 1,
+  "rounds_total": 10,
+  "phases": {
+    "select": "done",
+    "diagnose": "done",
+    "fix": "done",
+    "verify": "done",
+    "commit": "done"
+  },
+  "outcome": "committed"
+}

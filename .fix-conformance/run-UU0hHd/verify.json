@@ -1,0 +1,16 @@
+{
+  "status": "ok",
+  "target_test": {
+    "name": "chmod01",
+    "case_results": null,
+    "passed": true
+  },
+  "still_blocked_absent": true,
+  "full_suite": {
+    "suite": "ltp",
+    "config": "CONFORMANCE_TEST_WORKDIR=/exfat",
+    "passed": true,
+    "summary": "Runtime: 3m 52s, Runs: 476, Passed: 2305, Failed: 0",
+    "regressions": []
+  }
+}

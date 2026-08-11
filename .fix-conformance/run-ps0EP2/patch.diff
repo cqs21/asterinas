@@ -1,0 +1,423 @@
+diff --git a/kernel/src/fs/fs_impls/ext2/impl_for_vfs/inode.rs b/kernel/src/fs/fs_impls/ext2/impl_for_vfs/inode.rs
+index 431bfd6fa..cc94de866 100644
+--- a/kernel/src/fs/fs_impls/ext2/impl_for_vfs/inode.rs
++++ b/kernel/src/fs/fs_impls/ext2/impl_for_vfs/inode.rs
+@@ -217,14 +217,10 @@ impl Inode for Ext2Inode {
+         new_name: &str,
+         mode: RenameMode,
+     ) -> Result<()> {
+-        if mode == RenameMode::Exchange {
+-            return_errno_with_message!(Errno::EINVAL, "RENAME_EXCHANGE is not supported on ext2");
+-        }
+-
+         let target = target
+             .downcast_ref::<Ext2Inode>()
+             .ok_or_else(|| Error::with_message(Errno::EXDEV, "not same fs"))?;
+-        self.rename(old_name, target, new_name)
++        self.rename(old_name, target, new_name, mode)
+     }
+ 
+     fn read_link(&self) -> Result<SymbolicLink> {
+diff --git a/kernel/src/fs/fs_impls/ext2/inode/dir/mod.rs b/kernel/src/fs/fs_impls/ext2/inode/dir/mod.rs
+index a9cab7242..3c7cd8db2 100644
+--- a/kernel/src/fs/fs_impls/ext2/inode/dir/mod.rs
++++ b/kernel/src/fs/fs_impls/ext2/inode/dir/mod.rs
+@@ -11,7 +11,10 @@ mod dir_entry;
+ 
+ use self::dir_entry::{DOT_BYTE, DOT_DOT_BYTE, DirBlockView, DirEntryFileType, DirEntryHeader};
+ use super::{super::Ext2, FileFlags, FilePerm, Inode, InodeInner, MAX_LINK_COUNT};
+-use crate::fs::ext2::{prelude::*, utils};
++use crate::fs::{
++    ext2::{prelude::*, utils},
++    vfs::inode::RenameMode,
++};
+ 
+ /// Information about a candidate directory entry slot.
+ #[derive(Clone, Copy, Debug)]
+@@ -230,11 +233,16 @@ impl Inode {
+     }
+ 
+     /// Renames or moves an entry from this directory to `target` directory.
++    ///
++    /// For [`RenameMode::Exchange`], the two entries trade the inodes they name
++    /// and nothing else changes: both inodes survive with their own data, size,
++    /// and link count.
+     pub(in crate::fs::fs_impls::ext2) fn rename(
+         &self,
+         old_name: &str,
+         target: &Inode,
+         new_name: &str,
++        mode: RenameMode,
+     ) -> Result<()> {
+         let fs = self.fs()?;
+         let is_same_dir = self.ino == target.ino;
+@@ -273,27 +281,54 @@ impl Inode {
+         let mut guards = MultiInodeInnerGuards::lock(&lock_targets);
+ 
+         // Step 3: validate invariants under lock.
+-        self.validate_rename_invariants(&guards, &old_inode, replaced_inode.as_deref())?;
+-
+-        // Step 4: apply directory mutations and metadata updates.
+-        self.apply_dir_mutations(
+-            &mut guards,
++        self.validate_rename_invariants(
++            &guards,
+             target,
+-            old_name,
+             &old_inode,
+             replaced_inode.as_deref(),
+-            new_name,
++            mode,
+         )?;
+ 
++        // Step 4: apply directory mutations and metadata updates.
++        match mode {
++            RenameMode::Exchange => {
++                // The destination is guaranteed to exist for `RenameMode::Exchange`
++                // (checked by the VFS layer, revalidated in Step 3).
++                let exchanged_inode = replaced_inode.as_deref().unwrap();
++                self.apply_exchange_mutations(
++                    &mut guards,
++                    target,
++                    old_name,
++                    &old_inode,
++                    exchanged_inode,
++                    new_name,
++                )?;
++            }
++            RenameMode::Replace | RenameMode::NoReplace => {
++                self.apply_dir_mutations(
++                    &mut guards,
++                    target,
++                    old_name,
++                    &old_inode,
++                    replaced_inode.as_deref(),
++                    new_name,
++                )?;
++            }
++        }
++
+         Ok(())
+     }
+ 
+     fn validate_rename_invariants(
+         &self,
+         guards: &MultiInodeInnerGuards,
++        target: &Inode,
+         old_inode: &Inode,
+         replaced_inode: Option<&Inode>,
++        mode: RenameMode,
+     ) -> Result<()> {
++        let is_exchange = mode == RenameMode::Exchange;
++
+         // Step 3.1: sanity-check that the moved directory's `..` still
+         // points to the source parent. A mismatch indicates on-disk
+         // corruption; bail out before we silently write a wrong `..` update.
+@@ -305,6 +340,30 @@ impl Inode {
+             }
+         }
+ 
++        if is_exchange {
++            // An exchange moves the destination instead of deleting it, so its
++            // `..` is rewritten too and deserves the same sanity check.
++            let Some(exchanged) = replaced_inode else {
++                return_errno_with_message!(Errno::ENOENT, "the new path does not exist");
++            };
++            if exchanged.type_ == InodeType::Dir {
++                let exchanged_inner = guards.inner(exchanged.ino());
++                let parent_ino = exchanged_inner.find_entry_info("..")?.ino;
++                if parent_ino != target.ino {
++                    return_errno_with_message!(
++                        Errno::EIO,
++                        "dotdot entry inconsistent with target dir"
++                    );
++                }
++            }
++
++            // The type and emptiness constraints below are specific to replacing
++            // a destination. Exchanging never deletes either participant, so a
++            // directory may legally trade places with a regular file and a
++            // non-empty directory is a legal participant.
++            return Ok(());
++        }
++
+         // Step 3.2: validate overwrite constraints.
+         if let Some(replaced) = replaced_inode {
+             let replaced_is_dir = replaced.type_ == InodeType::Dir;
+@@ -406,6 +465,106 @@ impl Inode {
+ 
+         Ok(())
+     }
++
++    /// Swaps which inodes the `old_name` and `new_name` entries refer to.
++    ///
++    /// Unlike a replacing rename, both participants survive: no entry is added
++    /// or deleted, no link count is dropped, and no inode is freed. Only the
++    /// two entries' inode and file type fields, the two participants' `..`
++    /// entries when the exchange crosses directories, and timestamps change.
++    fn apply_exchange_mutations(
++        &self,
++        guards: &mut MultiInodeInnerGuards,
++        target: &Inode,
++        old_name: &str,
++        old_inode: &Inode,
++        exchanged_inode: &Inode,
++        new_name: &str,
++    ) -> Result<()> {
++        let old_ino = old_inode.ino();
++        let exchanged_ino = exchanged_inode.ino();
++        let old_is_dir = old_inode.type_ == InodeType::Dir;
++        let exchanged_is_dir = exchanged_inode.type_ == InodeType::Dir;
++        let old_file_type = DirEntryFileType::from(old_inode.type_);
++        let exchanged_file_type = DirEntryFileType::from(exchanged_inode.type_);
++        let is_same_dir = self.ino == target.ino;
++
++        // A cross-directory exchange moves each participant into the other
++        // parent. The parents' link counts only shift when exactly one
++        // participant is a directory, because otherwise the `..` link each
++        // parent gains is cancelled by the one it loses.
++        let moves_parent_links = !is_same_dir && old_is_dir != exchanged_is_dir;
++        // The parent that ends up holding the single directory gains its `..` link.
++        let (link_gaining_ino, link_losing_ino) = if exchanged_is_dir {
++            (self.ino, target.ino)
++        } else {
++            (target.ino, self.ino)
++        };
++
++        // Step 4.1: locate every entry the swap will write and reject the
++        // link count overflow up front. There is no journal to roll back a
++        // partially applied exchange, so all fallible work happens here,
++        // before the first mutation. This mirrors Linux's
++        // `ext4_rename_dir_prepare`, which likewise resolves the `..` blocks
++        // before `ext4_setent` touches anything.
++        let old_entry = guards.inner(self.ino).find_entry_info(old_name)?;
++        let new_entry = guards.inner(target.ino).find_entry_info(new_name)?;
++        let old_dotdot_entry = if !is_same_dir && old_is_dir {
++            Some(guards.inner(old_ino).find_entry_info("..")?)
++        } else {
++            None
++        };
++        let exchanged_dotdot_entry = if !is_same_dir && exchanged_is_dir {
++            Some(guards.inner(exchanged_ino).find_entry_info("..")?)
++        } else {
++            None
++        };
++        if moves_parent_links && guards.inner(link_gaining_ino).link_count() >= MAX_LINK_COUNT {
++            return_errno!(Errno::EMLINK);
++        }
++
++        // Step 4.2: cross the two entries' inode targets. Both entries already
++        // exist, so neither write allocates or grows a directory block, and
++        // nothing fallible sits between them.
++        guards.inner_mut(self.ino).set_entry_target(
++            &old_entry,
++            exchanged_ino,
++            exchanged_file_type,
++        )?;
++        guards
++            .inner_mut(target.ino)
++            .set_entry_target(&new_entry, old_ino, old_file_type)?;
++
++        // Step 4.3: repoint each moved directory's `..` at its new parent.
++        let now = utils::now();
++        if let Some(dotdot_entry) = old_dotdot_entry {
++            let old_inner = guards.inner_mut(old_ino);
++            old_inner.set_entry_target(&dotdot_entry, target.ino, DirEntryFileType::Dir)?;
++            old_inner.remove_flags(FileFlags::INDEX_DIR);
++            old_inner.set_mtime_ctime(now);
++        }
++        if let Some(dotdot_entry) = exchanged_dotdot_entry {
++            let exchanged_inner = guards.inner_mut(exchanged_ino);
++            exchanged_inner.set_entry_target(&dotdot_entry, self.ino, DirEntryFileType::Dir)?;
++            exchanged_inner.remove_flags(FileFlags::INDEX_DIR);
++            exchanged_inner.set_mtime_ctime(now);
++        }
++
++        // Step 4.4: update timestamps and, if the exchange moved a lone
++        // directory across parents, the two parents' link counts.
++        guards.inner_mut(old_ino).set_ctime(now);
++        guards.inner_mut(exchanged_ino).set_ctime(now);
++        guards.inner_mut(self.ino).set_mtime_ctime(now);
++        if !is_same_dir {
++            guards.inner_mut(target.ino).set_mtime_ctime(now);
++        }
++        if moves_parent_links {
++            guards.inner_mut(link_gaining_ino).inc_link_count(1);
++            guards.inner_mut(link_losing_ino).dec_link_count(1);
++        }
++
++        Ok(())
++    }
+ }
+ 
+ impl InodeInner {
+@@ -801,6 +960,169 @@ mod test {
+         test_utils::{assert_errno, create_file, default_fixture},
+     };
+ 
++    fn create_dir(dir: &Arc<Inode>, name: &str) -> Arc<Inode> {
++        dir.create(name, InodeType::Dir, FilePerm::from_bits_truncate(0o755))
++            .unwrap()
++    }
++
++    fn write_all(inode: &Arc<Inode>, bytes: &[u8]) {
++        let mut reader = VmReader::from(bytes).to_fallible();
++        assert_eq!(inode.write_at(0, &mut reader).unwrap(), bytes.len());
++    }
++
++    fn read_all(inode: &Arc<Inode>, len: usize) -> Vec<u8> {
++        let mut buf = vec![0u8; len];
++        let mut writer = VmWriter::from(buf.as_mut_slice()).to_fallible();
++        assert_eq!(inode.read_at(0, &mut writer).unwrap(), len);
++        buf
++    }
++
++    fn dotdot_ino(dir: &Arc<Inode>) -> Ext2Ino {
++        dir.inner.read().find_entry_info("..").unwrap().ino
++    }
++
++    #[ktest]
++    fn exchange_swaps_entry_targets_in_same_dir() {
++        let (_f, root) = default_fixture();
++
++        let first = create_file(&root, "first");
++        let second = create_file(&root, "second");
++        write_all(&first, b"content");
++
++        root.rename("first", &root, "second", RenameMode::Exchange)
++            .unwrap();
++
++        // The names now resolve to the swapped inodes, and each inode kept its
++        // own data, size, and link count.
++        assert_eq!(root.lookup("first").unwrap().ino(), second.ino());
++        assert_eq!(root.lookup("second").unwrap().ino(), first.ino());
++        assert_eq!(read_all(&first, 7), b"content");
++        assert_eq!(second.file_size(), 0);
++        assert_eq!(first.link_count(), 1);
++        assert_eq!(second.link_count(), 1);
++
++        // Exchanging back restores the original mapping, so the swap is
++        // correct in both directions.
++        root.rename("first", &root, "second", RenameMode::Exchange)
++            .unwrap();
++        assert_eq!(root.lookup("first").unwrap().ino(), first.ino());
++        assert_eq!(root.lookup("second").unwrap().ino(), second.ino());
++        assert_eq!(read_all(&first, 7), b"content");
++        assert_eq!(second.file_size(), 0);
++    }
++
++    #[ktest]
++    fn exchange_across_dirs_keeps_both_inodes() {
++        let (f, root) = default_fixture();
++
++        let left = create_dir(&root, "left");
++        let right = create_dir(&root, "right");
++        let moved = create_file(&left, "moved");
++        let stayed = create_file(&right, "stayed");
++        write_all(&moved, b"content");
++
++        left.rename("moved", &right, "stayed", RenameMode::Exchange)
++            .unwrap();
++
++        assert_eq!(left.lookup("moved").unwrap().ino(), stayed.ino());
++        assert_eq!(right.lookup("stayed").unwrap().ino(), moved.ino());
++        assert_eq!(read_all(&moved, 7), b"content");
++        assert_eq!(stayed.file_size(), 0);
++        // Neither inode is unlinked or freed by an exchange.
++        assert_eq!(moved.link_count(), 1);
++        assert_eq!(stayed.link_count(), 1);
++        assert!(f.ext2.read_inode(stayed.ino()).is_ok());
++        // Both participants are regular files, so no parent link count moves.
++        assert_eq!(left.link_count(), 2);
++        assert_eq!(right.link_count(), 2);
++    }
++
++    #[ktest]
++    fn exchange_dir_with_file_moves_parent_links_and_dotdot() {
++        let (_f, root) = default_fixture();
++
++        let left = create_dir(&root, "left");
++        let right = create_dir(&root, "right");
++        let inner_dir = create_dir(&left, "swapped");
++        // A non-empty directory is a legal participant: `ENOTEMPTY` is a
++        // replace-only constraint.
++        let _child = create_file(&inner_dir, "child");
++        let plain = create_file(&right, "plain");
++
++        left.rename("swapped", &right, "plain", RenameMode::Exchange)
++            .unwrap();
++
++        assert_eq!(left.lookup("swapped").unwrap().ino(), plain.ino());
++        assert_eq!(right.lookup("plain").unwrap().ino(), inner_dir.ino());
++        // The moved directory's `..` follows it to its new parent.
++        assert_eq!(dotdot_ino(&inner_dir), right.ino());
++        assert!(inner_dir.lookup("child").is_ok());
++        // Exactly one participant is a directory, so its `..` link moves from
++        // the old parent to the new one.
++        assert_eq!(left.link_count(), 2);
++        assert_eq!(right.link_count(), 3);
++    }
++
++    #[ktest]
++    fn exchange_two_dirs_across_parents_leaves_parent_links_alone() {
++        let (_f, root) = default_fixture();
++
++        let left = create_dir(&root, "left");
++        let right = create_dir(&root, "right");
++        let left_child = create_dir(&left, "left_child");
++        let right_child = create_dir(&right, "right_child");
++
++        left.rename("left_child", &right, "right_child", RenameMode::Exchange)
++            .unwrap();
++
++        assert_eq!(left.lookup("left_child").unwrap().ino(), right_child.ino());
++        assert_eq!(right.lookup("right_child").unwrap().ino(), left_child.ino());
++        assert_eq!(dotdot_ino(&left_child), right.ino());
++        assert_eq!(dotdot_ino(&right_child), left.ino());
++        // Each parent loses one `..` link and gains one, so both are unchanged.
++        assert_eq!(left.link_count(), 3);
++        assert_eq!(right.link_count(), 3);
++    }
++
++    #[ktest]
++    fn exchange_same_dir_dir_with_file_changes_no_link_counts() {
++        let (_f, root) = default_fixture();
++
++        let subdir = create_dir(&root, "subdir");
++        let plain = create_file(&root, "plain");
++        let root_links_before = root.link_count();
++
++        root.rename("subdir", &root, "plain", RenameMode::Exchange)
++            .unwrap();
++
++        assert_eq!(root.lookup("subdir").unwrap().ino(), plain.ino());
++        assert_eq!(root.lookup("plain").unwrap().ino(), subdir.ino());
++        // The directory did not change parents, so its `..` and every link
++        // count stay put.
++        assert_eq!(dotdot_ino(&subdir), root.ino());
++        assert_eq!(root.link_count(), root_links_before);
++        assert_eq!(subdir.link_count(), 2);
++        assert_eq!(plain.link_count(), 1);
++    }
++
++    #[ktest]
++    fn replace_rename_still_drops_the_replaced_link() {
++        let (_f, root) = default_fixture();
++
++        let old = create_file(&root, "old");
++        let victim = create_file(&root, "victim");
++
++        root.rename("old", &root, "victim", RenameMode::Replace)
++            .unwrap();
++
++        // Unlike an exchange, a replacing rename removes the source entry and
++        // drops the replaced inode's last link.
++        assert_eq!(root.lookup("victim").unwrap().ino(), old.ino());
++        assert_errno!(root.lookup("old"), Errno::ENOENT);
++        assert_eq!(victim.link_count(), 0);
++        assert_eq!(old.link_count(), 1);
++    }
++
+     #[ktest]
+     fn unlink_last_link_deallocates_on_drop() {
+         let (f, root) = default_fixture();

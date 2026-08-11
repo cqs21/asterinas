@@ -1,0 +1,14 @@
+{
+  "result": "selected",
+  "suite": "ltp",
+  "test": "personality01",
+  "gvisor_filter": null,
+  "selector_token": "personality01",
+  "run_vars": "",
+  "pool_file": "test/initramfs/src/conformance/ltp/testcases/all.txt",
+  "pool_entries": ["personality01"],
+  "enable_action": "uncomment the line",
+  "source": "auto-picked",
+  "rationale": "personality01 was cached as a stale entry at commit e8f2b9ca6 — it passed in Asterinas under selector mode but remains commented out in all.txt. The test exercises personality(2), setting 19 distinct personalities and reading them back, a narrow syscall semantic test with no subsystem dependencies. The syscall is already implemented (syscall/mod.rs and arch/x86.rs line 232), so this enables existing functionality without a kernel fix. Picked from among 32 stale-entry candidates at the exact base commit because personality is uncovered ground (earlier rounds covered IPC/timers/fs) and the test requires no mounts or block devices, minimizing external failure modes. Host baseline confirms 19/19 pass on real Linux.",
+  "notes": ""
+}

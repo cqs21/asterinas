@@ -1,0 +1,7 @@
+{
+  "commit": "400e68854ff0328be88ad5d2580d2173ff1a2e60",
+  "branch": "fix-ltp-chroot01-pt50FW",
+  "worktree": "/root/asterinas/.worktrees/run-pt50FW",
+  "subject": "Enable `chroot01` in the LTP conformance suite",
+  "files": ["test/initramfs/src/conformance/ltp/testcases/all.txt"]
+}

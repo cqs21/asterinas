@@ -1,0 +1,23 @@
+{
+  "commit": "1257c5f1a673e5482e61dea3f821fae6a9790928",
+  "branch": "fix-ltp-epoll_ctl02-rVlQYu",
+  "worktree": "/root/asterinas/.worktrees/run-rVlQYu",
+  "subject": "Reject non-pollable and self-referential targets in `epoll_ctl`",
+  "files": [
+    "kernel/src/fs/file/file_handle.rs",
+    "kernel/src/fs/file/inode_handle.rs",
+    "kernel/src/fs/file/fs_config_file.rs",
+    "kernel/src/events/epoll/file.rs",
+    "kernel/src/device/mem/file.rs",
+    "kernel/src/device/misc/hwrng.rs",
+    "kernel/src/device/misc/tdxguest.rs",
+    "kernel/src/device/fb.rs",
+    "kernel/src/device/registry/block.rs",
+    "kernel/src/fs/fs_impls/procfs/pid/task/maps.rs",
+    "kernel/src/fs/fs_impls/procfs/pid/task/mem.rs",
+    "kernel/src/fs/fs_impls/pseudofs/nsfs.rs",
+    "kernel/src/fs/fs_impls/virtiofs/dir.rs",
+    "test/initramfs/src/conformance/ltp/testcases/all.txt"
+  ],
+  "notes": "make format changed nothing; make check exited 0 with no clippy, typos, license-header or rustfmt findings, so no lint fix was needed. Staged the 14 paths from fix.json explicitly rather than with `git add -A`: the staged diff is 146 insertions / 1 deletion, and the pool edit is the single line all.txt:184 '# epoll_ctl02' -> 'epoll_ctl02' and nothing else. test/initramfs/src/regression/ is untouched (git status reports no change under it) and no repro file survives there -- the host probe /tmp/epoll_probe.c from the fix phase lived in /tmp and was never in the tree. One commit containing both the kernel change and the pool edit, per repo convention. git status after committing shows only the untracked .osdk/ toolchain directory, which is the harness's OSDK install, not a source artifact; the tracked tree is clean. Commit body states both invariants and the two owning layers -- the FileLike/InodeHandle file-description seam for EPERM and the EpollFile::control entry seam for EINVAL -- explains why the predicate must not be an InodeType::Dir test inside the epoll code, and cites Linux's file_can_poll / DEFAULT_POLLMASK and do_epoll_ctl's `f.file == tf.file` as the reason the behavior is right rather than as the justification on its own. gvisor_filter is null, so no partially-enabled-binary caveat was needed. Nothing pushed, no PR opened, no prior commit amended."
+}

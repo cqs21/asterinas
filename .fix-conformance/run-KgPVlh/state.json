@@ -1,0 +1,22 @@
+{
+  "run_id": "run-KgPVlh",
+  "suite": "ltp",
+  "test": "personality01",
+  "gvisor_filter": null,
+  "worktree": "/root/asterinas/.worktrees/run-KgPVlh",
+  "osdk_bin": "/root/asterinas/.worktrees/run-KgPVlh/.osdk/bin",
+  "branch": "fix-ltp-personality01-KgPVlh",
+  "base_commit": "e8f2b9ca6",
+  "vnc_port": 1468,
+  "round": 3,
+  "rounds_total": 5,
+  "phases": {
+    "select": "done",
+    "diagnose": "done",
+    "fix": "done",
+    "verify": "done",
+    "commit": "done"
+  },
+  "outcome": "committed",
+  "skipped": "already-green"
+}

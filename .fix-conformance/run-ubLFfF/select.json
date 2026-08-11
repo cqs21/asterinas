@@ -1,0 +1,14 @@
+{
+  "result": "selected",
+  "suite": "ltp",
+  "test": "open04",
+  "gvisor_filter": null,
+  "selector_token": "open04",
+  "run_vars": "",
+  "pool_file": "test/initramfs/src/conformance/ltp/testcases/all.txt",
+  "pool_entries": ["open04"],
+  "enable_action": "uncomment the line",
+  "source": "auto-picked",
+  "rationale": "open04 tests RLIMIT_NOFILE enforcement in open(2): it exhausts the file descriptor table and verifies that the next open() returns EMFILE. Round 4 identified this as a real defect where RLIMIT_NOFILE is not enforced and open() succeeds where EMFILE is due. This is more tractable than the other available defects—getcpu01 (vDSO/affinity issue, wider than one errno) was explicitly deprioritized by round 4, and prctl tests depend on procfs. Resource limit checking is a well-scoped feature: the fix is a missing RLIMIT_NOFILE check in the open path, likely in sys_open or its callees. The test itself is simple (fills FDs until exhausted, expects EMFILE on next open), with no filesystem-specific semantics or subsystem dependencies. Stale entries are available (sigtimedwait01, madvise07, readdir01, realpath01, vhangup01 from round 4's probe), but this genuine kernel fix is the better use of the final round, as directed. Rounds 1-4 covered IPC (semget02), timers (timer_create01, timer_gettime01), and personality (personality01); open04 addresses resource limits, uncovered ground.",
+  "notes": "Host baseline: passes (1 TPASS, LTP 20260529). Cache records probe=fail at commit e8f2b9ca6 (this run's base commit) from run-iIbwju and run-5G5q5b. No new measurements taken—evidence already cached. Line 999 of test/initramfs/src/conformance/ltp/testcases/all.txt."
+}

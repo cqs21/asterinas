@@ -1,0 +1,46 @@
+{
+  "commit": "f5514ad0803fa82499762f2184b2f716058a0391",
+  "branch": "fix-ltp-open04-ubLFfF",
+  "worktree": "/root/asterinas/.worktrees/run-ubLFfF",
+  "subject": "Enforce `RLIMIT_NOFILE` when allocating file descriptors",
+  "files": [
+    "kernel/src/device/pty/master.rs",
+    "kernel/src/fs/file/file_table.rs",
+    "kernel/src/fs/fs_impls/pseudofs/nsfs.rs",
+    "kernel/src/fs/mod.rs",
+    "kernel/src/net/socket/unix/ctrl_msg.rs",
+    "kernel/src/process/clone.rs",
+    "kernel/src/syscall/accept.rs",
+    "kernel/src/syscall/dup.rs",
+    "kernel/src/syscall/epoll.rs",
+    "kernel/src/syscall/eventfd.rs",
+    "kernel/src/syscall/fcntl.rs",
+    "kernel/src/syscall/fsmount.rs",
+    "kernel/src/syscall/fsopen.rs",
+    "kernel/src/syscall/inotify.rs",
+    "kernel/src/syscall/memfd_create.rs",
+    "kernel/src/syscall/open.rs",
+    "kernel/src/syscall/pidfd_getfd.rs",
+    "kernel/src/syscall/pidfd_open.rs",
+    "kernel/src/syscall/pipe.rs",
+    "kernel/src/syscall/signalfd.rs",
+    "kernel/src/syscall/socket.rs",
+    "kernel/src/syscall/socketpair.rs",
+    "kernel/src/syscall/timerfd_create.rs",
+    "test/initramfs/src/conformance/ltp/testcases/all.txt"
+  ],
+  "checks": {
+    "make_format": "no-op; no files changed by formatting",
+    "make_check": "exit 0, clean (only a benign rustup toolchain-override notice); log at /tmp/check-ubLFfF.log",
+    "lint_fixes_needed": "none"
+  },
+  "staging": {
+    "paths_staged_explicitly": true,
+    "unrelated_staged_files": "none",
+    "repro_file_in_regression_dir": "none; git status for test/initramfs/src/regression/ was empty",
+    "untracked_left_out": ".osdk/ (build output, intentionally not committed)"
+  },
+  "tree_clean": true,
+  "pushed": false,
+  "notes": "Single commit containing the kernel fix and the pool edit, per repo convention. Body states the invariant (no descriptor at or beyond the soft RLIMIT_NOFILE) and the owning layer (the descriptor allocator, FileTable::insert / dup_ceil), matching diagnose.json's invariant / owning_layer and fix.json's layer, and cites Linux's alloc_fd as the reason the errno and soft-limit choice are right rather than as the justification on its own. It also records the two secondary fixes a reviewer would otherwise miss: the pipe2/socketpair first-fd cleanup on the newly reachable failure path, and the fcntl EBADF-before-EINVAL ordering. gvisor_filter is null, so no per-case blocklist note applies. Worktree tracked state is clean; nothing pushed and no PR opened."
+}

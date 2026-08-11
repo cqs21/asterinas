@@ -1,0 +1,22 @@
+{
+  "run_id": "run-K7IxzT",
+  "suite": "ltp",
+  "test": "bind02",
+  "gvisor_filter": null,
+  "worktree": "/root/asterinas/.worktrees/run-K7IxzT",
+  "osdk_bin": "/root/asterinas/.worktrees/run-K7IxzT/.osdk/bin",
+  "branch": "fix-ltp-bind02-K7IxzT",
+  "base_commit": "e8f2b9ca6",
+  "vnc_port": 370,
+  "round": 2,
+  "rounds_total": 5,
+  "phases": {
+    "select": "done",
+    "diagnose": "done",
+    "fix": "done",
+    "verify": "done",
+    "commit": "done",
+    "fix_skipped": "already-green"
+  },
+  "outcome": "committed"
+}

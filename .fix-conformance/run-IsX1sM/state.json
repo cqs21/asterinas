@@ -1,0 +1,21 @@
+{
+  "run_id": "run-IsX1sM",
+  "suite": "ltp",
+  "test": "llseek01",
+  "gvisor_filter": null,
+  "worktree": "/root/asterinas/.worktrees/run-IsX1sM",
+  "osdk_bin": "/root/asterinas/.worktrees/run-IsX1sM/.osdk/bin",
+  "branch": "fix-ltp-llseek01-IsX1sM",
+  "base_commit": "e8f2b9ca6",
+  "vnc_port": 9663,
+  "round": 8,
+  "rounds_total": 10,
+  "phases": {
+    "select": "done",
+    "diagnose": "done",
+    "fix": "done",
+    "verify": "done",
+    "commit": "done"
+  },
+  "outcome": "committed"
+}

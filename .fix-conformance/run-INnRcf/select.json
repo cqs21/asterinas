@@ -1,0 +1,14 @@
+{
+  "result": "selected",
+  "suite": "ltp",
+  "test": "madvise01",
+  "gvisor_filter": null,
+  "selector_token": "madvise01",
+  "run_vars": "",
+  "pool_file": "test/initramfs/src/conformance/ltp/testcases/all.txt",
+  "pool_entries": ["madvise01"],
+  "enable_action": "uncomment the line",
+  "source": "auto-picked",
+  "rationale": "madvise01 already passes in Asterinas (cached at e8f2b9ca6) but remains commented out in all.txt. Represents memory management syscall coverage in an area no earlier round has covered. The fix is uncommenting line 1031 in all.txt.",
+  "notes": ""
+}

@@ -1,0 +1,12 @@
+{
+  "commit": "6b9ffc3c0ae8bb27c61f1441bee65d165fa75668",
+  "branch": "fix-ltp-personality01-KgPVlh",
+  "worktree": "/root/asterinas/.worktrees/run-KgPVlh",
+  "subject": "Enable `personality01` in the LTP conformance test list",
+  "files": ["test/initramfs/src/conformance/ltp/testcases/all.txt"],
+  "already_green": true,
+  "checks": "make format made no changes; make check (rustfmt, clippy, typos, license headers) exited 0 with no findings, so no lint fixes were needed and no fix round was spent.",
+  "staging": "Only the pool file was staged, by explicit path. git status after the commit shows no pending tracked-file changes; the sole untracked entry is the .osdk/ build directory, which predates this phase and is not part of the commit. test/initramfs/src/regression/ is unmodified against HEAD, so no repro file survived.",
+  "message_note": "Written per the already-green rules: the subject names the enabling rather than a kernel change in the imperative, and the body states that the test passes as-is and the entry was stale. No root cause is invented. The body records the invariant personality(2) must satisfy (verbatim store, returns the previous value, 0xffffffff is a pure query) and points at kernel/src/syscall/personality.rs as the code that already satisfies it, cites the compiled-probe check against real Linux as the reason that behavior is correct, and carries verify.json's evidence: full-suite default configuration, Runs 544, Passed 2550, Failed 0, Broken 0, Warnings 0, personality01: pass (0.096s), unchanged pass/skip sets versus prior green runs, and no still-blocked entry leaking in. The known fork/clone personality-inheritance divergence is named as out of scope with the reason this test cannot observe it.",
+  "not_done": "Not pushed, no PR opened, nothing amended."
+}

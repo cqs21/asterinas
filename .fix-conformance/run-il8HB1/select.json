@@ -1,0 +1,14 @@
+{
+  "result": "selected",
+  "suite": "ltp",
+  "test": "capset02",
+  "gvisor_filter": null,
+  "selector_token": "capset02",
+  "run_vars": "",
+  "pool_file": "test/initramfs/src/conformance/ltp/testcases/all.txt",
+  "pool_entries": ["capset02"],
+  "enable_action": "uncomment the line",
+  "source": "auto-picked",
+  "rationale": "capset02 is a stale-entry from the cache (passed in Asterinas at commit 68bdd4a99). It tests capset() error handling (EFAULT, EINVAL, EPERM) - a narrow syscall semantic test. No other active run is working on this test.",
+  "notes": ""
+}

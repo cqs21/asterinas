@@ -1,0 +1,10 @@
+{
+  "commit": "c444add805b1fa010ce71890579b94de8b316149",
+  "branch": "fix-ltp-chmod01-UU0hHd",
+  "worktree": "/root/asterinas/.worktrees/run-UU0hHd",
+  "subject": "Cache chmod-set permissions in memory for `exfat` inodes",
+  "files": [
+    "kernel/src/fs/fs_impls/exfat/inode.rs",
+    "test/initramfs/src/conformance/ltp/testcases/blocked/exfat.txt"
+  ]
+}

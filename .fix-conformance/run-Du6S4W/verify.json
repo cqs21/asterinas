@@ -1,0 +1,16 @@
+{
+  "status": "ok",
+  "target_test": {
+    "name": "prctl05",
+    "case_results": null,
+    "passed": true
+  },
+  "still_blocked_absent": true,
+  "full_suite": {
+    "suite": "ltp",
+    "config": "default",
+    "passed": true,
+    "summary": "Passed: 2536, Failed: 0, Broken: 0, Skipped: 52, Warnings: 0",
+    "regressions": []
+  }
+}

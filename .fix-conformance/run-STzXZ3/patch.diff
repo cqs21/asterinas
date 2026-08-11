@@ -1,0 +1,480 @@
+diff --git a/kernel/src/net/socket/create.rs b/kernel/src/net/socket/create.rs
+new file mode 100644
+index 000000000..c11ce2524
+--- /dev/null
++++ b/kernel/src/net/socket/create.rs
+@@ -0,0 +1,257 @@
++// SPDX-License-Identifier: MPL-2.0
++
++//! Creating sockets from the `(family, type, protocol)` triple.
++//!
++//! This module is the single place where that triple is turned into a socket, so that
++//! [`sys_socket`] and [`sys_socketpair`] cannot disagree about which combinations are
++//! supported or about which error each rejection reports.
++//!
++//! Linux does this in the per-family `net_proto_family::create` hook (e.g., `inet_create`,
++//! `unix_create`), which both system calls traverse. Asterinas has no such hook, since each
++//! socket type is an ordinary Rust type with its own constructor, so the equivalent single
++//! entry point is the [`resolve`] function below.
++//!
++//! [`sys_socket`]: crate::syscall::socket::sys_socket
++//! [`sys_socketpair`]: crate::syscall::socketpair::sys_socketpair
++
++use super::{
++    ip::{DatagramSocket, IpAddressFamily, StreamSocket},
++    netlink::{
++        NetlinkRouteSocket, NetlinkUeventSocket, StandardNetlinkProtocol, is_valid_protocol,
++    },
++    unix::{UnixDatagramSocket, UnixStreamSocket},
++    vsock::VsockStreamSocket,
++};
++use crate::{
++    fs::file::FileLike,
++    prelude::*,
++    util::net::{CSocketAddrFamily, IPPROTO_MAX, Protocol, SockType},
++};
++
++/// A socket that some family knows how to create.
++///
++/// This is the outcome of resolving a `(family, type, protocol)` triple: it names the socket
++/// to build without building it, so that `socket` and `socketpair` can share the resolution
++/// and still differ in what they construct.
++#[derive(Clone, Copy, Debug)]
++enum SocketKind {
++    UnixStream(SockType),
++    UnixDatagram,
++    IpStream(IpAddressFamily),
++    IpDatagram,
++    NetlinkRoute(SockType),
++    NetlinkUevent(SockType),
++    VsockStream,
++}
++
++/// Creates a socket from the `(family, type, protocol)` triple.
++pub fn new_socket(
++    domain: CSocketAddrFamily,
++    sock_type: SockType,
++    protocol: i32,
++    is_nonblocking: bool,
++) -> Result<Arc<dyn FileLike>> {
++    let file_like = match resolve(domain, sock_type, protocol)? {
++        SocketKind::UnixStream(sock_type) => {
++            UnixStreamSocket::new(is_nonblocking, sock_type) as Arc<dyn FileLike>
++        }
++        SocketKind::UnixDatagram => UnixDatagramSocket::new(is_nonblocking) as Arc<dyn FileLike>,
++        SocketKind::IpStream(family) => {
++            StreamSocket::new(is_nonblocking, family) as Arc<dyn FileLike>
++        }
++        SocketKind::IpDatagram => DatagramSocket::new(is_nonblocking) as Arc<dyn FileLike>,
++        SocketKind::NetlinkRoute(sock_type) => {
++            NetlinkRouteSocket::new(is_nonblocking, sock_type) as Arc<dyn FileLike>
++        }
++        SocketKind::NetlinkUevent(sock_type) => {
++            NetlinkUeventSocket::new(is_nonblocking, sock_type) as Arc<dyn FileLike>
++        }
++        SocketKind::VsockStream => VsockStreamSocket::new(is_nonblocking)? as Arc<dyn FileLike>,
++    };
++
++    Ok(file_like)
++}
++
++/// Creates a pair of connected sockets from the `(family, type, protocol)` triple.
++///
++/// The triple is resolved exactly as in [`new_socket`], so an unsupported family, type, or
++/// protocol is reported identically by both. Only after the triple is accepted can this fail
++/// with `EOPNOTSUPP`, which means the socket is creatable but cannot be created in a
++/// pre-connected pair.
++pub fn new_socket_pair(
++    domain: CSocketAddrFamily,
++    sock_type: SockType,
++    protocol: i32,
++    is_nonblocking: bool,
++) -> Result<(Arc<dyn FileLike>, Arc<dyn FileLike>)> {
++    let (socket_a, socket_b) = match resolve(domain, sock_type, protocol)? {
++        SocketKind::UnixStream(sock_type) => {
++            let (a, b) = UnixStreamSocket::new_pair(is_nonblocking, sock_type);
++            (a as Arc<dyn FileLike>, b as Arc<dyn FileLike>)
++        }
++        SocketKind::UnixDatagram => {
++            let (a, b) = UnixDatagramSocket::new_pair(is_nonblocking);
++            (a as Arc<dyn FileLike>, b as Arc<dyn FileLike>)
++        }
++        _ => return_errno_with_message!(
++            Errno::EOPNOTSUPP,
++            "creating a socket pair is not supported for this family"
++        ),
++    };
++
++    Ok((socket_a, socket_b))
++}
++
++/// Resolves a `(family, type, protocol)` triple to the socket it names.
++///
++/// The three arguments fail on three separate axes, and each axis owns a different error, so
++/// that the error tells the caller which argument to change:
++///  * `EAFNOSUPPORT` if the family itself is not implemented. Once a family is recognized
++///    below, this error is never returned again.
++///  * `ESOCKTNOSUPPORT` if the family is implemented but has no socket of the requested type.
++///  * `EPROTONOSUPPORT` if the family and type are both implemented but do not implement the
++///    requested protocol, including protocol `0` when the pair has no default protocol for
++///    that wildcard to resolve to.
++///
++/// Which axis is checked first is per family, matching Linux's `create` hook for each.
++fn resolve(domain: CSocketAddrFamily, sock_type: SockType, protocol: i32) -> Result<SocketKind> {
++    match domain {
++        // Linux does this in `unix_create` in `net/unix/af_unix.c`.
++        CSocketAddrFamily::AF_UNIX => {
++            // UNIX sockets have no protocol of their own, so only the wildcard and the
++            // family's own number are accepted. This is checked before the type.
++            if protocol != 0 && protocol != CSocketAddrFamily::AF_UNIX as i32 {
++                return_errno_with_message!(
++                    Errno::EPROTONOSUPPORT,
++                    "UNIX domain sockets have no protocol"
++                );
++            }
++            match sock_type {
++                SockType::SOCK_STREAM | SockType::SOCK_SEQPACKET => {
++                    Ok(SocketKind::UnixStream(sock_type))
++                }
++                // Linux treats a UNIX raw socket as a datagram socket.
++                SockType::SOCK_RAW | SockType::SOCK_DGRAM => Ok(SocketKind::UnixDatagram),
++                _ => return_errno_with_message!(
++                    Errno::ESOCKTNOSUPPORT,
++                    "the socket type is not supported for UNIX domain sockets"
++                ),
++            }
++        }
++        // Linux does this in `inet_create` in `net/ipv4/af_inet.c`.
++        CSocketAddrFamily::AF_INET | CSocketAddrFamily::AF_INET6 => {
++            // A protocol number that is out of range names no protocol at all. Linux checks
++            // this before the type, so a bad type and a bad protocol together give `EINVAL`.
++            if !(0..IPPROTO_MAX).contains(&protocol) {
++                return_errno_with_message!(Errno::EINVAL, "the protocol number is out of range");
++            }
++            resolve_ip(domain, sock_type, protocol)
++        }
++        // Linux does this in `netlink_create` in `net/netlink/af_netlink.c`.
++        CSocketAddrFamily::AF_NETLINK => {
++            // Netlink checks the type before the protocol, the opposite of UNIX.
++            if !matches!(sock_type, SockType::SOCK_RAW | SockType::SOCK_DGRAM) {
++                return_errno_with_message!(
++                    Errno::ESOCKTNOSUPPORT,
++                    "the socket type is not supported for netlink sockets"
++                );
++            }
++            resolve_netlink(sock_type, protocol)
++        }
++        CSocketAddrFamily::AF_VSOCK => {
++            // As with UNIX sockets, vsock has no protocol of its own.
++            if protocol != 0 && protocol != CSocketAddrFamily::AF_VSOCK as i32 {
++                return_errno_with_message!(Errno::EPROTONOSUPPORT, "vsock has no protocol");
++            }
++            match sock_type {
++                SockType::SOCK_STREAM => Ok(SocketKind::VsockStream),
++                // TODO: Support datagram and sequenced-packet vsock sockets, which Linux
++                // creates here.
++                _ => return_errno_with_message!(
++                    Errno::ESOCKTNOSUPPORT,
++                    "the socket type is not supported for vsock"
++                ),
++            }
++        }
++        _ => return_errno_with_message!(Errno::EAFNOSUPPORT, "the address family is not supported"),
++    }
++}
++
++/// Resolves the type and protocol axes for `AF_INET` and `AF_INET6`.
++///
++/// The protocol number is already known to be in range.
++fn resolve_ip(domain: CSocketAddrFamily, sock_type: SockType, protocol: i32) -> Result<SocketKind> {
++    // A type with no socket at all in this family fails on the type axis, whatever the
++    // protocol is. A type that has sockets but none for this protocol fails on the protocol
++    // axis, which is why the two are distinguished here rather than merged into one arm.
++    match sock_type {
++        SockType::SOCK_STREAM => match Protocol::try_from(protocol) {
++            Ok(Protocol::IPPROTO_IP | Protocol::IPPROTO_TCP) => {
++                let family = match domain {
++                    CSocketAddrFamily::AF_INET => IpAddressFamily::IPv4,
++                    CSocketAddrFamily::AF_INET6 => IpAddressFamily::IPv6,
++                    _ => unreachable!("the family is checked by the caller"),
++                };
++                Ok(SocketKind::IpStream(family))
++            }
++            _ => return_errno_with_message!(
++                Errno::EPROTONOSUPPORT,
++                "the protocol is not supported for IP stream sockets"
++            ),
++        },
++        SockType::SOCK_DGRAM => {
++            // TODO: Support IPv6 datagram sockets. Linux creates a UDPv6 socket here, but
++            // Asterinas implements datagram sockets for IPv4 only, so `AF_INET6` is only
++            // half-implemented and reports that the family is unavailable.
++            if domain == CSocketAddrFamily::AF_INET6 {
++                return_errno_with_message!(
++                    Errno::EAFNOSUPPORT,
++                    "IPv6 datagram sockets are not supported yet"
++                );
++            }
++            match Protocol::try_from(protocol) {
++                Ok(Protocol::IPPROTO_IP | Protocol::IPPROTO_UDP) => Ok(SocketKind::IpDatagram),
++                _ => return_errno_with_message!(
++                    Errno::EPROTONOSUPPORT,
++                    "the protocol is not supported for IP datagram sockets"
++                ),
++            }
++        }
++        // Raw IP sockets exist in Linux, where protocol `0` still fails because there is no
++        // default raw protocol for the wildcard to resolve to. Asterinas implements no raw
++        // protocol at all, so every protocol fails on the same axis. Note that this must not
++        // be `EPERM`: Linux reports this even to a fully privileged caller.
++        // TODO: Support raw IP sockets.
++        SockType::SOCK_RAW => {
++            return_errno_with_message!(Errno::EPROTONOSUPPORT, "no raw IP protocol is supported")
++        }
++        _ => return_errno_with_message!(
++            Errno::ESOCKTNOSUPPORT,
++            "the socket type is not supported for IP sockets"
++        ),
++    }
++}
++
++/// Resolves the protocol axis for `AF_NETLINK`.
++///
++/// The socket type is already known to be supported.
++fn resolve_netlink(sock_type: SockType, protocol: i32) -> Result<SocketKind> {
++    // Netlink protocol numbers are a namespace of their own, unrelated to the IP protocols.
++    match StandardNetlinkProtocol::try_from(protocol as u32) {
++        Ok(StandardNetlinkProtocol::ROUTE) => Ok(SocketKind::NetlinkRoute(sock_type)),
++        Ok(StandardNetlinkProtocol::KOBJECT_UEVENT) => Ok(SocketKind::NetlinkUevent(sock_type)),
++        // TODO: Support the remaining standard netlink protocols.
++        Ok(_) => return_errno_with_message!(
++            Errno::EPROTONOSUPPORT,
++            "the standard netlink protocol is not supported yet"
++        ),
++        Err(_) if is_valid_protocol(protocol as u32) => return_errno_with_message!(
++            Errno::EPROTONOSUPPORT,
++            "the user-provided netlink protocol is not supported"
++        ),
++        Err(_) => return_errno_with_message!(
++            Errno::EPROTONOSUPPORT,
++            "the netlink protocol number is invalid"
++        ),
++    }
++}
+diff --git a/kernel/src/net/socket/mod.rs b/kernel/src/net/socket/mod.rs
+index 4ba2693d3..93c4a8ee9 100644
+--- a/kernel/src/net/socket/mod.rs
++++ b/kernel/src/net/socket/mod.rs
+@@ -17,6 +17,7 @@ use crate::{
+     util::{MultiRead, MultiWrite},
+ };
+ 
++mod create;
+ pub mod ip;
+ pub mod netlink;
+ pub mod options;
+@@ -24,6 +25,8 @@ pub mod unix;
+ pub mod util;
+ pub mod vsock;
+ 
++pub use create::{new_socket, new_socket_pair};
++
+ mod private {
+     use core::time::Duration;
+ 
+diff --git a/kernel/src/syscall/socket.rs b/kernel/src/syscall/socket.rs
+index 4988a1c49..d4109f8c5 100644
+--- a/kernel/src/syscall/socket.rs
++++ b/kernel/src/syscall/socket.rs
+@@ -2,17 +2,10 @@
+ 
+ use super::SyscallReturn;
+ use crate::{
+-    fs::file::{FileLike, file_table::FdFlags},
+-    net::socket::{
+-        ip::{DatagramSocket, IpAddressFamily, StreamSocket},
+-        netlink::{
+-            NetlinkRouteSocket, NetlinkUeventSocket, StandardNetlinkProtocol, is_valid_protocol,
+-        },
+-        unix::{UnixDatagramSocket, UnixStreamSocket},
+-        vsock::VsockStreamSocket,
+-    },
++    fs::file::file_table::FdFlags,
++    net::socket::new_socket,
+     prelude::*,
+-    util::net::{CSocketAddrFamily, Protocol, SOCK_TYPE_MASK, SockFlags, SockType},
++    util::net::{CSocketAddrFamily, SOCK_TYPE_MASK, SockFlags, SockType},
+ };
+ 
+ pub fn sys_socket(domain: i32, type_: i32, protocol: i32, ctx: &Context) -> Result<SyscallReturn> {
+@@ -20,78 +13,12 @@ pub fn sys_socket(domain: i32, type_: i32, protocol: i32, ctx: &Context) -> Resu
+     let sock_type = SockType::try_from(type_ & SOCK_TYPE_MASK)?;
+     let sock_flags = SockFlags::from_bits_truncate(type_ & !SOCK_TYPE_MASK);
+     debug!(
+-        "domain = {:?}, sock_type = {:?}, sock_flags = {:?}",
+-        domain, sock_type, sock_flags
++        "domain = {:?}, sock_type = {:?}, sock_flags = {:?}, protocol = {}",
++        domain, sock_type, sock_flags, protocol
+     );
+ 
+     let is_nonblocking = sock_flags.contains(SockFlags::SOCK_NONBLOCK);
+-    let file_like = match (domain, sock_type) {
+-        (CSocketAddrFamily::AF_UNIX, SockType::SOCK_STREAM) => {
+-            UnixStreamSocket::new(is_nonblocking, sock_type) as Arc<dyn FileLike>
+-        }
+-        (CSocketAddrFamily::AF_UNIX, SockType::SOCK_SEQPACKET) => {
+-            UnixStreamSocket::new(is_nonblocking, sock_type) as Arc<dyn FileLike>
+-        }
+-        (CSocketAddrFamily::AF_UNIX, SockType::SOCK_RAW | SockType::SOCK_DGRAM) => {
+-            UnixDatagramSocket::new(is_nonblocking) as Arc<dyn FileLike>
+-        }
+-        (CSocketAddrFamily::AF_INET | CSocketAddrFamily::AF_INET6, SockType::SOCK_STREAM) => {
+-            let protocol = Protocol::try_from(protocol)?;
+-            debug!("protocol = {:?}", protocol);
+-            match protocol {
+-                Protocol::IPPROTO_IP | Protocol::IPPROTO_TCP => {
+-                    let family = match domain {
+-                        CSocketAddrFamily::AF_INET => IpAddressFamily::IPv4,
+-                        CSocketAddrFamily::AF_INET6 => IpAddressFamily::IPv6,
+-                        _ => unreachable!(),
+-                    };
+-                    StreamSocket::new(is_nonblocking, family) as Arc<dyn FileLike>
+-                }
+-                _ => return_errno_with_message!(Errno::EAFNOSUPPORT, "unsupported protocol"),
+-            }
+-        }
+-        (CSocketAddrFamily::AF_INET, SockType::SOCK_DGRAM) => {
+-            let protocol = Protocol::try_from(protocol)?;
+-            debug!("protocol = {:?}", protocol);
+-            match protocol {
+-                Protocol::IPPROTO_IP | Protocol::IPPROTO_UDP => {
+-                    DatagramSocket::new(is_nonblocking) as Arc<dyn FileLike>
+-                }
+-                _ => return_errno_with_message!(Errno::EAFNOSUPPORT, "unsupported protocol"),
+-            }
+-        }
+-        (CSocketAddrFamily::AF_NETLINK, SockType::SOCK_RAW | SockType::SOCK_DGRAM) => {
+-            let netlink_family = StandardNetlinkProtocol::try_from(protocol as u32);
+-            debug!("netlink family = {:?}", netlink_family);
+-            match netlink_family {
+-                Ok(StandardNetlinkProtocol::ROUTE) => {
+-                    NetlinkRouteSocket::new(is_nonblocking, sock_type) as Arc<dyn FileLike>
+-                }
+-                Ok(StandardNetlinkProtocol::KOBJECT_UEVENT) => {
+-                    NetlinkUeventSocket::new(is_nonblocking, sock_type) as Arc<dyn FileLike>
+-                }
+-                Ok(_) => {
+-                    return_errno_with_message!(
+-                        Errno::EAFNOSUPPORT,
+-                        "some standard netlink families are not supported yet"
+-                    );
+-                }
+-                Err(_) => {
+-                    if is_valid_protocol(protocol as u32) {
+-                        return_errno_with_message!(
+-                            Errno::EAFNOSUPPORT,
+-                            "user-provided netlink family is not supported"
+-                        )
+-                    }
+-                    return_errno_with_message!(Errno::EAFNOSUPPORT, "invalid netlink family");
+-                }
+-            }
+-        }
+-        (CSocketAddrFamily::AF_VSOCK, SockType::SOCK_STREAM) => {
+-            VsockStreamSocket::new(is_nonblocking)? as Arc<dyn FileLike>
+-        }
+-        _ => return_errno_with_message!(Errno::EAFNOSUPPORT, "unsupported domain"),
+-    };
++    let file_like = new_socket(domain, sock_type, protocol, is_nonblocking)?;
+ 
+     let fd = {
+         let file_table = ctx.thread_local.borrow_file_table();
+diff --git a/kernel/src/syscall/socketpair.rs b/kernel/src/syscall/socketpair.rs
+index 247424262..e22a6b8b3 100644
+--- a/kernel/src/syscall/socketpair.rs
++++ b/kernel/src/syscall/socketpair.rs
+@@ -4,13 +4,10 @@ use ostd::mm::VmIo;
+ 
+ use super::SyscallReturn;
+ use crate::{
+-    fs::file::{
+-        FileLike,
+-        file_table::{FdFlags, RawFileDesc},
+-    },
+-    net::socket::unix::{UnixDatagramSocket, UnixStreamSocket},
++    fs::file::file_table::{FdFlags, RawFileDesc},
++    net::socket::new_socket_pair,
+     prelude::*,
+-    util::net::{CSocketAddrFamily, Protocol, SOCK_TYPE_MASK, SockFlags, SockType},
++    util::net::{CSocketAddrFamily, SOCK_TYPE_MASK, SockFlags, SockType},
+ };
+ 
+ pub fn sys_socketpair(
+@@ -23,35 +20,13 @@ pub fn sys_socketpair(
+     let domain = CSocketAddrFamily::try_from(domain)?;
+     let sock_type = SockType::try_from(type_ & SOCK_TYPE_MASK)?;
+     let sock_flags = SockFlags::from_bits_truncate(type_ & !SOCK_TYPE_MASK);
+-    let protocol = Protocol::try_from(protocol)?;
+     debug!(
+-        "domain = {:?}, sock_type = {:?}, sock_flags = {:?}, protocol = {:?}",
++        "domain = {:?}, sock_type = {:?}, sock_flags = {:?}, protocol = {}",
+         domain, sock_type, sock_flags, protocol
+     );
+ 
+-    macro_rules! file_pair {
+-        ($expr:expr) => {{
+-            let (socket_a, socket_b) = $expr;
+-            (socket_a as Arc<dyn FileLike>, socket_b as Arc<dyn FileLike>)
+-        }};
+-    }
+-
+-    let nonblocking = sock_flags.contains(SockFlags::SOCK_NONBLOCK);
+-    let (socket_a, socket_b) = match (domain, sock_type) {
+-        (CSocketAddrFamily::AF_UNIX, SockType::SOCK_STREAM) => {
+-            file_pair!(UnixStreamSocket::new_pair(nonblocking, sock_type))
+-        }
+-        (CSocketAddrFamily::AF_UNIX, SockType::SOCK_SEQPACKET) => {
+-            file_pair!(UnixStreamSocket::new_pair(nonblocking, sock_type))
+-        }
+-        (CSocketAddrFamily::AF_UNIX, SockType::SOCK_RAW | SockType::SOCK_DGRAM) => {
+-            file_pair!(UnixDatagramSocket::new_pair(nonblocking))
+-        }
+-        _ => return_errno_with_message!(
+-            Errno::EAFNOSUPPORT,
+-            "creating a socket pair for this family is not supported"
+-        ),
+-    };
++    let is_nonblocking = sock_flags.contains(SockFlags::SOCK_NONBLOCK);
++    let (socket_a, socket_b) = new_socket_pair(domain, sock_type, protocol, is_nonblocking)?;
+ 
+     let socket_fds = {
+         let file_table = ctx.thread_local.borrow_file_table();
+diff --git a/kernel/src/util/net/mod.rs b/kernel/src/util/net/mod.rs
+index 03212ec20..a59cb17aa 100644
+--- a/kernel/src/util/net/mod.rs
++++ b/kernel/src/util/net/mod.rs
+@@ -9,4 +9,4 @@ pub use addr::{
+     write_socket_addr_with_max_len,
+ };
+ pub use options::{CSocketOptionLevel, new_raw_socket_option};
+-pub use socket::{CUserMsgHdr, Protocol, SOCK_TYPE_MASK, SockFlags, SockType};
++pub use socket::{CUserMsgHdr, IPPROTO_MAX, Protocol, SOCK_TYPE_MASK, SockFlags, SockType};
+diff --git a/kernel/src/util/net/socket.rs b/kernel/src/util/net/socket.rs
+index fdf1d0054..a8939112d 100644
+--- a/kernel/src/util/net/socket.rs
++++ b/kernel/src/util/net/socket.rs
+@@ -44,6 +44,14 @@ pub enum Protocol {
+     IPPROTO_MPTCP = 262,    /* Multipath TCP connection		*/
+ }
+ 
++/// One past the largest valid IP protocol number.
++///
++/// A protocol number outside `0..IPPROTO_MAX` does not name a protocol at all, so the IP
++/// families reject it with `EINVAL` rather than with `EPROTONOSUPPORT`.
++///
++/// From <https://elixir.bootlin.com/linux/v6.0.9/source/include/uapi/linux/in.h>.
++pub const IPPROTO_MAX: i32 = Protocol::IPPROTO_MPTCP as i32 + 1;
++
+ /// Socket types.
+ /// From <https://elixir.bootlin.com/linux/v6.0.9/source/include/linux/net.h>.
+ #[expect(non_camel_case_types)]

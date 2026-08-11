@@ -1,0 +1,391 @@
+diff --git a/kernel/src/syscall/arch/generic.rs b/kernel/src/syscall/arch/generic.rs
+index e31724ded..8c500535f 100644
+--- a/kernel/src/syscall/arch/generic.rs
++++ b/kernel/src/syscall/arch/generic.rs
+@@ -21,6 +21,7 @@ macro_rules! import_generic_syscall_entries {
+             chmod::{sys_fchmod, sys_fchmodat, sys_fchmodat2},
+             chown::{sys_fchown, sys_fchownat},
+             chroot::sys_chroot,
++            clock_getres::sys_clock_getres,
+             clock_gettime::sys_clock_gettime,
+             clone::{sys_clone, sys_clone3},
+             close::{sys_close, sys_close_range},
+@@ -301,6 +302,7 @@ macro_rules! define_syscalls_with_generic_syscall_table {
+             SYS_TIMER_SETTIME = 110          => sys_timer_settime(args[..4]);
+             SYS_TIMER_DELETE = 111           => sys_timer_delete(args[..1]);
+             SYS_CLOCK_GETTIME = 113          => sys_clock_gettime(args[..2]);
++            SYS_CLOCK_GETRES = 114           => sys_clock_getres(args[..2]);
+             SYS_CLOCK_NANOSLEEP = 115        => sys_clock_nanosleep(args[..4]);
+             SYS_PTRACE = 117                 => sys_ptrace(args[..4]);
+             SYS_SCHED_SETPARAM = 118         => sys_sched_setparam(args[..2]);
+diff --git a/kernel/src/syscall/arch/x86.rs b/kernel/src/syscall/arch/x86.rs
+index bb8cc1db5..d90581db6 100644
+--- a/kernel/src/syscall/arch/x86.rs
++++ b/kernel/src/syscall/arch/x86.rs
+@@ -15,6 +15,7 @@ use super::{
+     chmod::{sys_chmod, sys_fchmod, sys_fchmodat, sys_fchmodat2},
+     chown::{sys_chown, sys_fchown, sys_fchownat, sys_lchown},
+     chroot::sys_chroot,
++    clock_getres::sys_clock_getres,
+     clock_gettime::sys_clock_gettime,
+     clone::{sys_clone, sys_clone3},
+     close::{sys_close, sys_close_range},
+@@ -358,6 +359,7 @@ impl_syscall_nums_and_dispatch_fn! {
+     SYS_TIMER_GETTIME = 224    => sys_timer_gettime(args[..2]);
+     SYS_TIMER_DELETE = 226     => sys_timer_delete(args[..1]);
+     SYS_CLOCK_GETTIME = 228    => sys_clock_gettime(args[..2]);
++    SYS_CLOCK_GETRES = 229     => sys_clock_getres(args[..2]);
+     SYS_CLOCK_NANOSLEEP = 230  => sys_clock_nanosleep(args[..4]);
+     SYS_EXIT_GROUP = 231       => sys_exit_group(args[..1], &mut user_ctx);
+     SYS_EPOLL_WAIT = 232       => sys_epoll_wait(args[..4]);
+diff --git a/kernel/src/syscall/clock_getres.rs b/kernel/src/syscall/clock_getres.rs
+new file mode 100644
+index 000000000..3b000eed4
+--- /dev/null
++++ b/kernel/src/syscall/clock_getres.rs
+@@ -0,0 +1,30 @@
++// SPDX-License-Identifier: MPL-2.0
++
++use ostd::mm::VmIo;
++
++use super::{SyscallReturn, clock_gettime::with_clock};
++use crate::{
++    prelude::*,
++    time::{clockid_t, timespec_t},
++};
++
++pub fn sys_clock_getres(
++    clockid: clockid_t,
++    timespec_addr: Vaddr,
++    ctx: &Context,
++) -> Result<SyscallReturn> {
++    debug!("clockid = {:?}", clockid);
++
++    // The clock ID is validated first, through the same path `sys_clock_gettime` uses, so that
++    // the two calls cannot disagree about which clock IDs are valid.
++    let resolution = with_clock(clockid, ctx, |clock| clock.resolution())?;
++
++    // A null pointer is not an error: the caller may only want to know whether the clock
++    // exists. This matches Linux, which guards the copy-out with `if (!error && tp)`.
++    if timespec_addr != 0 {
++        let timespec = timespec_t::from(resolution);
++        ctx.user_space().write_val(timespec_addr, &timespec)?;
++    }
++
++    Ok(SyscallReturn::Return(0))
++}
+diff --git a/kernel/src/syscall/clock_gettime.rs b/kernel/src/syscall/clock_gettime.rs
+index be62de0f3..0dc25935c 100644
+--- a/kernel/src/syscall/clock_gettime.rs
++++ b/kernel/src/syscall/clock_gettime.rs
+@@ -106,21 +106,31 @@ pub(super) enum DynamicClockType {
+     FD = 3,
+ }
+ 
+-/// Reads the time of a clock specified by the input clock ID.
++/// Resolves a clock ID to the clock it names and calls `op` on that clock.
+ ///
+-/// If the clock ID does not support, this function will return `Err`.
+-pub(super) fn read_clock(clockid: clockid_t, ctx: &Context) -> Result<Duration> {
++/// This is the single place where a `clockid_t` from userspace is validated and mapped to a
++/// [`Clock`]. Every operation on a user-supplied clock ID must go through here, so that the
++/// operations cannot disagree about which IDs are valid or about which clock an ID names.
++/// It plays the role of Linux's `clockid_to_kclock()`.
++///
++/// If the clock ID is invalid or unsupported, this function returns `Err` without calling
++/// `op`.
++pub(super) fn with_clock<R>(
++    clockid: clockid_t,
++    ctx: &Context,
++    op: impl FnOnce(&dyn Clock) -> R,
++) -> Result<R> {
+     if clockid >= 0 {
+         let clock_id = ClockId::try_from(clockid)?;
+         match clock_id {
+-            ClockId::CLOCK_REALTIME => Ok(RealTimeClock::get().read_time()),
+-            ClockId::CLOCK_MONOTONIC => Ok(MonotonicClock::get().read_time()),
+-            ClockId::CLOCK_MONOTONIC_RAW => Ok(MonotonicRawClock::get().read_time()),
+-            ClockId::CLOCK_REALTIME_COARSE => Ok(RealTimeCoarseClock::get().read_time()),
+-            ClockId::CLOCK_MONOTONIC_COARSE => Ok(MonotonicCoarseClock::get().read_time()),
+-            ClockId::CLOCK_BOOTTIME => Ok(BootTimeClock::get().read_time()),
+-            ClockId::CLOCK_PROCESS_CPUTIME_ID => Ok(ctx.process.prof_clock().read_time()),
+-            ClockId::CLOCK_THREAD_CPUTIME_ID => Ok(ctx.posix_thread.prof_clock().read_time()),
++            ClockId::CLOCK_REALTIME => Ok(op(&**RealTimeClock::get())),
++            ClockId::CLOCK_MONOTONIC => Ok(op(&**MonotonicClock::get())),
++            ClockId::CLOCK_MONOTONIC_RAW => Ok(op(&**MonotonicRawClock::get())),
++            ClockId::CLOCK_REALTIME_COARSE => Ok(op(&**RealTimeCoarseClock::get())),
++            ClockId::CLOCK_MONOTONIC_COARSE => Ok(op(&**MonotonicCoarseClock::get())),
++            ClockId::CLOCK_BOOTTIME => Ok(op(&**BootTimeClock::get())),
++            ClockId::CLOCK_PROCESS_CPUTIME_ID => Ok(op(&**ctx.process.prof_clock())),
++            ClockId::CLOCK_THREAD_CPUTIME_ID => Ok(op(&**ctx.posix_thread.prof_clock())),
+         }
+     } else {
+         let dynamic_clockid_info = DynamicClockIdInfo::try_from(clockid)?;
+@@ -130,8 +140,8 @@ pub(super) fn read_clock(clockid: clockid_t, ctx: &Context) -> Result<Duration>
+                     .get_process(pid)
+                     .ok_or_else(|| Error::with_message(Errno::EINVAL, "invalid clock ID"))?;
+                 match clock_type {
+-                    DynamicClockType::Profiling => Ok(process.prof_clock().read_time()),
+-                    DynamicClockType::Virtual => Ok(process.prof_clock().user_clock().read_time()),
++                    DynamicClockType::Profiling => Ok(op(&**process.prof_clock())),
++                    DynamicClockType::Virtual => Ok(op(&**process.prof_clock().user_clock())),
+                     // TODO: support scheduling clock and fd clock.
+                     _ => unimplemented!(),
+                 }
+@@ -142,10 +152,8 @@ pub(super) fn read_clock(clockid: clockid_t, ctx: &Context) -> Result<Duration>
+                     .ok_or_else(|| Error::with_message(Errno::EINVAL, "invalid clock ID"))?;
+                 let posix_thread = thread.as_posix_thread().unwrap();
+                 match clock_type {
+-                    DynamicClockType::Profiling => Ok(posix_thread.prof_clock().read_time()),
+-                    DynamicClockType::Virtual => {
+-                        Ok(posix_thread.prof_clock().user_clock().read_time())
+-                    }
++                    DynamicClockType::Profiling => Ok(op(&**posix_thread.prof_clock())),
++                    DynamicClockType::Virtual => Ok(op(&**posix_thread.prof_clock().user_clock())),
+                     _ => unimplemented!(),
+                 }
+             }
+@@ -153,3 +161,10 @@ pub(super) fn read_clock(clockid: clockid_t, ctx: &Context) -> Result<Duration>
+         }
+     }
+ }
++
++/// Reads the time of a clock specified by the input clock ID.
++///
++/// If the clock ID does not support, this function will return `Err`.
++pub(super) fn read_clock(clockid: clockid_t, ctx: &Context) -> Result<Duration> {
++    with_clock(clockid, ctx, |clock| clock.read_time())
++}
+diff --git a/kernel/src/syscall/mod.rs b/kernel/src/syscall/mod.rs
+index 932ea2016..e8436bcff 100644
+--- a/kernel/src/syscall/mod.rs
++++ b/kernel/src/syscall/mod.rs
+@@ -31,6 +31,7 @@ mod chdir;
+ mod chmod;
+ mod chown;
+ mod chroot;
++mod clock_getres;
+ mod clock_gettime;
+ mod clone;
+ mod close;
+diff --git a/kernel/src/time/clocks/cpu_clock.rs b/kernel/src/time/clocks/cpu_clock.rs
+index 3b61c87f7..8784f3503 100644
+--- a/kernel/src/time/clocks/cpu_clock.rs
++++ b/kernel/src/time/clocks/cpu_clock.rs
+@@ -8,7 +8,7 @@ use ostd::{
+     timer::Jiffies,
+ };
+ 
+-use crate::time::Clock;
++use crate::time::{Clock, TICK_CLOCK_RESOLUTION};
+ 
+ /// A clock used to record the CPU time for processes and threads.
+ pub struct CpuClock {
+@@ -47,6 +47,17 @@ impl Clock for CpuClock {
+     fn read_time(&self) -> Duration {
+         self.read_jiffies().as_duration()
+     }
++
++    fn resolution(&self) -> Duration {
++        // This clock is advanced by whole jiffies in `add_jiffies`, so a jiffy is the finest
++        // difference it can report.
++        //
++        // Linux reports the same tick period for its jiffies-based CPU clocks
++        // (`CPUCLOCK_PROF` and `CPUCLOCK_VIRT`). It reports 1ns for `CPUCLOCK_SCHED`, which
++        // is what `CLOCK_PROCESS_CPUTIME_ID` maps to there, but only because that clock is
++        // backed by the nanosecond-granular `sched_clock` rather than by the tick.
++        TICK_CLOCK_RESOLUTION
++    }
+ }
+ 
+ impl ProfClock {
+@@ -73,4 +84,8 @@ impl Clock for ProfClock {
+     fn read_time(&self) -> Duration {
+         self.user_clock.read_time() + self.kernel_clock.read_time()
+     }
++
++    fn resolution(&self) -> Duration {
++        self.user_clock.resolution()
++    }
+ }
+diff --git a/kernel/src/time/clocks/system_wide.rs b/kernel/src/time/clocks/system_wide.rs
+index 7c23ab8ab..84d59ddf4 100644
+--- a/kernel/src/time/clocks/system_wide.rs
++++ b/kernel/src/time/clocks/system_wide.rs
+@@ -9,7 +9,8 @@ use paste::paste;
+ use spin::Once;
+ 
+ use crate::time::{
+-    self, Clock, SystemTime, system_time::START_TIME_AS_DURATION, timer::TimerManager,
++    self, Clock, SystemTime, TICK_CLOCK_RESOLUTION, system_time::START_TIME_AS_DURATION,
++    timer::TimerManager,
+ };
+ 
+ /// The Clock that reads the jiffies, and turn the counter into `Duration`.
+@@ -147,6 +148,10 @@ impl Clock for JiffiesClock {
+     fn read_time(&self) -> Duration {
+         Jiffies::elapsed().as_duration()
+     }
++
++    fn resolution(&self) -> Duration {
++        TICK_CLOCK_RESOLUTION
++    }
+ }
+ 
+ impl Clock for RealTimeClock {
+@@ -167,12 +172,21 @@ impl Clock for RealTimeCoarseClock {
+     fn read_time(&self) -> Duration {
+         *Self::current_ref().get().unwrap().disable_irq().lock()
+     }
++
++    fn resolution(&self) -> Duration {
++        // This clock only advances when `update_coarse_clock` runs in the timer softirq.
++        TICK_CLOCK_RESOLUTION
++    }
+ }
+ 
+ impl Clock for MonotonicCoarseClock {
+     fn read_time(&self) -> Duration {
+         RealTimeCoarseClock::get().read_time() - *START_TIME_AS_DURATION.get().unwrap()
+     }
++
++    fn resolution(&self) -> Duration {
++        RealTimeCoarseClock::get().resolution()
++    }
+ }
+ 
+ impl Clock for MonotonicRawClock {
+diff --git a/kernel/src/time/core/mod.rs b/kernel/src/time/core/mod.rs
+index f86f5a855..50ad96c68 100644
+--- a/kernel/src/time/core/mod.rs
++++ b/kernel/src/time/core/mod.rs
+@@ -2,11 +2,40 @@
+ 
+ use core::time::Duration;
+ 
++use ostd::timer::TIMER_FREQ;
++
+ pub mod timer;
+ 
++/// The resolution of the clocks that are derived from the high-resolution clocksource.
++///
++/// Such a clock computes its time from the clocksource on each read, so the finest
++/// difference it can report is one nanosecond. This mirrors Linux's `hrtimer_resolution`,
++/// which is also one nanosecond whenever high-resolution timers are available.
++pub const HIGH_RES_CLOCK_RESOLUTION: Duration = Duration::from_nanos(1);
++
++/// The resolution of the clocks that are advanced by the timer interrupt.
++///
++/// Such a clock only changes once per tick, so its resolution is the tick period. This is
++/// the counterpart of Linux's `TICK_NSEC`, which is likewise `1 / CONFIG_HZ`.
++pub const TICK_CLOCK_RESOLUTION: Duration = Duration::from_nanos(1_000_000_000 / TIMER_FREQ);
++
+ /// A trait that can abstract clocks which have the ability to read time,
+ /// and has a fixed resolution.
+ pub trait Clock: Send + Sync {
+     /// Read the current time of this clock.
+     fn read_time(&self) -> Duration;
++
++    /// Returns the resolution of this clock.
++    ///
++    /// The resolution is the smallest difference between two times that this clock can
++    /// report. It is a property of the clock itself, so every consumer that has to name a
++    /// clock's resolution -- `clock_getres`, the vDSO data page -- must obtain it from
++    /// here, rather than deciding on one of its own.
++    ///
++    /// The default is [`HIGH_RES_CLOCK_RESOLUTION`], which suits any clock that reads the
++    /// high-resolution clocksource. Clocks that are instead advanced by the timer tick
++    /// must override this method.
++    fn resolution(&self) -> Duration {
++        HIGH_RES_CLOCK_RESOLUTION
++    }
+ }
+diff --git a/kernel/src/time/mod.rs b/kernel/src/time/mod.rs
+index 497472d25..6a049624f 100644
+--- a/kernel/src/time/mod.rs
++++ b/kernel/src/time/mod.rs
+@@ -2,7 +2,7 @@
+ 
+ #![expect(non_camel_case_types)]
+ 
+-pub use core::{Clock, timer};
++pub use core::{Clock, TICK_CLOCK_RESOLUTION, timer};
+ 
+ use ::core::time::Duration;
+ pub use system_time::{START_TIME, SystemTime};
+diff --git a/kernel/src/vdso.rs b/kernel/src/vdso.rs
+index ab16ced06..ffbfa0d29 100644
+--- a/kernel/src/vdso.rs
++++ b/kernel/src/vdso.rs
+@@ -28,8 +28,8 @@ use spin::Once;
+ use crate::{
+     syscall::ClockId,
+     time::{
+-        START_TIME, SystemTime,
+-        clocks::MonotonicClock,
++        Clock, START_TIME, SystemTime,
++        clocks::{BootTimeClock, MonotonicClock, MonotonicRawClock, RealTimeClock},
+         timer::{Timeout, TimerGuard},
+     },
+     vm::page_cache::{Vmo, VmoOptions},
+@@ -111,6 +111,12 @@ const HIGH_RES_CLOCK_IDS: [ClockId; 4] = [
+     ClockId::CLOCK_BOOTTIME,
+ ];
+ 
++// FIXME: The vDSO library answers `clock_getres` for these clocks from a constant that is
++// compiled into it (`LOW_RES_NSEC`, i.e. Linux's `TICK_NSEC`), not from a field of
++// `VdsoData`. So it reports the tick period of the kernel the library was built for, which
++// need not be the tick period that `Clock::resolution` reports for these clocks here. There
++// is no data-page field through which we can correct it; doing so requires a vDSO library of
++// our own.
+ const COARSE_RES_CLOCK_IDS: [ClockId; 2] = [
+     ClockId::CLOCK_REALTIME_COARSE,
+     ClockId::CLOCK_MONOTONIC_COARSE,
+@@ -140,6 +146,7 @@ impl VdsoData {
+         let coeff = clocksource.coeff();
+         self.set_clock_mode(DEFAULT_CLOCK_MODE);
+         self.set_coeff(coeff);
++        self.set_hrtimer_res();
+ 
+         let (last_instant, last_cycles) = clocksource.last_record();
+         self.update_high_res_instant(last_instant, last_cycles);
+@@ -155,6 +162,26 @@ impl VdsoData {
+         self.shift = coeff.shift();
+     }
+ 
++    /// Sets the resolution that the vDSO reports for the high-resolution clocks.
++    ///
++    /// The vDSO library serves `clock_getres` for the clocks in [`HIGH_RES_CLOCK_IDS`] out of
++    /// this single field, so it must carry the very resolution that those clocks report
++    /// through `sys_clock_getres`. Otherwise the answer a process gets would depend on
++    /// whether the vDSO or the syscall happened to serve the request.
++    fn set_hrtimer_res(&mut self) {
++        // One field has to answer for every clock in `HIGH_RES_CLOCK_IDS`, so they must all
++        // agree on their resolution. They do, as they all read the same clocksource. If that
++        // ever stops holding, this field can no longer represent them and the vDSO would
++        // start disagreeing with the syscall for some of them.
++        let resolution = MonotonicClock::get().resolution();
++        debug_assert_eq!(RealTimeClock::get().resolution(), resolution);
++        debug_assert_eq!(MonotonicRawClock::get().resolution(), resolution);
++        debug_assert_eq!(BootTimeClock::get().resolution(), resolution);
++
++        debug_assert_eq!(resolution.as_secs(), 0);
++        self.hrtimer_res = resolution.subsec_nanos();
++    }
++
+     fn update_clock_instant(&mut self, clockid: usize, secs: u64, nanos_info: u64) {
+         self.basetime[clockid].secs = secs;
+         self.basetime[clockid].nanos_info = nanos_info;
+diff --git a/test/initramfs/src/conformance/ltp/testcases/all.txt b/test/initramfs/src/conformance/ltp/testcases/all.txt
+index 5bef8afbd..c6fe1460c 100644
+--- a/test/initramfs/src/conformance/ltp/testcases/all.txt
++++ b/test/initramfs/src/conformance/ltp/testcases/all.txt
+@@ -98,7 +98,7 @@ chroot02
+ # clock_adjtime01
+ # clock_adjtime02
+ 
+-# clock_getres01
++clock_getres01
+ clock_nanosleep01
+ # clock_nanosleep02
+ # clock_nanosleep03

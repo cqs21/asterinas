@@ -1,0 +1,7 @@
+{
+  "commit": "5e04f4ae70719c867ce590a9e5bb2051fc5b76e8",
+  "branch": "fix-ltp-alarm02-FAFjvy",
+  "worktree": "/root/asterinas/.worktrees/run-FAFjvy",
+  "subject": "Enable `alarm02` in the LTP conformance test suite",
+  "files": ["test/initramfs/src/conformance/ltp/testcases/all.txt"]
+}

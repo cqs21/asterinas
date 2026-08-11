@@ -1,0 +1,7 @@
+{
+  "verdict": "already-green",
+  "baseline": "On Linux, bind02 switches credentials to user 'nobody' (non-root), creates a TCP socket, and attempts to bind() to privileged port 463. The test expects bind() to return EACCES (13) because non-root users cannot bind to ports < 1024. The host baseline confirms: bind() : EACCES (13), test passes.",
+  "asterinas_result": "bind02 passes in Asterinas with identical behavior - the test runs for 0.014s and reports 'pass', indicating Asterinas correctly returns EACCES when a non-root user attempts to bind to a privileged port.",
+  "pool_status": "The test is commented out in testcases/all.txt (line '# bind02'), meaning it was in the highest-priority candidate pool but never enabled. The pool entry is stale - the test already works correctly in Asterinas.",
+  "recommendation": "Enable bind02 by uncommenting the line in testcases/all.txt. No kernel changes needed."
+}
