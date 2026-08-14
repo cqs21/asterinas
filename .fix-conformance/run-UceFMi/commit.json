@@ -1,0 +1,10 @@
+{
+  "commit": "e027a17c90fba23e9feb49192df3b7a20ddc9925",
+  "branch": "fix-ltp-setitimer01-UceFMi",
+  "worktree": "/root/asterinas/.worktrees/run-UceFMi",
+  "subject": "Raise the per-type signal on process interval timer expiry",
+  "files": [
+    "kernel/src/process/process/timer_manager.rs",
+    "test/initramfs/src/conformance/ltp/testcases/all.txt"
+  ]
+}

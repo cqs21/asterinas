@@ -1,0 +1,26 @@
+{
+  "status": "ok",
+  "target_test": { "name": "memfd_create01", "case_results": null, "passed": true },
+  "still_blocked_absent": true,
+  "full_suite": {
+    "suite": "ltp",
+    "config": "default (no run_vars; CONFORMANCE_TEST_WORKDIR=/tmp, empty selector, no extra blocklists)",
+    "passed": true,
+    "summary": "Suite: syscalls, Runtime 3m 9s, Runs: 544 -- Passed: 2728, Failed: 0, Broken: 0, Skipped: 52, Warnings: 0; 'All conformance tests passed.', exit 0",
+    "regressions": []
+  },
+  "enable_edit": {
+    "pool_file": "test/initramfs/src/conformance/ltp/testcases/all.txt",
+    "diff": "-# memfd_create01 / +memfd_create01 (line 1879 only)",
+    "diffstat": "1 file changed, 1 insertion(+), 1 deletion(-)",
+    "pre_boot_check": "git diff showed exactly the one line in pool_entries; memfd_create02/03/04 on lines 1880-1882 left commented out"
+  },
+  "evidence": {
+    "target_line": "qemu.log:584 `memfd_create01: pass  (0.016s)` -- matches the 0.016s diagnose reproduction",
+    "blocked_siblings_absent": "grep for ^memfd_create0[234]: in qemu.log returns 0 matches, so the edit did not unblock more than intended",
+    "no_regressions": "Failed: 0 / Broken: 0 in the summary; the only non-pass per-case lines are 17 pre-existing `skip` results (bind04, clock_nanosleep01, clone304, epoll_pwait06, fsconfig01, fsconfig02, fsopen02, getrandom05, getrusage02, ioprio_set01, mremap07, sched_setparam03, select01, select03, sendfile09, sendfile09_64, sigpending02), none newly failing",
+    "log_path": "/root/asterinas/.worktrees/run-ifrhdN/qemu.log",
+    "run_command": "PATH=<osdk_bin>:$PATH VNC_PORT=8778 SSH_PORT=28778 NGINX_PORT=28779 REDIS_PORT=28780 IPERF_PORT=28781 LMBENCH_TCP_LAT_PORT=28782 LMBENCH_TCP_BW_PORT=28783 MEMCACHED_PORT=28784 make run_kernel AUTO_TEST=conformance CONFORMANCE_TEST_SUITE=ltp CARGO_OSDK=<osdk_bin>/cargo-osdk"
+  },
+  "notes": "Kernel tree untouched -- the all.txt one-liner is the entire change, as expected for the already-green verdict. Pinned the seven shuf-chosen host-forward ports per diagnose's run_hazard; the boot succeeded first try with no forwarding-rule error. The suite's per-case skip count (17 lines) is lower than the summary's Skipped: 52 because the LTP aggregate counts per-assertion skips inside otherwise-passing binaries, not just wholly-skipped testcases."
+}

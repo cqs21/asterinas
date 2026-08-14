@@ -1,0 +1,21 @@
+{
+  "run_id": "run-UceFMi",
+  "suite": "ltp",
+  "test": "setitimer01",
+  "gvisor_filter": null,
+  "worktree": "/root/asterinas/.worktrees/run-UceFMi",
+  "osdk_bin": "/root/asterinas/.worktrees/run-UceFMi/.osdk/bin",
+  "branch": "fix-ltp-setitimer01-UceFMi",
+  "base_commit": "e8f2b9ca6",
+  "vnc_port": 599,
+  "round": 5,
+  "rounds_total": 5,
+  "phases": {
+    "select": "done",
+    "diagnose": "done",
+    "fix": "done",
+    "verify": "done",
+    "commit": "done"
+  },
+  "outcome": "committed"
+}

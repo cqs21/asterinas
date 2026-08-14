@@ -1,0 +1,14 @@
+{
+  "result": "selected",
+  "suite": "ltp",
+  "test": "memfd_create01",
+  "gvisor_filter": null,
+  "selector_token": "memfd_create01",
+  "run_vars": "",
+  "pool_file": "test/initramfs/src/conformance/ltp/testcases/all.txt",
+  "pool_entries": ["memfd_create01"],
+  "enable_action": "uncomment the line",
+  "source": "auto-picked",
+  "rationale": "Already green in Asterinas at base_commit e8f2b9ca6, so the pool entry is stale and the fix is the all.txt edit alone -- the cheapest possible round. I measured this myself rather than trusting the cache: the prebuilt (LTP 20260529) passes on the host with 157 TPASS / 0 TFAIL, and in one Asterinas boot probing 35 candidates it reported 'memfd_create01: pass (0.001s)' with the run summary 343 passed / 0 failed / 0 broken. Picked over the other 34 green candidates on breadth of real assertions actually exercised: 157 TPASS is the widest coverage in the set, so uncommenting it locks in genuine memfd_create behavior (flag validation, MFD_CLOEXEC, seals) rather than a near-empty test. It is also fast (0.001s) and needs no workdir override, so phase 4's full-suite verify stays cheap and its result is unambiguous.",
+  "notes": "Cache already held 75 ltp stale-entry records; 35 were unclaimed by any committed run and still commented out in all.txt on main, so this backlog holds ~34 more one-line rounds after this one. Three cache entries recorded as plain 'pass' were actually reported as 'skip' by my boot (madvise07, timer_settime01, vhangup01) -- I appended probe records with result 'skip' for those and deliberately did not emit stale-entry records for them, since a skip is not evidence the test would pass once enabled. Avoid them as future picks without re-checking. My 35-candidate boot needed pinned host port-forwards (SSH_PORT/NGINX_PORT/REDIS_PORT/IPERF_PORT/LMBENCH_TCP_LAT_PORT/LMBENCH_TCP_BW_PORT/MEMCACHED_PORT): tools/qemu_args.sh picks these with 'shuf' and no availability check, so the first boot died on 'Could not set up host forwarding rule tcp::55538-:6379'. VNC_PORT alone does not cover this; later phases may hit the same flake and should retry with pinned ports rather than treat it as a test failure. Appended 102 cache records (35 host, 35 probe, 32 stale-entry)."
+}

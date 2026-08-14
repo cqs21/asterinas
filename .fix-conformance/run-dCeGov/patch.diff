@@ -1,0 +1,41 @@
+diff --git a/kernel/src/process/posix_thread/mod.rs b/kernel/src/process/posix_thread/mod.rs
+index 0ce536c30..48ef16928 100644
+--- a/kernel/src/process/posix_thread/mod.rs
++++ b/kernel/src/process/posix_thread/mod.rs
+@@ -419,10 +419,20 @@ pub fn last_tid() -> Tid {
+ }
+ 
+ /// The maximum allowed process ID.
++///
++/// This matches Linux's `PID_MAX_LIMIT` on 64-bit architectures, which is
++/// deliberately kept far below `i32::MAX`. The headroom matters: user programs
++/// read this value and compute `pid_max + 1` to name a PID that cannot be
++/// allocated, so that value must still be a positive `pid_t`. Were the ceiling
++/// `i32::MAX`, `pid_max + 1` would wrap to `i32::MIN` and syscalls taking a
++/// signed PID, such as `wait4` and `kill`, would treat it as a process group
++/// query instead of an unmatched PID.
++///
++/// Reference: <https://github.com/torvalds/linux/blob/master/include/linux/threads.h>.
+ //
+-// FIXME: The current value is chosen arbitrarily.
+-// This value can be modified by the user by writing to `/proc/sys/kernel/pid_max`.
+-pub const PID_MAX: u32 = u32::MAX / 2;
++// FIXME: This value cannot yet be modified by the user by writing to
++// `/proc/sys/kernel/pid_max`.
++pub const PID_MAX: u32 = 4 * 1024 * 1024;
+ 
+ /// The sleeping state of a thread.
+ #[derive(Clone, Copy, Debug)]
+diff --git a/test/initramfs/src/conformance/ltp/testcases/all.txt b/test/initramfs/src/conformance/ltp/testcases/all.txt
+index 5bef8afbd..28ed3e42d 100644
+--- a/test/initramfs/src/conformance/ltp/testcases/all.txt
++++ b/test/initramfs/src/conformance/ltp/testcases/all.txt
+@@ -1816,7 +1816,7 @@ wait01
+ wait02
+ 
+ # wait401
+-# wait402
++wait402
+ # wait403
+ 
+ # waitpid01

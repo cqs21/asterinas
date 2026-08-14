@@ -1,0 +1,21 @@
+{
+  "run_id": "run-OgXQbF",
+  "suite": "ltp",
+  "test": "getsockopt01",
+  "gvisor_filter": null,
+  "worktree": "/root/asterinas/.worktrees/run-OgXQbF",
+  "osdk_bin": "/root/asterinas/.worktrees/run-OgXQbF/.osdk/bin",
+  "branch": "fix-ltp-getsockopt01-OgXQbF",
+  "base_commit": "e8f2b9ca6",
+  "vnc_port": 1922,
+  "round": 4,
+  "rounds_total": 5,
+  "phases": {
+    "select": "done",
+    "diagnose": "done",
+    "fix": "pending",
+    "verify": "pending",
+    "commit": "pending"
+  },
+  "outcome": "abandoned"
+}

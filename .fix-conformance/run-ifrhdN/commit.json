@@ -1,0 +1,7 @@
+{
+  "commit": "718e7f41ae95fa8149ca39f798dcdff685478a03",
+  "branch": "fix-ltp-memfd_create01-ifrhdN",
+  "worktree": "/root/asterinas/.worktrees/run-ifrhdN",
+  "subject": "Enable `memfd_create01` in the LTP conformance test list",
+  "files": ["test/initramfs/src/conformance/ltp/testcases/all.txt"]
+}

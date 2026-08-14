@@ -1,0 +1,14 @@
+{
+  "result": "selected",
+  "suite": "ltp",
+  "test": "wait402",
+  "gvisor_filter": null,
+  "selector_token": "wait402",
+  "run_vars": "",
+  "pool_file": "test/initramfs/src/conformance/ltp/testcases/all.txt",
+  "pool_entries": ["wait402"],
+  "enable_action": "uncomment the line",
+  "source": "auto-picked",
+  "rationale": "One assertion, one syscall, and a mechanism that is already visible statically. wait402 reads /proc/sys/kernel/pid_max and calls wait4(pid_max + 1, ...) expecting ECHILD. Asterinas sets PID_MAX = u32::MAX / 2 = 2147483647 = i32::MAX (kernel/src/process/posix_thread/mod.rs:424), and /proc/sys/kernel/pid_max prints that value verbatim (procfs/sys/kernel/pid_max.rs). So pid_max + 1 = 2147483648 wraps to INT_MIN when wait4 takes it as i32, and ProcessFilter::from_id (process_filter.rs:53-55) special-cases wait_pid == i32::MIN with ESRCH instead of reaching the ECHILD path. The generic ECHILD machinery is present and correct (wait.rs:81-86), so this is not a missing subsystem: the divergence is the arbitrary PID_MAX value (its own FIXME says so; Linux's default is 4194304, well under i32::MAX) rather than the wait4 logic. Probed at base_commit e8f2b9ca6 as the only genuine 'fail' among six candidates. Chosen over the other five, which all came back 'broken' rather than failing an assertion, so their scope is not yet a single defect: getsockname01, getpeername01, shutdown02, mprotect01, ioctl07. Also chosen over the ~64 cached stale-entry passes, since those are pool-edit-only rounds and 26 prior runs already covered that ground heavily. Uncovered by prior runs: no committed run touched process ID allocation or the pid_max sysctl (their areas were fs, timers, fd limits, socket creation, SysV IPC, epoll, priority, prctl, brk, mkdir).",
+  "notes": "Pool entry is all.txt line 1819, '# wait402'. Default configuration, so run_vars is empty (no workdir override). Host baseline: 1 passed / 0 failed on LTP 20260529 (host pid_max is 4194304). Asterinas probe: 'wait402: fail'. Also measured and cached this round, all host-pass but Asterinas-broken at e8f2b9ca6, so they are cheap re-picks for a later round but need their TBROK cause established first: getsockname01, getpeername01, shutdown02, mprotect01, ioctl07. Note the LTP runner treats broken and warnings as failures too, not just failed. Related: waitpid01 (all.txt:1822) is still commented and unprobed."
+}

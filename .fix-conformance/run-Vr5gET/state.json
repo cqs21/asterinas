@@ -1,0 +1,21 @@
+{
+  "run_id": "run-Vr5gET",
+  "suite": "ltp",
+  "test": "times03",
+  "gvisor_filter": null,
+  "worktree": "/root/asterinas/.worktrees/run-Vr5gET",
+  "osdk_bin": "/root/asterinas/.worktrees/run-Vr5gET/.osdk/bin",
+  "branch": "fix-ltp-times03-Vr5gET",
+  "base_commit": "e8f2b9ca6",
+  "vnc_port": 1320,
+  "round": 3,
+  "rounds_total": 5,
+  "phases": {
+    "select": "done",
+    "diagnose": "done",
+    "fix": "pending",
+    "verify": "pending",
+    "commit": "pending"
+  },
+  "outcome": "abandoned"
+}

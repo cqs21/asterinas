@@ -1,0 +1,10 @@
+{
+  "commit": "3bde262452e898b08c8e22793787ba4ee92f83bc",
+  "branch": "fix-ltp-wait402-dCeGov",
+  "worktree": "/root/asterinas/.worktrees/run-dCeGov",
+  "subject": "Lower `PID_MAX` to Linux's 64-bit `PID_MAX_LIMIT`",
+  "files": [
+    "kernel/src/process/posix_thread/mod.rs",
+    "test/initramfs/src/conformance/ltp/testcases/all.txt"
+  ]
+}

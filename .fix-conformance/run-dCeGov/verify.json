@@ -1,0 +1,16 @@
+{
+  "status": "ok",
+  "target_test": { "name": "wait402", "case_results": null, "passed": true },
+  "still_blocked_absent": true,
+  "full_suite": {
+    "suite": "ltp",
+    "config": "default (run_vars empty: no CONFORMANCE_TEST_SELECTOR, no CONFORMANCE_TEST_WORKDIR override, no CONFORMANCE_TEST_EXTRA_BLOCKLISTS) -- the CI path that applies the blocklist, and the correct configuration for an all.txt entry",
+    "passed": true,
+    "summary": "Suite: syscalls, Runtime: 3m 13s, Runs: 544 -- Passed: 2592, Failed: 0, Broken: 0, Skipped: 52, Warnings: 0; 'All conformance tests passed.' and make run_kernel exit code 0. Target at qemu.log:650 'wait402: pass  (0.011s)', with the already-enabled sibling wait01 passing at line 648. Per-test tally over the run: 527 pass, 17 skip, zero fail/brok/conf lines.",
+    "regressions": []
+  },
+  "pool_edit_check": "Checked with git diff before booting: the only change to test/initramfs/src/conformance/ltp/testcases/all.txt is line 1819 '# wait402' -> 'wait402', exactly the one entry in pool_entries. The neighbouring wait401 and wait403 stayed commented, so no line was taken out beyond the target.",
+  "still_blocked_check": "Compared the 545 uncommented all.txt entries against the set of testcase ids that produced a result line: no test ran that was not enabled, so none of the ~1000 still-commented all.txt entries leaked into the run. Confirms the pool edit did not widen past wait402.",
+  "regression_check": "Diffed the per-test result lines against the last default-config full-suite log (run-atDPcd/verify-run.log, 527 pass / 17 skip). Pass count is 527 both before and after and the 17-name skip set is identical, with zero fail or broken lines in either. The only delta in the passing set is wait402 joining it. Two absences were run down and neither is caused by this change: (1) dup02 passed in run-atDPcd because it was that run's own target and is still commented at line 160 of this worktree's all.txt, so its absence here is expected; (2) munmap02 is uncommented but produces no result line, which reproduces identically at base_commit e8f2b9ca6 and in the earlier run-atDPcd log, so it is a pre-existing packaging gap unrelated to PID_MAX. Also note the 16 'warning' strings in the raw log are host grub-mkrescue and qemu CPUID messages, not test results, which is consistent with the summary's Warnings: 0.",
+  "notes": "Runs stayed at 544 while the enabled-entry count went 544 -> 545; that is the pre-existing munmap02 gap above absorbing the difference, not wait402 failing to run -- wait402 has its own pass line. The 0 broken count corroborates diagnose.json: setup()'s SAFE_FILE_SCANF of /proc/sys/kernel/pid_max still succeeds against the new 4194304 value, so lowering PID_MAX did not disturb the procfs reporting path. No test exercising process creation, thread ids, or cgroup pids.max regressed, which is the blast radius fix.json flagged for the lower ceiling."
+}

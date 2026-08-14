@@ -1,0 +1,17 @@
+{
+  "status": "ok",
+  "target_test": {
+    "name": "setitimer01",
+    "case_results": null,
+    "passed": true
+  },
+  "still_blocked_absent": true,
+  "full_suite": {
+    "suite": "ltp",
+    "config": "default (run_vars empty: no CONFORMANCE_TEST_SELECTOR, no CONFORMANCE_TEST_WORKDIR override, no CONFORMANCE_TEST_EXTRA_BLOCKLISTS) -- the CI path where the harness applies the blocklist, and the correct configuration for an all.txt entry. Debug build, RELEASE defaulting to 0 and SMP to 1 per the root Makefile.",
+    "passed": true,
+    "summary": "Suite: syscalls, Runtime: 3m 17s, Runs: 544 -- Passed: 2559, Failed: 0, Broken: 0, Skipped: 52, Warnings: 0; 'All conformance tests passed.' at qemu.log:634 and make run_kernel exit code 0. Target at qemu.log:465 'setitimer01: pass  (7.140s)', with the already-enabled sibling setitimer02 passing at line 466. Per-test status tally over all 544 runs: 527 pass, 17 skip, and zero fail/brok/conf/warn lines. The 17 skips are the same pre-existing set (bind04, clock_nanosleep01, clone304, epoll_pwait06, fsconfig01/02, fsopen02, getrandom05, getrusage02, ioprio_set01, mremap07, sched_setparam03, select01, select03, sendfile09, sendfile09_64, sigpending02) and contain no new entry.",
+    "regressions": []
+  },
+  "notes": "Pool edit checked with git diff before booting: the single removed line is '# setitimer01' becoming 'setitimer01' at all.txt:1436, exactly the one entry in pool_entries, with setitimer02 and the surrounding sethostname/setns lines untouched. all.txt is not a gvisor-style filter file, so nothing in it stays blocked for this binary and still_blocked_absent is trivially true. Cross-checked pool against log: of the 545 now-enabled all.txt entries, 544 ran, and the only enabled-but-absent name is munmap02 -- a pre-existing stale entry, not a regression. It is enabled at base commit e8f2b9ca6 too, and the pinned LTP 20260529 prebuilt simply does not ship it (/nix/store/hik6kb512ia3p14lc2vwzb292d4k306a-ltp-20260529/runtest/syscalls jumps munmap01, munmap03, munmap04, and no munmap02 binary exists), so the suite Makefile's runtest-driven copy loop never packages it. Unrelated to this change and left alone. The run count of 544 matches the base commit's 544 enabled entries because setitimer01 was added while munmap02 remains unpackageable."
+}

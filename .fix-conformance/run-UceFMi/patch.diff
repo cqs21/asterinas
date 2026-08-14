@@ -1,0 +1,72 @@
+diff --git a/kernel/src/process/process/timer_manager.rs b/kernel/src/process/process/timer_manager.rs
+index bee389b8f..6b124f77d 100644
+--- a/kernel/src/process/process/timer_manager.rs
++++ b/kernel/src/process/process/timer_manager.rs
+@@ -14,7 +14,11 @@ use crate::{
+     fs::cgroupfs::{CpuStatKind, charge_cpu_time},
+     process::{
+         posix_thread::AsPosixThread,
+-        signal::{constants::SIGALRM, signals::kernel::KernelSignal},
++        signal::{
++            constants::{SIGALRM, SIGPROF, SIGVTALRM},
++            sig_num::SigNum,
++            signals::kernel::KernelSignal,
++        },
+     },
+     thread::{
+         Thread,
+@@ -103,12 +107,19 @@ pub struct PosixTimerManager {
+     posix_timers: Mutex<Vec<Option<Arc<Timer>>>>,
+ }
+ 
++/// Creates the expiry callback of a process interval timer that raises `signum`.
++///
++/// The signal is bound here, at timer creation, because it is a property of the individual
++/// timer's type: `ITIMER_REAL` raises `SIGALRM`, `ITIMER_VIRTUAL` raises `SIGVTALRM`, and
++/// `ITIMER_PROF` raises `SIGPROF`. Each call returns an independent work item, so timers of
++/// different types never share an expiry action.
+ fn create_process_timer_callback(
+     process_ref: &Weak<Process>,
+-) -> impl Fn(TimerGuard) + Clone + 'static {
++    signum: SigNum,
++) -> impl Fn(TimerGuard) + 'static {
+     let current_process = process_ref.clone();
+     let sent_signal = move || {
+-        let signal = KernelSignal::new(SIGALRM);
++        let signal = KernelSignal::new(signum);
+         if let Some(process) = current_process.upgrade() {
+             process.enqueue_signal(Box::new(signal));
+         }
+@@ -129,13 +140,13 @@ impl PosixTimerManager {
+     pub(super) fn new(prof_clock: &Arc<ProfClock>, process_ref: &Weak<Process>) -> Self {
+         const MAX_NUM_OF_POSIX_TIMERS: usize = 10000;
+ 
+-        let callback = create_process_timer_callback(process_ref);
+-
+-        let alarm_timer = RealTimeClock::timer_manager().create_timer(callback.clone());
++        let alarm_timer = RealTimeClock::timer_manager()
++            .create_timer(create_process_timer_callback(process_ref, SIGALRM));
+ 
+-        let virtual_timer =
+-            TimerManager::new(prof_clock.user_clock().clone()).create_timer(callback.clone());
+-        let prof_timer = TimerManager::new(prof_clock.clone()).create_timer(callback);
++        let virtual_timer = TimerManager::new(prof_clock.user_clock().clone())
++            .create_timer(create_process_timer_callback(process_ref, SIGVTALRM));
++        let prof_timer = TimerManager::new(prof_clock.clone())
++            .create_timer(create_process_timer_callback(process_ref, SIGPROF));
+ 
+         Self {
+             alarm_timer,
+diff --git a/test/initramfs/src/conformance/ltp/testcases/all.txt b/test/initramfs/src/conformance/ltp/testcases/all.txt
+index 5bef8afbd..41acfd77f 100644
+--- a/test/initramfs/src/conformance/ltp/testcases/all.txt
++++ b/test/initramfs/src/conformance/ltp/testcases/all.txt
+@@ -1433,7 +1433,7 @@ sethostname01
+ sethostname02
+ sethostname03
+ 
+-# setitimer01
++setitimer01
+ setitimer02
+ 
+ # setns01
