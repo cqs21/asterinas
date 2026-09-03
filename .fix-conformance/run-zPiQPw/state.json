@@ -1,0 +1,21 @@
+{
+  "run_id": "run-zPiQPw",
+  "suite": "ltp",
+  "test": "ioctl01",
+  "gvisor_filter": null,
+  "worktree": "/root/asterinas/.worktrees/run-zPiQPw",
+  "osdk_bin": "/root/asterinas/.worktrees/run-zPiQPw/.osdk/bin",
+  "branch": "fix-ltp-ioctl01-zPiQPw",
+  "base_commit": "e8f2b9ca6",
+  "vnc_port": 2228,
+  "round": 5,
+  "rounds_total": 5,
+  "phases": {
+    "select": "done",
+    "diagnose": "done",
+    "fix": "done",
+    "verify": "done",
+    "commit": "done"
+  },
+  "outcome": "committed"
+}

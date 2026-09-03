@@ -1,0 +1,21 @@
+{
+  "run_id": "run-9KjbXH",
+  "suite": "ltp",
+  "test": "statfs03",
+  "gvisor_filter": null,
+  "worktree": "/root/asterinas/.worktrees/run-9KjbXH",
+  "osdk_bin": "/root/asterinas/.worktrees/run-9KjbXH/.osdk/bin",
+  "branch": "fix-ltp-statfs03-9KjbXH",
+  "base_commit": "e8f2b9ca6",
+  "vnc_port": 3907,
+  "round": 1,
+  "rounds_total": 5,
+  "phases": {
+    "select": "done",
+    "diagnose": "done",
+    "fix": "done",
+    "verify": "done",
+    "commit": "done"
+  },
+  "outcome": "committed"
+}

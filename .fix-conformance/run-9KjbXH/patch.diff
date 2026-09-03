@@ -1,0 +1,20 @@
+diff --git a/kernel/src/fs/vfs/fs_apis/inode.rs b/kernel/src/fs/vfs/fs_apis/inode.rs
+index 6cdbd36ff..65dce57ac 100644
+--- a/kernel/src/fs/vfs/fs_apis/inode.rs
++++ b/kernel/src/fs/vfs/fs_apis/inode.rs
+@@ -587,8 +587,13 @@ pub trait Inode: Any + FileOps + Send + Sync {
+             // Read/write DACs are always overridable.
+             perm -= Permission::MAY_READ | Permission::MAY_WRITE;
+ 
+-            // Executable DACs are overridable when there is at least one exec bit set.
+-            if perm.may_exec() {
++            if metadata.type_.is_directory() {
++                // Executable (i.e., search) DACs are always overridable for directories,
++                // even if the directory has no exec bit set at all.
++                perm -= Permission::MAY_EXEC;
++            } else if perm.may_exec() {
++                // For non-directories, executable DACs are overridable
++                // only when there is at least one exec bit set.
+                 if mode.is_owner_executable()
+                     || mode.is_group_executable()
+                     || mode.is_other_executable()

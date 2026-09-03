@@ -1,0 +1,14 @@
+{
+  "result": "selected",
+  "suite": "ltp",
+  "test": "semctl02",
+  "gvisor_filter": null,
+  "selector_token": "semctl02",
+  "run_vars": "",
+  "pool_file": "test/initramfs/src/conformance/ltp/testcases/all.txt",
+  "pool_entries": ["semctl02"],
+  "enable_action": "uncomment the line",
+  "source": "auto-picked",
+  "rationale": "One localized defect with the stub sitting in plain sight: IpcNamespace::validate_sem_set (kernel/src/ipc/ipc_ns.rs:177) ignores its required_perm argument entirely, warns 'Semaphore doesn't support permission check now', and returns Ok(()), so every SysV semaphore permission check is a no-op. semctl02 is the narrowest test that isolates exactly that: 53 lines, a single assertion, setuid to nobody, semget a set with mode 0 (no rwx bits), then semctl(IPC_STAT) must fail EACCES even though the caller owns the set. It uses only commands Asterinas already implements (semget, IPC_STAT, IPC_RMID), so nothing has to be built from scratch -- the fix is a real permission check against euid/egid vs the set's uid/gid/cuid/cgid and mode bits, plus a CAP_IPC_OWNER override. Measured, not guessed: host pass (LTP 20260529) and fail in Asterinas at e8f2b9ca6 in this run's probe boot. The other semctl failures in that boot were rejected as wider work -- semctl03 needs GETALL and IPC_SET, semctl04 needs IPC_SET, semctl05 needs SETALL, semctl06 needs GETALL, none of which sys_semctl implements (it covers 7 of ~13 commands). Uncovered ground: of ~32 prior runs, none touched SysV IPC beyond semget02, and none touched IPC permission checking.",
+  "notes": "Probed 29 candidates in one boot at e8f2b9ca6; 73 cache records appended (29 host pass, 4 tbroke, 2 tconf, 20 probe fail, 9 probe pass, 9 stale-entry). Nine already pass in Asterinas while still commented out in all.txt and are recorded as stale-entry for a later round to harvest cheaply: semctl09, semop05, sigwait01, sigwaitinfo01, sighold02, rt_sigqueueinfo02, mlock03, readahead01, readahead02. Regression risk for phase 4: semctl07, semget01 and semop03 are already enabled in all.txt and currently pass with permission checks disabled, so a real check must not break them. semctl02 also calls IPC_RMID as nobody during cleanup and owns the set, so the existing euid check in the IPC_RMID arm must keep letting that through. Suite order note: the phase file's no-suite-named rule takes the first suite with a non-empty pool, which is ltp (976 commented entries in all.txt), so gvisor/kselftest/xfstests were not searched even though they are thinner ground. Pre-existing cache defect, not introduced here: 64 contiguous pretty-printed lines around line 817 of select.cache (an access02 host record from an earlier run) violate cache.md's one-line rule; jq -s still reads through them, so no action taken."
+}

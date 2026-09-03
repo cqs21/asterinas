@@ -1,0 +1,16 @@
+{
+  "status": "ok",
+  "target_test": {
+    "name": "open02",
+    "case_results": null,
+    "passed": true
+  },
+  "still_blocked_absent": true,
+  "full_suite": {
+    "suite": "ltp",
+    "config": "default (run_vars empty: CONFORMANCE_TEST_WORKDIR=/tmp, CONFORMANCE_TEST_SELECTOR=, CONFORMANCE_TEST_EXTRA_BLOCKLISTS=)",
+    "passed": true,
+    "summary": "Suite: syscalls, Runtime: 3m 11s, Runs: 544 -- Passed: 2616, Failed: 0, Broken: 0, Skipped: 57, Warnings: 0; 'All conformance tests passed.' and make exited 0",
+    "regressions": []
+  }
+}

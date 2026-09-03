@@ -1,0 +1,229 @@
+diff --git a/kernel/src/device/pty/master.rs b/kernel/src/device/pty/master.rs
+index 85ada2e7f..4d6b76e54 100644
+--- a/kernel/src/device/pty/master.rs
++++ b/kernel/src/device/pty/master.rs
+@@ -155,9 +155,9 @@ impl PerOpenFileOps for PtyMaster {
+         use crate::{device::tty::ioctl_defs::*, util::ioctl::common_defs::GetNumBytesToRead};
+ 
+         dispatch_ioctl!(match raw_ioctl {
+-            GetTermios | GetTermios2 | SetTermios | SetTermios2 | SetTermiosWait
+-            | SetTermios2Wait | SetTermiosFlush | SetTermios2Flush | GetWinSize | SetWinSize
+-            | GetPtyNumber => {
++            GetTermios | GetTermios2 | GetTermio | SetTermios | SetTermios2 | SetTermio
++            | SetTermiosWait | SetTermios2Wait | SetTermioWait | SetTermiosFlush
++            | SetTermios2Flush | SetTermioFlush | GetWinSize | SetWinSize | GetPtyNumber => {
+                 return self.slave.ioctl(raw_ioctl);
+             }
+ 
+diff --git a/kernel/src/device/tty/ioctl_defs.rs b/kernel/src/device/tty/ioctl_defs.rs
+index 34a84b748..e0450520d 100644
+--- a/kernel/src/device/tty/ioctl_defs.rs
++++ b/kernel/src/device/tty/ioctl_defs.rs
+@@ -1,6 +1,6 @@
+ // SPDX-License-Identifier: MPL-2.0
+ 
+-use super::termio::{CTermios, CTermios2, CWinSize};
++use super::termio::{CTermio, CTermios, CTermios2, CWinSize};
+ use crate::util::ioctl::{InData, OutData, ioc};
+ 
+ // Reference: <https://elixir.bootlin.com/linux/v6.18/source/include/uapi/asm-generic/ioctls.h>
+@@ -10,6 +10,11 @@ pub type SetTermios       = ioc!(TCSETS,     0x5402,     InData<CTermios>);
+ pub type SetTermiosWait   = ioc!(TCSETSW,    0x5403,     InData<CTermios>);
+ pub type SetTermiosFlush  = ioc!(TCSETSF,    0x5404,     InData<CTermios>);
+ 
++pub type GetTermio        = ioc!(TCGETA,     0x5405,     OutData<CTermio>);
++pub type SetTermio        = ioc!(TCSETA,     0x5406,     InData<CTermio>);
++pub type SetTermioWait    = ioc!(TCSETAW,    0x5407,     InData<CTermio>);
++pub type SetTermioFlush   = ioc!(TCSETAF,    0x5408,     InData<CTermio>);
++
+ pub type GetTermios2      = ioc!(TCGETS2,    b'T', 0x2A, OutData<CTermios2>);
+ pub type SetTermios2      = ioc!(TCSETS2,    b'T', 0x2B, InData<CTermios2>);
+ pub type SetTermios2Wait  = ioc!(TCSETSW2,   b'T', 0x2C, InData<CTermios2>);
+diff --git a/kernel/src/device/tty/mod.rs b/kernel/src/device/tty/mod.rs
+index f7171a395..efec929b0 100644
+--- a/kernel/src/device/tty/mod.rs
++++ b/kernel/src/device/tty/mod.rs
+@@ -3,7 +3,10 @@
+ use device_id::{DeviceId, MajorId, MinorId};
+ use ostd::sync::LocalIrqDisabled;
+ 
+-use self::{line_discipline::LineDiscipline, termio::CFontOp};
++use self::{
++    line_discipline::LineDiscipline,
++    termio::{CFontOp, CTermio},
++};
+ use crate::{
+     device::{Device, DeviceType, DevtmpfsInodeMeta},
+     events::IoEvents,
+@@ -240,6 +243,12 @@ impl<D: TtyDriver> Tty<D> {
+ 
+                 cmd.write(termios)?;
+             }
++            cmd @ GetTermio => {
++                let ldisc = self.ldisc.lock();
++                let termio = CTermio::from(&**ldisc.termios());
++
++                cmd.write(&termio)?;
++            }
+             cmd @ SetTermios => {
+                 let termios = cmd.read()?;
+ 
+@@ -254,6 +263,14 @@ impl<D: TtyDriver> Tty<D> {
+                 self.driver().on_termios_change(ldisc.termios(), &termios2);
+                 ldisc.set_termios2(termios2);
+             }
++            cmd @ SetTermio => {
++                let termio = cmd.read()?;
++
++                let mut ldisc = self.ldisc.lock();
++                let termios = termio.apply_to(ldisc.termios());
++                self.driver().on_termios_change(ldisc.termios(), &termios);
++                ldisc.set_termios(termios);
++            }
+             cmd @ SetTermiosWait => {
+                 let termios = cmd.read()?;
+ 
+@@ -275,6 +292,15 @@ impl<D: TtyDriver> Tty<D> {
+                 self.driver().on_termios_change(ldisc.termios(), &termios2);
+                 ldisc.set_termios2(termios2);
+             }
++            cmd @ SetTermioWait => {
++                let termio = cmd.read()?;
++
++                // TODO: If applicable, wait for the output buffer to drain. (See comments above.)
++                let mut ldisc = self.ldisc.lock();
++                let termios = termio.apply_to(ldisc.termios());
++                self.driver().on_termios_change(ldisc.termios(), &termios);
++                ldisc.set_termios(termios);
++            }
+             cmd @ SetTermiosFlush => {
+                 let termios = cmd.read()?;
+ 
+@@ -297,6 +323,18 @@ impl<D: TtyDriver> Tty<D> {
+ 
+                 self.pollee.invalidate();
+             }
++            cmd @ SetTermioFlush => {
++                let termio = cmd.read()?;
++
++                // TODO: If applicable, wait for the output buffer to drain. (See comments above.)
++                let mut ldisc = self.ldisc.lock();
++                ldisc.drain_input();
++                let termios = termio.apply_to(ldisc.termios());
++                self.driver().on_termios_change(ldisc.termios(), &termios);
++                ldisc.set_termios(termios);
++
++                self.pollee.invalidate();
++            }
+             cmd @ GetWinSize => {
+                 let winsize = self.ldisc.lock().window_size();
+ 
+diff --git a/kernel/src/device/tty/termio.rs b/kernel/src/device/tty/termio.rs
+index c81f208d2..a604d21f3 100644
+--- a/kernel/src/device/tty/termio.rs
++++ b/kernel/src/device/tty/termio.rs
+@@ -2,6 +2,8 @@
+ 
+ use core::ops::Deref;
+ 
++use ostd::const_assert;
++
+ use crate::prelude::*;
+ 
+ /// A control character; the `cc_t` type in Linux.
+@@ -441,6 +443,82 @@ impl Deref for CTermios2 {
+     }
+ }
+ 
++/// The number of the control characters in the legacy [`CTermio`].
++///
++/// Reference: <https://elixir.bootlin.com/linux/v6.0.9/source/include/uapi/linux/termios.h#L10>.
++const NUM_LEGACY_CTRL_CHARS: usize = 8;
++
++/// The legacy termios; `struct termio` in Linux.
++///
++/// This is the System V-era counterpart of [`CTermios`]. The kernel state is always a
++/// [`CTermios2`]; this type exists only as a userspace representation, which differs by
++/// narrowing the four flag words to 16 bits and carrying only the first
++/// [`NUM_LEGACY_CTRL_CHARS`] control characters. So the conversions below are the entire
++/// difference between the `TCGETA` family and the `TCGETS` family.
++///
++/// Reference: <https://elixir.bootlin.com/linux/v6.0.9/source/include/uapi/linux/termios.h#L12>.
++#[padding_struct]
++#[repr(C)]
++#[derive(Clone, Copy, Debug, Pod)]
++pub struct CTermio {
++    c_iflags: u16,
++    c_oflags: u16,
++    c_cflags: u16,
++    c_lflags: u16,
++    c_line: CCtrlChar,
++    c_cc: [CCtrlChar; NUM_LEGACY_CTRL_CHARS],
++}
++
++// The size is part of the userspace ABI: it is how many bytes `TCGETA` copies out and `TCSETA`
++// copies in. Note that the legacy ioctl numbers do not encode a size, so nothing else checks it.
++const_assert!(size_of::<CTermio>() == 18);
++
++impl From<&CTermios> for CTermio {
++    fn from(termios: &CTermios) -> Self {
++        let mut termio: Self = FromZeros::new_zeroed();
++
++        termio.c_iflags = termios.c_iflags.bits() as u16;
++        termio.c_oflags = termios.c_oflags.bits() as u16;
++        termio.c_cflags = termios.c_cflags.0 as u16;
++        termio.c_lflags = termios.c_lflags.bits() as u16;
++        termio.c_line = termios.c_line;
++        termio
++            .c_cc
++            .copy_from_slice(&termios.c_cc[..NUM_LEGACY_CTRL_CHARS]);
++
++        termio
++    }
++}
++
++impl CTermio {
++    /// Returns the [`CTermios`] that results from applying `self` to `termios`.
++    ///
++    /// Only the low 16 bits of each flag word and the first [`NUM_LEGACY_CTRL_CHARS`] control
++    /// characters can be expressed in the legacy representation, so the rest of `termios` is
++    /// carried over unchanged. This mirrors Linux's `user_termio_to_kernel_termios`.
++    pub(super) fn apply_to(&self, termios: &CTermios) -> CTermios {
++        /// Replaces the low 16 bits of a flag word, keeping the high 16 bits.
++        fn merge_low_bits<T: Pod>(old: &T, new_low_bits: u16) -> T {
++            const { assert!(size_of::<T>() == size_of::<u32>()) };
++
++            let old_bits = u32::from_bytes(old.as_bytes());
++            let bits = (old_bits & !(u16::MAX as u32)) | (new_low_bits as u32);
++            T::from_bytes(bits.as_bytes())
++        }
++
++        let mut termios = *termios;
++
++        termios.c_iflags = merge_low_bits(&termios.c_iflags, self.c_iflags);
++        termios.c_oflags = merge_low_bits(&termios.c_oflags, self.c_oflags);
++        termios.c_cflags = merge_low_bits(&termios.c_cflags, self.c_cflags);
++        termios.c_lflags = merge_low_bits(&termios.c_lflags, self.c_lflags);
++        termios.c_line = self.c_line;
++        termios.c_cc[..NUM_LEGACY_CTRL_CHARS].copy_from_slice(&self.c_cc);
++
++        termios
++    }
++}
++
+ /// A window size; `struct winsize` in Linux.
+ ///
+ /// Reference: <https://elixir.bootlin.com/linux/v6.0.9/source/include/uapi/asm-generic/termios.h#L15>.
+diff --git a/test/initramfs/src/conformance/ltp/testcases/all.txt b/test/initramfs/src/conformance/ltp/testcases/all.txt
+index 5bef8afbd..bba943b50 100644
+--- a/test/initramfs/src/conformance/ltp/testcases/all.txt
++++ b/test/initramfs/src/conformance/ltp/testcases/all.txt
+@@ -588,7 +588,7 @@ getxattr01
+ #ioctl02 ioctl02 -d /dev/tty0
+ 
+ # Introducing ioctl tests for all /dev/tty* devices
+-# ioctl01
++ioctl01
+ # ioctl02
+ # ioctl03
+ # ioctl04

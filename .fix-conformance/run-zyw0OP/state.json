@@ -1,0 +1,21 @@
+{
+  "run_id": "run-zyw0OP",
+  "suite": "ltp",
+  "test": "epoll_ctl05",
+  "gvisor_filter": null,
+  "worktree": "/root/asterinas/.worktrees/run-zyw0OP",
+  "osdk_bin": "/root/asterinas/.worktrees/run-zyw0OP/.osdk/bin",
+  "branch": "fix-ltp-epoll_ctl05-zyw0OP",
+  "base_commit": "e8f2b9ca6",
+  "vnc_port": 7301,
+  "round": 2,
+  "rounds_total": 5,
+  "phases": {
+    "select": "done",
+    "diagnose": "done",
+    "fix": "done",
+    "verify": "done",
+    "commit": "done"
+  },
+  "outcome": "committed"
+}

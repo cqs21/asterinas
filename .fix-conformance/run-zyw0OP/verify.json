@@ -1,0 +1,17 @@
+{
+  "status": "ok",
+  "target_test": {
+    "name": "epoll_ctl05",
+    "case_results": null,
+    "passed": true
+  },
+  "still_blocked_absent": true,
+  "full_suite": {
+    "suite": "ltp",
+    "config": "default (no workdir override) -- select.json run_vars is empty, since the pool entry comes from all.txt; empty CONFORMANCE_TEST_SELECTOR so the harness applies the blocklist (the CI path)",
+    "passed": true,
+    "summary": "Suite: syscalls, Runtime: 3m 10s, Runs: 544 -- Passed: 2596, Failed: 0, Broken: 0, Skipped: 52, Warnings: 0. make run_kernel printed 'All conformance tests passed.' and exited 0.",
+    "regressions": []
+  },
+  "notes": "Pool edit: test/initramfs/src/conformance/ltp/testcases/all.txt line 187, '# epoll_ctl05' -> 'epoll_ctl05'. Pre-boot git diff -U0 confirmed exactly one changed line, equal to pool_entries; epoll_ctl02 (184) and epoll_ctl04 (186) stay commented, as select.json requires. Commit is 2 files: kernel/src/events/epoll/file.rs (+83/-1) and all.txt (+1/-1).\n\nTarget: 'epoll_ctl05: pass (0.012s)' at qemu.log:99. Its presence also proves the log is from the post-edit run rather than a stale one.\n\nstill_blocked_absent: gvisor_filter is null and LTP's unit of work is the whole test, so the analogous check is that entries left commented in all.txt did not run. grep for '^(epoll_ctl02|epoll_ctl04|epoll_wait02|epoll_wait05|epoll_wait06|epoll_pwait03):' in qemu.log returns 0 matches -- the packaging filter still excludes them, so the edit took out exactly one line.\n\nNo regressions: Failed: 0 and Broken: 0 across the whole suite, and grep for per-case ': fail|broken' lines returns 0, so nothing fails at all -- 'no test that passed before now fails' holds by construction rather than by diffing against a baseline. Runs went 543 -> 544, the one added test. The 17 per-case 'skip' lines (52 skipped assertions) are unchanged suite behaviour; epoll_pwait06 skips as it did before, and skip is not a failure in the harness's pass/fail rule.\n\nNeighbouring epoll tests all still pass at qemu.log:92-107, including epoll_ctl01/03, epoll01, epoll_create01/02, epoll_create1_01/02, epoll_wait01/03/04/07 and epoll_pwait01/02/04/05 -- the legal-nesting and notification paths the fix touches. epoll_ctl05's own setup builds a 5-deep chain, and broken == 0 pins that legal nesting still returns 0."
+}

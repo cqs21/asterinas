@@ -1,0 +1,16 @@
+{
+  "commit": "5f3a09bd5aada27113fba5fe8a3242040cc65b7c",
+  "branch": "fix-ltp-semctl02-QEKFRT",
+  "worktree": "/root/asterinas/.worktrees/run-QEKFRT",
+  "subject": "Check access permissions on System V IPC objects",
+  "files": [
+    "kernel/src/ipc/mod.rs",
+    "kernel/src/ipc/ipc_ns.rs",
+    "kernel/src/ipc/semaphore/system_v/mod.rs",
+    "kernel/src/ipc/semaphore/system_v/sem.rs",
+    "kernel/src/syscall/semctl.rs",
+    "kernel/src/syscall/semget.rs",
+    "test/initramfs/src/conformance/ltp/testcases/all.txt"
+  ],
+  "notes": "make format changed nothing (tree was already formatted from phase 3), and make check passed with exit 0 -- trailing-whitespace scan, workspace-lints check, format_all.sh --check, clippy_check.sh workspace (aster-kernel and every comps/libs crate checked with no warnings), nixfmt --check ./distro, test/initramfs check, test/nixos check, and typos. No lint fix was needed, so no round was spent. Both commands were run from the worktree with PATH=<osdk_bin>:$PATH and CARGO_OSDK=<osdk_bin>/cargo-osdk per state.json.\n\nStaging was by explicit path, all seven from fix.json's changed_files, so nothing incidental could be picked up: git diff --cached --name-only listed exactly those seven and git status showed no other modified path. test/initramfs/src/regression/ is untouched -- no repro file was ever created there, confirmed with git status on that directory and a --untracked-files=all scan that found nothing outside .osdk/. The all.txt edit in the commit is the single intended line, 1333 '# semctl02' -> 'semctl02'.\n\nOne commit on the branch above base e8f2b9ca6, containing the kernel change and the pool edit together per repo convention. Not pushed, no PR, nothing amended.\n\nWorking tree after the commit holds only untracked .osdk/, which is the cargo-osdk build artifact this run's osdk_bin in state.json points at. It is not tracked and is absent from .gitignore, which is why it shows as '??' rather than being hidden; it predates this phase (phase 4 reported it too) and is not part of the change, so it was deliberately left in place.\n\nEnvironment: the dubious-ownership failure carried over from phase 4 persisted, so every git invocation used -c safe.directory=/root/asterinas/.worktrees/run-QEKFRT. Global git config was not modified. Note that make format and make check are themselves immune -- the Makefile passes --git-dir=$PWD/.git to git for exactly this reason, per its own comments at lines 428 and 446.\n\nCommit message content, mapped to its sources: root cause is diagnose.json's stub description; the invariant paragraph is diagnose.json's invariant, with linux_reference's ipcperms() cited as the reason the exclusive triplet selection is correct rather than as the justification on its own; the enforcement paragraph is fix.json's layer, stating both where the predicate lives and why not SemaphoreSet or the sys_sem* handlers, so a reviewer can judge the placement; the corrected-call-sites and left-unchanged paragraphs come from fix.json's generalizes, since semop's empty request and semget's hardcoded ALTER|READ are changes a reviewer would otherwise read as unrelated scope creep. gvisor_filter is null, so no case-subset note was needed. Subject describes the kernel change, not the test, per the phase file."
+}

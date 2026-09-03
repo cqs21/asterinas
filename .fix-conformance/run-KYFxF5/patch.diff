@@ -1,0 +1,82 @@
+diff --git a/kernel/src/fs/file/file_handle.rs b/kernel/src/fs/file/file_handle.rs
+index c198f25a2..03da12560 100644
+--- a/kernel/src/fs/file/file_handle.rs
++++ b/kernel/src/fs/file/file_handle.rs
+@@ -187,6 +187,15 @@ impl dyn FileLike {
+     /// `O_ASYNC` is ignored if it is not supported. An attempt to enable
+     /// unsupported `O_DIRECT` returns `EINVAL`.
+     pub fn update_status_flags(&self, mut update: StatusFlagsUpdate) -> Result<()> {
++        // O_NOATIME requests that read operations not update the file's last-access timestamp.
++        // That is an owner-only privilege, and requires CAP_FOWNER when the caller does not own
++        // the underlying inode. Checked only on the clear-to-set transition.
++        if update.flags().contains(StatusFlags::O_NOATIME)
++            && !self.status_flags().contains(StatusFlags::O_NOATIME)
++        {
++            self.path().inode().check_owner_or_capable()?;
++        }
++
+         let settable_flags = self.settable_status_flags();
+         if update.flags().contains(StatusFlags::O_DIRECT)
+             && !settable_flags.contains(StatusFlags::O_DIRECT)
+diff --git a/kernel/src/fs/file/inode_handle.rs b/kernel/src/fs/file/inode_handle.rs
+index e7c95f61f..9e047050e 100644
+--- a/kernel/src/fs/file/inode_handle.rs
++++ b/kernel/src/fs/file/inode_handle.rs
+@@ -44,6 +44,15 @@ impl InodeHandle {
+             // object itself".
+             // Reference: <https://man7.org/linux/man-pages/man2/openat.2.html>
+             inode.check_permission(access_mode.into())?;
++
++            // O_NOATIME requests that read operations do not update the file's last-access
++            // timestamp. That is an owner-only privilege: the caller must own the inode, or hold
++            // CAP_FOWNER. The rule applies to files, directories, and device nodes alike, and
++            // fires after the access-mode permission check so that EACCES (unreadable file) takes
++            // precedence over EPERM (insufficient privilege for O_NOATIME).
++            if status_flags.contains(StatusFlags::O_NOATIME) {
++                inode.check_owner_or_capable()?;
++            }
+         }
+ 
+         Self::new_unchecked_access(path, access_mode, status_flags)
+diff --git a/kernel/src/fs/vfs/fs_apis/inode.rs b/kernel/src/fs/vfs/fs_apis/inode.rs
+index 6cdbd36ff..e3bca814c 100644
+--- a/kernel/src/fs/vfs/fs_apis/inode.rs
++++ b/kernel/src/fs/vfs/fs_apis/inode.rs
+@@ -626,6 +626,37 @@ pub trait Inode: Any + FileOps + Send + Sync {
+ 
+         Ok(())
+     }
++
++    /// Checks that the current user owns this inode, or is privileged enough to act as if it
++    /// did.
++    ///
++    /// Ownership is decided by "fsuid", as in [`Self::check_permission`], and `CAP_FOWNER`
++    /// grants the same authority as ownership. The file mode is deliberately not consulted:
++    /// this answers "may the caller exercise owner-only privileges on this inode", which is a
++    /// different question from whether the caller may read, write or execute it.
++    ///
++    /// Similar to Linux's `inode_owner_or_capable`.
++    fn check_owner_or_capable(&self) -> Result<()> {
++        let Some(task) = Task::current() else {
++            return Ok(());
++        };
++        let Some(posix_thread) = task.as_posix_thread() else {
++            return Ok(());
++        };
++
++        if self.metadata()?.uid == posix_thread.credentials().fsuid() {
++            return Ok(());
++        }
++
++        let thread_local = task.as_thread_local().unwrap();
++        let user_ns = thread_local.borrow_user_ns();
++        lsm_hooks::on_capable(lsm_hooks::CapableContext::new(
++            user_ns.as_ref(),
++            posix_thread,
++            CapSet::FOWNER,
++        ))
++        .map_err(|_| Error::with_message(Errno::EPERM, "the caller does not own the inode"))
++    }
+ }
+ 
+ fn has_dac_override_capability(task: &CurrentTask, posix_thread: &PosixThread) -> bool {

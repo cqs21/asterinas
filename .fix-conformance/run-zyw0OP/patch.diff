@@ -1,0 +1,116 @@
+diff --git a/kernel/src/events/epoll/file.rs b/kernel/src/events/epoll/file.rs
+index 7ebd08eb8..5f2c4995c 100644
+--- a/kernel/src/events/epoll/file.rs
++++ b/kernel/src/events/epoll/file.rs
+@@ -2,7 +2,7 @@
+ 
+ use core::{borrow::Borrow, fmt::Display, time::Duration};
+ 
+-use keyable_arc::KeyableWeak;
++use keyable_arc::{KeyableArc, KeyableWeak};
+ 
+ use super::{
+     EpollCtl, EpollEvent, EpollFlags,
+@@ -25,6 +25,16 @@ use crate::{
+     util::ioctl::RawIoctl,
+ };
+ 
++/// A global lock that serializes the addition of epoll-to-epoll interest entries.
++///
++/// Without it, two threads adding an epoll file `A` into `B` and `B` into `A` could both observe an
++/// acyclic interest graph and both proceed, building a cycle that neither of them saw. The lock is
++/// only taken when the file being added is itself an epoll file, so ordinary files never contend on
++/// it.
++///
++/// Reference: <https://elixir.bootlin.com/linux/v6.17/source/fs/eventpoll.c#L61-L68>.
++static EPOLL_NESTED_ADD_LOCK: Mutex<()> = Mutex::new(());
++
+ /// A file-like object that provides epoll API.
+ ///
+ /// Conceptually, we maintain two lists: one consists of all interesting files,
+@@ -75,6 +85,24 @@ impl EpollFile {
+ 
+         match *cmd {
+             EpollCtl::Add(fd, ep_event, ep_flags) => {
++                // Adding a non-epoll file can never create a cycle in the interest graph, since
++                // such a file monitors nothing. So only epoll files need the check below, which
++                // mirrors Linux's `is_file_epoll` early-out.
++                let _nested_guard = if let Some(target) = file.downcast_ref::<EpollFile>() {
++                    let guard = EPOLL_NESTED_ADD_LOCK.lock();
++
++                    if self.is_reachable_from(target) {
++                        return_errno_with_message!(
++                            Errno::ELOOP,
++                            "the file would create a cycle in the epoll interest graph"
++                        );
++                    }
++
++                    Some(guard)
++                } else {
++                    None
++                };
++
+                 self.add_interest(fd, file, ep_event, ep_flags)
+             }
+             EpollCtl::Del(fd) => self.del_interest(fd, Arc::downgrade(&file).into()),
+@@ -84,6 +112,60 @@ impl EpollFile {
+         }
+     }
+ 
++    /// Returns whether this epoll file is reachable from `from` in the epoll interest graph.
++    ///
++    /// The interest graph is the directed graph whose nodes are epoll files and whose edges run
++    /// from an epoll file to each epoll file in its interest list. Adding an edge from this epoll
++    /// file to `from` would close a cycle exactly if this method returns true.
++    ///
++    /// The walk starts at `from`'s interest list rather than at `from` itself, so `from == self` is
++    /// _not_ reported as reachable: a file description registered in its own interest list is a
++    /// distinct rule with a distinct error code (`EINVAL`), enforced before this check.
++    ///
++    /// Reference: <https://elixir.bootlin.com/linux/v6.17/source/fs/eventpoll.c#L2153-L2190>.
++    fn is_reachable_from(&self, from: &EpollFile) -> bool {
++        // Nodes whose interest lists are yet to be walked, and nodes already walked. Both hold
++        // strong references, so that a file cannot be dropped and its address reused by another
++        // epoll file while the walk is in progress.
++        let mut pending = from.epoll_files_in_interest();
++        let mut visited = BTreeSet::new();
++
++        while let Some(node) = pending.pop() {
++            let Some(epoll_file) = node.downcast_ref::<EpollFile>() else {
++                continue;
++            };
++
++            if core::ptr::eq(epoll_file, self) {
++                return true;
++            }
++
++            // The graph may already contain a cycle built before this check existed, and an
++            // acyclic graph can still reach one node by several paths. Either way, nodes must not
++            // be expanded twice, or the walk itself may not terminate.
++            if !visited.insert(KeyableArc::from(node.clone())) {
++                continue;
++            }
++
++            pending.extend(epoll_file.epoll_files_in_interest());
++        }
++
++        false
++    }
++
++    /// Collects the epoll files in the interest list of this epoll file.
++    ///
++    /// Entries whose files have been dropped are skipped, as are entries that are not epoll files:
++    /// neither can contribute an edge to the epoll interest graph.
++    fn epoll_files_in_interest(&self) -> Vec<Arc<dyn FileLike>> {
++        self.interest
++            .lock()
++            .iter()
++            .filter_map(|EntryHolder(entry)| entry.file_weak().upgrade())
++            .map(Arc::<dyn FileLike>::from)
++            .filter(|file| file.downcast_ref::<EpollFile>().is_some())
++            .collect()
++    }
++
+     fn add_interest(
+         &self,
+         fd: FileDesc,

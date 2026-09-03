@@ -1,0 +1,12 @@
+{
+  "commit": "5df48dc81555b86734dc1b6cb29073bf0084d055",
+  "branch": "fix-ltp-open02-KYFxF5",
+  "worktree": "/root/asterinas/.worktrees/run-KYFxF5",
+  "subject": "Require owner or `CAP_FOWNER` for `O_NOATIME`",
+  "files": [
+    "kernel/src/fs/file/file_handle.rs",
+    "kernel/src/fs/file/inode_handle.rs",
+    "kernel/src/fs/vfs/fs_apis/inode.rs",
+    "test/initramfs/src/conformance/ltp/testcases/all.txt"
+  ]
+}

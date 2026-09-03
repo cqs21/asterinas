@@ -1,0 +1,428 @@
+diff --git a/kernel/src/ipc/ipc_ns.rs b/kernel/src/ipc/ipc_ns.rs
+index 56246b01d..924ee0de6 100644
+--- a/kernel/src/ipc/ipc_ns.rs
++++ b/kernel/src/ipc/ipc_ns.rs
+@@ -13,12 +13,9 @@ use aster_rights::ReadOp;
+ use spin::Once;
+ 
+ use super::{
+-    IPC_PRIVATE, IpcFlags, IpcId, IpcKey,
++    IPC_PRIVATE, IpcFlags, IpcId, IpcKey, PermissionMode,
+     ipc_ids::IpcIds,
+-    semaphore::system_v::{
+-        PermissionMode,
+-        sem_set::{SEMMNI, SemaphoreSet},
+-    },
++    semaphore::system_v::sem_set::{SEMMNI, SemaphoreSet},
+ };
+ use crate::{
+     fs::pseudofs::{NsCommonOps, NsType, StashedDentry},
+@@ -91,19 +88,34 @@ impl IpcNamespace {
+     }
+ 
+     /// Calls `op` with the semaphore set identified by `semid`.
++    ///
++    /// The thread must be allowed `required_perm` on the set, or `EACCES` is returned.
+     pub fn with_sem_set<T, F>(
+         &self,
+         semid: IpcId,
+         required_perm: PermissionMode,
++        posix_thread: &PosixThread,
+         op: F,
+     ) -> Result<T>
+     where
+         F: FnOnce(&SemaphoreSet) -> Result<T>,
+     {
+-        self.sem_ids.with(semid, |sem_set| {
+-            Self::validate_sem_set(sem_set, required_perm)?;
++        self.with_sem_set_unchecked(semid, |sem_set| {
++            self.validate_sem_set(sem_set, required_perm, posix_thread)?;
+             op(sem_set)
+-        })?
++        })
++    }
++
++    /// Calls `op` with the semaphore set identified by `semid`, checking no permission.
++    ///
++    /// This is only for operations that the IPC code performs on a caller's behalf after the
++    /// access has already been authorized, such as withdrawing a pending semaphore operation.
++    /// Anything acting on a request from userspace must use [`Self::with_sem_set`] instead.
++    pub(in crate::ipc) fn with_sem_set_unchecked<T, F>(&self, semid: IpcId, op: F) -> Result<T>
++    where
++        F: FnOnce(&SemaphoreSet) -> Result<T>,
++    {
++        self.sem_ids.with(semid, op)?
+     }
+ 
+     /// Removes the semaphore set identified by `semid`.
+@@ -121,8 +133,10 @@ impl IpcNamespace {
+         num_sems: usize,
+         flags: IpcFlags,
+         mode: u16,
+-        credentials: Credentials<ReadOp>,
++        posix_thread: &PosixThread,
+     ) -> Result<IpcId> {
++        let credentials = posix_thread.credentials();
++
+         if key == IPC_PRIVATE {
+             return self.create_sem_set(num_sems, mode, credentials);
+         }
+@@ -142,8 +156,6 @@ impl IpcNamespace {
+                     return_errno_with_message!(Errno::ENOENT, "the key does not exist");
+                 }
+ 
+-                Self::validate_sem_set(sem_set, PermissionMode::ALTER | PermissionMode::READ)?;
+-
+                 if flags.contains(IpcFlags::IPC_CREAT | IpcFlags::IPC_EXCL) {
+                     return_errno_with_message!(
+                         Errno::EEXIST,
+@@ -155,6 +167,11 @@ impl IpcNamespace {
+                     return_errno_with_message!(Errno::EINVAL, "the semaphore set is too small");
+                 }
+ 
++                // The access an existing set is opened with is requested by the caller's own
++                // mode bits, and is checked only after the two errors above, as Linux's
++                // `ipcget_public()` does.
++                self.validate_sem_set(sem_set, PermissionMode::from_mode(mode), posix_thread)?;
++
+                 Ok(semid)
+             }) {
+                 Err(_id_not_exist) if flags.contains(IpcFlags::IPC_CREAT) => {}
+@@ -174,13 +191,15 @@ impl IpcNamespace {
+         }
+     }
+ 
+-    fn validate_sem_set(_sem_set: &SemaphoreSet, required_perm: PermissionMode) -> Result<()> {
+-        if !required_perm.is_empty() {
+-            // TODO: Support permission check
+-            warn!("Semaphore doesn't support permission check now");
+-        }
+-
+-        Ok(())
++    fn validate_sem_set(
++        &self,
++        sem_set: &SemaphoreSet,
++        required_perm: PermissionMode,
++        posix_thread: &PosixThread,
++    ) -> Result<()> {
++        sem_set
++            .permission()
++            .check_access(required_perm, &self.owner, posix_thread)
+     }
+ 
+     /// Creates a new semaphore set and returns its ID.
+diff --git a/kernel/src/ipc/mod.rs b/kernel/src/ipc/mod.rs
+index 8c57c35c2..ff91d01c2 100644
+--- a/kernel/src/ipc/mod.rs
++++ b/kernel/src/ipc/mod.rs
+@@ -1,8 +1,14 @@
+ // SPDX-License-Identifier: MPL-2.0
+ 
++use aster_rights::ReadOp;
++
+ use crate::{
+     prelude::*,
+-    process::{Gid, Uid},
++    process::{
++        Credentials, Gid, Uid, UserNamespace, credentials::capabilities::CapSet,
++        posix_thread::PosixThread,
++    },
++    security::lsm::hooks as lsm_hooks,
+ };
+ 
+ mod ipc_ids;
+@@ -36,6 +42,33 @@ bitflags! {
+     }
+ }
+ 
++bitflags! {
++    /// The access an operation requires on a System V IPC object.
++    ///
++    /// The bits are the read/write/execute triplet _folded_ into the low three bits, matching
++    /// the `requested_mode` of Linux's `ipcperms()`. They are compared against a single triplet
++    /// of the object's mode, so they must not be confused with the object's mode itself.
++    pub struct PermissionMode: u16{
++        /// Executing, which is meaningless for every IPC object type but is kept so that
++        /// folding a user-supplied mode never silently drops a bit.
++        const EXEC   = 0o001;
++        const ALTER  = 0o002;
++        const WRITE  = 0o002;
++        const READ   = 0o004;
++    }
++}
++
++impl PermissionMode {
++    /// Folds the read/write/execute triplets of `mode` into the access they request.
++    ///
++    /// This mirrors `requested_mode = (flag >> 6) | (flag >> 3) | flag` in Linux's
++    /// `ipcperms()`, and is how a user-supplied mode (e.g., the low nine bits of `semflg`)
++    /// becomes a request.
++    pub fn from_mode(mode: u16) -> Self {
++        Self::from_bits_truncate((mode >> 6) | (mode >> 3) | mode)
++    }
++}
++
+ // TODO: Add support for the commented-out commands below
+ #[expect(non_camel_case_types)]
+ #[repr(i32)]
+@@ -99,6 +132,57 @@ impl IpcPermission {
+         self.mode
+     }
+ 
++    /// Checks whether `posix_thread` may perform an operation requiring `required_perm`.
++    ///
++    /// The requested access must be granted by exactly _one_ triplet of the mode, selected by
++    /// the caller's credentials: the owner triplet if the caller's EUID owns or created the
++    /// object, otherwise the group triplet if the caller belongs to the object's owning or
++    /// creating group, otherwise the other triplet. The selection is exclusive, so owning an
++    /// object grants no access of its own: an object whose mode is zero denies its owner even
++    /// though the group or other triplets may be permissive.
++    ///
++    /// A caller holding `CAP_IPC_OWNER` in `user_ns` is exempt from the test entirely.
++    ///
++    /// This method must not be used for removing an object or changing its ownership. Those
++    /// ignore the mode and require ownership or `CAP_SYS_ADMIN` instead.
++    ///
++    /// Reference: <https://github.com/torvalds/linux/blob/v6.8/ipc/util.c#L553>.
++    pub fn check_access(
++        &self,
++        required_perm: PermissionMode,
++        user_ns: &UserNamespace,
++        posix_thread: &PosixThread,
++    ) -> Result<()> {
++        let credentials = posix_thread.credentials();
++
++        let euid = credentials.euid();
++        let granted_perm = if euid == self.uid || euid == self.cuid {
++            self.mode >> 6
++        } else if is_in_group(&credentials, self.gid) || is_in_group(&credentials, self.cguid) {
++            self.mode >> 3
++        } else {
++            self.mode
++        };
++
++        if required_perm.bits() & !granted_perm & 0o7 == 0 {
++            return Ok(());
++        }
++
++        // The capability is checked only after the mode denies the access, so that a thread
++        // without it still gets `EACCES` instead of the `EPERM` reported by the hook.
++        lsm_hooks::on_capable(lsm_hooks::CapableContext::new(
++            user_ns,
++            posix_thread,
++            CapSet::IPC_OWNER,
++        ))
++        .map_err(|_| {
++            Error::with_message(
++                Errno::EACCES,
++                "the thread does not have permission to access the IPC object",
++            )
++        })
++    }
++
+     pub(self) fn new_sem_perm(key: IpcKey, uid: Uid, gid: Gid, mode: u16) -> Self {
+         Self {
+             key,
+@@ -110,3 +194,13 @@ impl IpcPermission {
+         }
+     }
+ }
++
++/// Returns whether the credentials belong to the group `gid`.
++///
++/// Like Linux's `in_group_p()`, this tests the FSGID rather than the EGID, in addition to the
++/// supplementary groups.
++///
++/// Reference: <https://github.com/torvalds/linux/blob/v6.8/kernel/groups.c#L242>.
++fn is_in_group(credentials: &Credentials<ReadOp>, gid: Gid) -> bool {
++    credentials.fsgid() == gid || credentials.groups().contains(&gid)
++}
+diff --git a/kernel/src/ipc/semaphore/system_v/mod.rs b/kernel/src/ipc/semaphore/system_v/mod.rs
+index d3403dac7..6de7b161a 100644
+--- a/kernel/src/ipc/semaphore/system_v/mod.rs
++++ b/kernel/src/ipc/semaphore/system_v/mod.rs
+@@ -2,15 +2,5 @@
+ 
+ //! System V semaphore.
+ 
+-use bitflags::bitflags;
+-
+ pub mod sem;
+ pub mod sem_set;
+-
+-bitflags! {
+-    pub struct PermissionMode: u16{
+-        const ALTER  = 0o002;
+-        const WRITE  = 0o002;
+-        const READ   = 0o004;
+-    }
+-}
+diff --git a/kernel/src/ipc/semaphore/system_v/sem.rs b/kernel/src/ipc/semaphore/system_v/sem.rs
+index 165f9cdf2..263c06ce9 100644
+--- a/kernel/src/ipc/semaphore/system_v/sem.rs
++++ b/kernel/src/ipc/semaphore/system_v/sem.rs
+@@ -9,12 +9,9 @@ use core::{
+ use atomic_integer_wrapper::define_atomic_version_of_integer_like_type;
+ use ostd::sync::{Waiter, Waker};
+ 
+-use super::{
+-    PermissionMode,
+-    sem_set::{SEMVMX, SemSetInner},
+-};
++use super::sem_set::{SEMVMX, SemSetInner};
+ use crate::{
+-    ipc::{IpcFlags, IpcId, IpcNamespace},
++    ipc::{IpcFlags, IpcId, IpcNamespace, PermissionMode},
+     prelude::*,
+     process::Pid,
+ };
+@@ -196,8 +193,14 @@ pub fn sem_op(
+ 
+     let is_alter = check_alter_sop(&sops);
+ 
+-    // TODO: Support permission check
+-    warn!("Semaphore operation doesn't support permission check now");
++    // Altering a semaphore requires write access, while merely waiting on one requires read
++    // access, as in Linux's `do_semtimedop()`.
++    let perm = if is_alter {
++        PermissionMode::ALTER
++    } else {
++        PermissionMode::READ
++    };
++    let thread = ctx.posix_thread;
+ 
+     enum SemOpResult {
+         Completed {
+@@ -209,7 +212,7 @@ pub fn sem_op(
+         },
+     }
+ 
+-    let sem_op_result = ipc_ns.with_sem_set(sem_id, PermissionMode::empty(), |sem_set| {
++    let sem_op_result = ipc_ns.with_sem_set(sem_id, perm, thread, |sem_set| {
+         let mut pending_op = PendingOp::new(sops, ctx.process.pid(), sem_set.num_sems())?;
+ 
+         let mut inner = sem_set.inner();
+@@ -285,8 +288,10 @@ pub fn sem_op(
+     };
+ 
+     if matches!(status.load(Ordering::Relaxed), Status::Pending) {
+-        // Remove and check again to avoid race conditions
+-        let _ = ipc_ns.with_sem_set(sem_id, PermissionMode::empty(), |sem_set| {
++        // Remove and check again to avoid race conditions.
++        // This only withdraws the operation authorized above, so it is not checked again and
++        // must not fail even if the access has since been revoked.
++        let _ = ipc_ns.with_sem_set_unchecked(sem_id, |sem_set| {
+             let mut inner = sem_set.inner();
+             let pending_ops = if is_alter {
+                 &mut inner.pending_alter
+diff --git a/kernel/src/syscall/semctl.rs b/kernel/src/syscall/semctl.rs
+index 3216c96d8..2e7ce9944 100644
+--- a/kernel/src/syscall/semctl.rs
++++ b/kernel/src/syscall/semctl.rs
+@@ -4,10 +4,7 @@ use ostd::mm::VmIo;
+ 
+ use super::SyscallReturn;
+ use crate::{
+-    ipc::{
+-        IpcControlCmd, IpcId,
+-        semaphore::system_v::{PermissionMode, sem::Semaphore},
+-    },
++    ipc::{IpcControlCmd, IpcId, PermissionMode, semaphore::system_v::sem::Semaphore},
+     prelude::*,
+     process::Pid,
+ };
+@@ -50,7 +47,7 @@ pub fn sys_semctl(
+             })?;
+         }
+         IpcControlCmd::IPC_STAT => {
+-            ipc_ns.with_sem_set(semid, PermissionMode::READ, |sem_set| {
++            ipc_ns.with_sem_set(semid, PermissionMode::READ, ctx.posix_thread, |sem_set| {
+                 let semid_ds = sem_set.semid_ds();
+                 Ok(ctx.user_space().write_val(arg as Vaddr, &semid_ds)?)
+             })?;
+@@ -59,9 +56,10 @@ pub fn sys_semctl(
+             fn sem_pid(sem: &Semaphore) -> Pid {
+                 sem.latest_modified_pid()
+             }
+-            let pid: Pid = ipc_ns.with_sem_set(semid, PermissionMode::READ, |sem_set| {
+-                sem_set.get(semnum as usize, sem_pid)
+-            })?;
++            let pid: Pid =
++                ipc_ns.with_sem_set(semid, PermissionMode::READ, ctx.posix_thread, |sem_set| {
++                    sem_set.get(semnum as usize, sem_pid)
++                })?;
+ 
+             return Ok(SyscallReturn::Return(pid as isize));
+         }
+@@ -69,23 +67,26 @@ pub fn sys_semctl(
+             fn sem_val(sem: &Semaphore) -> i32 {
+                 sem.val()
+             }
+-            let val: i32 = ipc_ns.with_sem_set(semid, PermissionMode::READ, |sem_set| {
+-                sem_set.get(semnum as usize, sem_val)
+-            })?;
++            let val: i32 =
++                ipc_ns.with_sem_set(semid, PermissionMode::READ, ctx.posix_thread, |sem_set| {
++                    sem_set.get(semnum as usize, sem_val)
++                })?;
+ 
+             return Ok(SyscallReturn::Return(val as isize));
+         }
+         IpcControlCmd::SEM_GETNCNT => {
+-            let cnt: usize = ipc_ns.with_sem_set(semid, PermissionMode::READ, |sem_set| {
+-                sem_set.pending_decrease_count(semnum as usize)
+-            })?;
++            let cnt: usize =
++                ipc_ns.with_sem_set(semid, PermissionMode::READ, ctx.posix_thread, |sem_set| {
++                    sem_set.pending_decrease_count(semnum as usize)
++                })?;
+ 
+             return Ok(SyscallReturn::Return(cnt as isize));
+         }
+         IpcControlCmd::SEM_GETZCNT => {
+-            let cnt: usize = ipc_ns.with_sem_set(semid, PermissionMode::READ, |sem_set| {
+-                sem_set.pending_zero_count(semnum as usize)
+-            })?;
++            let cnt: usize =
++                ipc_ns.with_sem_set(semid, PermissionMode::READ, ctx.posix_thread, |sem_set| {
++                    sem_set.pending_zero_count(semnum as usize)
++                })?;
+ 
+             return Ok(SyscallReturn::Return(cnt as isize));
+         }
+@@ -93,7 +94,7 @@ pub fn sys_semctl(
+             // In `SEM_SETVAL`, the argument is parsed as an `i32`.
+             let val = arg as i32;
+ 
+-            ipc_ns.with_sem_set(semid, PermissionMode::ALTER, |sem_set| {
++            ipc_ns.with_sem_set(semid, PermissionMode::ALTER, ctx.posix_thread, |sem_set| {
+                 sem_set.setval(semnum as usize, val, ctx.process.pid())
+             })?;
+         }
+diff --git a/kernel/src/syscall/semget.rs b/kernel/src/syscall/semget.rs
+index 553b02009..39baa0983 100644
+--- a/kernel/src/syscall/semget.rs
++++ b/kernel/src/syscall/semget.rs
+@@ -16,8 +16,7 @@ pub fn sys_semget(key: i32, nsems: i32, semflg: i32, ctx: &Context) -> Result<Sy
+     let ns_proxy = ctx.thread_local.borrow_ns_proxy();
+     let ipc_ns = ns_proxy.unwrap().ipc_ns();
+ 
+-    let credentials = ctx.posix_thread.credentials();
+-    let semid = ipc_ns.get_or_create_sem_set(key, num_sems, flags, mode, credentials)?;
++    let semid = ipc_ns.get_or_create_sem_set(key, num_sems, flags, mode, ctx.posix_thread)?;
+ 
+     Ok(SyscallReturn::Return(semid.get() as isize))
+ }
+diff --git a/test/initramfs/src/conformance/ltp/testcases/all.txt b/test/initramfs/src/conformance/ltp/testcases/all.txt
+index 5bef8afbd..0de12fb23 100644
+--- a/test/initramfs/src/conformance/ltp/testcases/all.txt
++++ b/test/initramfs/src/conformance/ltp/testcases/all.txt
+@@ -1330,7 +1330,7 @@ select03
+ # select04
+ 
+ # semctl01
+-# semctl02
++semctl02
+ # semctl03
+ # semctl04
+ # semctl05

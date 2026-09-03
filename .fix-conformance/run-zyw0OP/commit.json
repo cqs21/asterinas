@@ -1,0 +1,10 @@
+{
+  "commit": "95fa0b52f2acdc3f9cfe599299b617804b707517",
+  "branch": "fix-ltp-epoll_ctl05-zyw0OP",
+  "worktree": "/root/asterinas/.worktrees/run-zyw0OP",
+  "subject": "Reject cyclic `epoll` nesting with `ELOOP`",
+  "files": [
+    "kernel/src/events/epoll/file.rs",
+    "test/initramfs/src/conformance/ltp/testcases/all.txt"
+  ]
+}

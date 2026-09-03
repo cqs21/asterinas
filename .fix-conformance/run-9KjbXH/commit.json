@@ -1,0 +1,10 @@
+{
+  "commit": "cc7808fa764bcaa9cdfc33d3f9fc07be22ef1383",
+  "branch": "fix-ltp-statfs03-9KjbXH",
+  "worktree": "/root/asterinas/.worktrees/run-9KjbXH",
+  "subject": "Exempt directories from the exec-bit rule under `DAC_OVERRIDE`",
+  "files": [
+    "kernel/src/fs/vfs/fs_apis/inode.rs",
+    "test/initramfs/src/conformance/ltp/testcases/all.txt"
+  ]
+}
