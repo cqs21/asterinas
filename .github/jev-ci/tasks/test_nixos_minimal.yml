@@ -1,0 +1,26 @@
+id: test_nixos_minimal
+description: >
+  Builds the Asterinas kernel, creates and installs a 6144 MB AsterNixOS image,
+  boots the installed system in QEMU, waits for a root shell, and verifies
+  hello-asterinas output through test/nixos/tests/hello.
+  Covers the NixOS image builder and installer, base system configuration,
+  systemd startup, hello-asterinas package, and host NixOS test framework.
+  Application regression suites and ISO installer validation are separate tasks.
+force_paths:
+  - .github/actions/test-nixos-suite/**
+  - .github/jev-ci/tasks/test_nixos_minimal.yml
+  - .github/workflows/test_nixos_minimal.yml
+  - distro/aster_nixos_installer/**
+  - distro/etc_nixos/configuration.nix
+  - distro/etc_nixos/modules/core.nix
+  - distro/etc_nixos/modules/systemd.nix
+  - distro/etc_nixos/overlays/{hello-asterinas,systemd,switch-to-configuration-ng}/**
+  - distro/nixpkgs.nix
+  - test/nixos/Cargo.lock
+  - test/nixos/Cargo.toml
+  - test/nixos/Makefile
+  - test/nixos/common/**
+  - test/nixos/tests/hello/**
+  - tools/nixos/build_nixos.sh
+  - tools/nixos/print_target_nix_system.sh
+  - tools/nixos/run.sh

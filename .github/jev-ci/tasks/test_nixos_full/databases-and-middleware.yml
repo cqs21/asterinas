@@ -1,0 +1,16 @@
+id: databases-and-middleware
+description: >
+  Builds the Asterinas kernel, boots an AsterNixOS image in QEMU, and runs
+  test/nixos/tests/databases-and-middleware.
+  Checks SQLite queries, Redis and Valkey key operations, single-node etcd, and
+  InfluxDB writes and queries.
+  Covers guest database packages, storage, local networking, and the shared NixOS
+  image builder, boot process, and host test framework.
+force_paths:
+  - .github/jev-ci/tasks/test_nixos_full/databases-and-middleware.yml
+  - test/nixos/tests/databases-and-middleware/**
+execution:
+  suite: databases-and-middleware
+  disk_size: 10240
+  timeout_minutes: 45
+  test_timeout_minutes: 10

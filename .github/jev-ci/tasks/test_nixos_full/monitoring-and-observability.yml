@@ -1,0 +1,15 @@
+id: monitoring-and-observability
+description: >
+  Builds the Asterinas kernel, boots an AsterNixOS image in QEMU, and runs
+  test/nixos/tests/monitoring-and-observability.
+  Checks Prometheus startup, readiness, and successful query and targets API responses.
+  Covers the guest Prometheus package and configuration, local HTTP requests,
+  and the shared NixOS image builder, boot process, and host test framework.
+force_paths:
+  - .github/jev-ci/tasks/test_nixos_full/monitoring-and-observability.yml
+  - test/nixos/tests/monitoring-and-observability/**
+execution:
+  suite: monitoring-and-observability
+  disk_size: 8192
+  timeout_minutes: 30
+  test_timeout_minutes: 10

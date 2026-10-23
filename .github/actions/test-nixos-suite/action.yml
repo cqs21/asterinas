@@ -1,0 +1,46 @@
+name: Test an AsterNixOS suite
+description: Build an AsterNixOS image and run one suite in the kernel development container.
+
+inputs:
+  suite:
+    description: Directory name under test/nixos/tests.
+    required: true
+  disk_size:
+    description: Image disk size in MB.
+    required: true
+  test_timeout_minutes:
+    description: Timeout passed to the NixOS test runner, in minutes.
+    required: true
+
+runs:
+  using: composite
+  steps:
+    - name: Validate suite parameters
+      shell: bash
+      env:
+        NIXOS_SUITE: ${{ inputs.suite }}
+        NIXOS_DISK_SIZE: ${{ inputs.disk_size }}
+        NIXOS_TEST_MINUTES: ${{ inputs.test_timeout_minutes }}
+      run: |
+        [[ "$NIXOS_SUITE" =~ ^[a-z][a-z0-9_-]{0,63}$ ]]
+        [[ -d "test/nixos/tests/$NIXOS_SUITE" && ! -L "test/nixos/tests/$NIXOS_SUITE" ]]
+        [[ "$NIXOS_DISK_SIZE" =~ ^[1-9][0-9]*$ ]]
+        [[ "$NIXOS_TEST_MINUTES" =~ ^[1-9][0-9]*$ ]]
+    - uses: endersonmenezes/free-disk-space@v3
+      with:
+        rm_cmd: "rmz"
+        remove_android: true
+        remove_dotnet: true
+        remove_haskell: true
+        remove_tool_cache: true
+    - name: Build and run the suite on AsterNixOS
+      uses: maus007/docker-run-action-fork@v1
+      with:
+        image: asterinas/kernel-dev:0.19.0-20261012
+        options: --privileged -v /dev:/dev -v ${{ github.workspace }}:/root/asterinas
+        # The Docker action joins commands with ';' and invokes sh -c, so
+        # explicitly stop on build failure before trying to boot an image.
+        run: |
+          set -e
+          make nixos NIXOS_TEST_SUITE=${{ inputs.suite }} NIXOS_DISK_SIZE_IN_MB=${{ inputs.disk_size }}
+          make run_nixos NIXOS_TEST_SUITE=${{ inputs.suite }} NIXOS_TEST_TIMEOUT=${{ inputs.test_timeout_minutes }}min

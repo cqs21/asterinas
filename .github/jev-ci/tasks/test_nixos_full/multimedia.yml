@@ -1,0 +1,16 @@
+id: multimedia
+description: >
+  Builds the Asterinas kernel, boots an AsterNixOS image in QEMU, and runs
+  test/nixos/tests/multimedia.
+  Checks command-line audio, image, and video generation and conversion with SoX,
+  ImageMagick, and FFmpeg, including resizing, trimming, and output inspection.
+  Covers guest media packages, file processing, and the shared NixOS image builder,
+  boot process, and host test framework.
+force_paths:
+  - .github/jev-ci/tasks/test_nixos_full/multimedia.yml
+  - test/nixos/tests/multimedia/**
+execution:
+  suite: multimedia
+  disk_size: 8192
+  timeout_minutes: 30
+  test_timeout_minutes: 10

@@ -1,0 +1,16 @@
+id: cicd-and-devops
+description: >
+  Builds the Asterinas kernel, boots an AsterNixOS image in QEMU, and runs
+  test/nixos/tests/cicd-and-devops.
+  Checks Just recipes, go-task tasks, and GoReleaser snapshot builds and artifacts
+  for a sample Go project.
+  Covers guest build tools, command execution, and the shared NixOS image builder,
+  boot process, and host test framework.
+force_paths:
+  - .github/jev-ci/tasks/test_nixos_full/cicd-and-devops.yml
+  - test/nixos/tests/cicd-and-devops/**
+execution:
+  suite: cicd-and-devops
+  disk_size: 8192
+  timeout_minutes: 45
+  test_timeout_minutes: 10

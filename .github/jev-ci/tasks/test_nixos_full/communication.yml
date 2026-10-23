@@ -1,0 +1,15 @@
+id: communication
+description: >
+  Builds the Asterinas kernel, boots an AsterNixOS image in QEMU, and runs
+  test/nixos/tests/communication.
+  Uses Expect scripts to start Irssi and WeeChat, connect to an IRC server, and quit.
+  Covers guest IRC clients, interactive terminals, networking, and the shared NixOS
+  image builder, boot process, and host test framework.
+force_paths:
+  - .github/jev-ci/tasks/test_nixos_full/communication.yml
+  - test/nixos/tests/communication/**
+execution:
+  suite: communication
+  disk_size: 8192
+  timeout_minutes: 30
+  test_timeout_minutes: 10

@@ -1,0 +1,16 @@
+id: development-tools-go
+description: >
+  Builds the Asterinas kernel, boots an AsterNixOS image in QEMU, and runs
+  test/nixos/tests/development-tools-go.
+  Runs the selected Go standard library regression cases from src/testcases.txt
+  with Go 1.26 and GCC available for cgo.
+  Covers Go runtime and system interfaces, guest toolchain configuration, and the
+  shared NixOS image builder, boot process, and host test framework.
+force_paths:
+  - .github/jev-ci/tasks/test_nixos_full/development-tools-go.yml
+  - test/nixos/tests/development-tools-go/**
+execution:
+  suite: development-tools-go
+  disk_size: 8192
+  timeout_minutes: 60
+  test_timeout_minutes: 10

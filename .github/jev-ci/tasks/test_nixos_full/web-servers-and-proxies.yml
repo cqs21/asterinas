@@ -1,0 +1,16 @@
+id: web-servers-and-proxies
+description: >
+  Builds the Asterinas kernel, boots an AsterNixOS image in QEMU, and runs
+  test/nixos/tests/web-servers-and-proxies.
+  Starts Apache httpd, nginx, OpenResty, and Caddy, checks their HTTP responses
+  with curl, and stops each server.
+  Covers guest server packages and configuration, local HTTP serving, and the
+  shared NixOS image builder, boot process, and host test framework.
+force_paths:
+  - .github/jev-ci/tasks/test_nixos_full/web-servers-and-proxies.yml
+  - test/nixos/tests/web-servers-and-proxies/**
+execution:
+  suite: web-servers-and-proxies
+  disk_size: 10240
+  timeout_minutes: 45
+  test_timeout_minutes: 10
