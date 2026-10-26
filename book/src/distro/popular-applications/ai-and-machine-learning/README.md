@@ -6,7 +6,7 @@ This category covers deep learning frameworks, inference engines, and AI coding 
 
 ### PyTorch
 
-[PyTorch](https://pytorch.org/) is an open-source machine learning library developed by Facebook's AI Research lab. It provides tensor computation with GPU acceleration and deep neural networks built on a tape-based automatic differentiation system.
+[PyTorch](https://pytorch.org/) is an open-source machine learning library developed by Facebook's AI Research lab.
 
 #### Installation
 
