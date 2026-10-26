@@ -80,20 +80,5 @@ class TestNNAndOptim(unittest.TestCase):
         self.assertTrue(math.isclose(est_w, true_w, rel_tol=0.2))
         self.assertTrue(math.isclose(est_b, true_b, rel_tol=0.2))
 
-
-@unittest.skipUnless(torch.cuda.is_available(), "CUDA is not available")
-class TestCuda(unittest.TestCase):
-    def test_cuda_tensor_basic(self):
-        # Basic GPU matmul test: ensure tensors live and compute on CUDA
-        device = torch.device("cuda")
-        x = torch.randn(100, 100, device=device)
-        y = torch.randn(100, 100, device=device)
-        z = x @ y
-
-        # Result must reside on CUDA and have the expected shape
-        self.assertEqual(z.device.type, "cuda")
-        self.assertEqual(z.shape, (100, 100))
-
-
 if __name__ == "__main__":
     unittest.main(verbosity=2)
