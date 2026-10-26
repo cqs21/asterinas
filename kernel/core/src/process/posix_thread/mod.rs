@@ -433,7 +433,6 @@ pub(crate) fn last_tid() -> Tid {
 
 /// The maximum allowed process ID.
 //
-// FIXME: The current value is chosen arbitrarily.
 // This value can be modified by the user by writing to `/proc/sys/kernel/pid_max`.
 pub(crate) const PID_MAX: u32 = u32::MAX / 2;
 
