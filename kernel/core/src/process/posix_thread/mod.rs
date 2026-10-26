@@ -434,7 +434,7 @@ pub(crate) fn last_tid() -> Tid {
 /// The maximum allowed process ID.
 //
 // This value can be modified by the user by writing to `/proc/sys/kernel/pid_max`.
-pub(crate) const PID_MAX: u32 = u32::MAX / 2;
+pub(crate) const PID_MAX: u32 = u32::MAX / 4;
 
 /// The sleeping state of a thread.
 #[derive(Clone, Copy, Debug)]
