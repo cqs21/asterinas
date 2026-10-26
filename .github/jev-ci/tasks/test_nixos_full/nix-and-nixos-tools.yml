@@ -1,0 +1,16 @@
+id: nix-and-nixos-tools
+description: >
+  Builds the Asterinas kernel, boots an AsterNixOS image in QEMU, and runs
+  test/nixos/tests/nix-and-nixos-tools.
+  Checks hello installation and execution through nix-env, nix-shell, nix-build,
+  and nixos-rebuild test inside the guest.
+  Covers guest Nix configuration, package realization, system activation, and the
+  shared NixOS image builder, boot process, and host test framework.
+force_paths:
+  - .github/jev-ci/tasks/test_nixos_full/nix-and-nixos-tools.yml
+  - test/nixos/tests/nix-and-nixos-tools/**
+execution:
+  suite: nix-and-nixos-tools
+  disk_size: 8192
+  timeout_minutes: 60
+  test_timeout_minutes: 30

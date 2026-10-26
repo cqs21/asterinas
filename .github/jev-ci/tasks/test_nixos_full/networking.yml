@@ -1,0 +1,16 @@
+id: networking
+description: >
+  Builds the Asterinas kernel, boots an AsterNixOS image in QEMU, and runs
+  test/nixos/tests/networking.
+  Checks curl/wget/lftp downloads, netcat/socat TCP connections, DNS and whois queries,
+  and local file synchronization with rclone and rsync.
+  Covers guest network tools, networking and filesystem behavior, and the shared
+  NixOS image builder, boot process, and host test framework.
+force_paths:
+  - .github/jev-ci/tasks/test_nixos_full/networking.yml
+  - test/nixos/tests/networking/**
+execution:
+  suite: networking
+  disk_size: 10240
+  timeout_minutes: 45
+  test_timeout_minutes: 10

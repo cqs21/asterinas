@@ -1,0 +1,26 @@
+name: Run task selection logic
+description: Load tasks or resolve and validate a plan using the runner-provided Node runtime.
+inputs:
+  phase:
+    description: load, plan, or diagnostics.
+    required: true
+outputs:
+  tasks:
+    description: Validated task descriptions and effective force_paths.
+  execution-table:
+    description: Runner-local path to validated execution metadata.
+  run:
+    description: JSON map of effective task decisions.
+  selected:
+    description: Sorted JSON array of selected task IDs.
+  has-tasks:
+    description: Whether any tasks were selected.
+  matrix:
+    description: Include matrix joining selected IDs to execution parameters.
+  status:
+    description: Effective selection status.
+  report-path:
+    description: Runner-local path to the effective source-free report.
+runs:
+  using: node24
+  main: dist/index.js

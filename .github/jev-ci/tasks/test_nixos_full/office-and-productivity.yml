@@ -1,0 +1,16 @@
+id: office-and-productivity
+description: >
+  Builds the Asterinas kernel, boots an AsterNixOS image in QEMU, and runs
+  test/nixos/tests/office-and-productivity.
+  Checks MuPDF PDF inspection, text extraction, and PNG output, plus Pandoc conversions
+  from Markdown to HTML/DOCX and from HTML to Markdown.
+  Covers guest document tools, downloads and file processing, and the shared NixOS
+  image builder, boot process, and host test framework.
+force_paths:
+  - .github/jev-ci/tasks/test_nixos_full/office-and-productivity.yml
+  - test/nixos/tests/office-and-productivity/**
+execution:
+  suite: office-and-productivity
+  disk_size: 8192
+  timeout_minutes: 30
+  test_timeout_minutes: 10

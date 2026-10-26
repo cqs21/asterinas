@@ -1,0 +1,18 @@
+id: ai-and-machine-learning
+description: >
+  Builds the Asterinas kernel, boots an AsterNixOS image in QEMU, and runs
+  test/nixos/tests/ai-and-machine-learning.
+  Checks the Book's PyTorch and TensorFlow training scripts, Ollama server startup
+  and model listing, and offline Codex help output.
+  Covers guest AI packages, Python configuration, and the shared NixOS image builder,
+  boot process, and host test framework.
+force_paths:
+  - .github/jev-ci/tasks/test_nixos_full/ai-and-machine-learning.yml
+  - book/src/distro/popular-applications/ai-and-machine-learning/test_pytorch.py
+  - book/src/distro/popular-applications/ai-and-machine-learning/test_tensorflow.py
+  - test/nixos/tests/ai-and-machine-learning/**
+execution:
+  suite: ai-and-machine-learning
+  disk_size: 10240
+  timeout_minutes: 45
+  test_timeout_minutes: 10

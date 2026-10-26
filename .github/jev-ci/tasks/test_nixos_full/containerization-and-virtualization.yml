@@ -1,0 +1,18 @@
+id: containerization-and-virtualization
+description: >
+  Builds the Asterinas kernel, boots an AsterNixOS image in QEMU, and runs
+  test/nixos/tests/containerization-and-virtualization.
+  Checks privileged Podman Alpine containers, interactive sessions, Skopeo image
+  inspection, and nested Linux and Asterinas boot with QEMU TCG.
+  Covers guest container packages, Podman/runc configuration, userspace emulation,
+  and the shared NixOS image builder, boot process, and host test framework.
+force_paths:
+  - .github/jev-ci/tasks/test_nixos_full/containerization-and-virtualization.yml
+  - distro/etc_nixos/modules/container.nix
+  - distro/etc_nixos/overlays/podman/**
+  - test/nixos/tests/containerization-and-virtualization/**
+execution:
+  suite: containerization-and-virtualization
+  disk_size: 10240
+  timeout_minutes: 45
+  test_timeout_minutes: 10

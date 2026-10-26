@@ -1,0 +1,17 @@
+id: development-tools-openjdk
+description: >
+  Builds the Asterinas kernel, boots an AsterNixOS image in QEMU, and runs
+  test/nixos/tests/development-tools-openjdk.
+  Runs the selected OpenJDK 21 regression cases from src/testcases.txt with jtreg
+  and the matching JDK source, checking readers/writers, thread classes, and address classes.
+  Covers guest Java/jtreg configuration and the shared NixOS image builder,
+  boot process, and host test framework.
+force_paths:
+  - .github/jev-ci/tasks/test_nixos_full/development-tools-openjdk.yml
+  - distro/etc_nixos/overlays/jtreg/**
+  - test/nixos/tests/development-tools-openjdk/**
+execution:
+  suite: development-tools-openjdk
+  disk_size: 8192
+  timeout_minutes: 60
+  test_timeout_minutes: 10

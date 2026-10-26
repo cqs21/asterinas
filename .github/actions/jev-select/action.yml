@@ -1,0 +1,110 @@
+name: Select verification tasks
+description: Load tasks, select with Jev and path fallback, and validate the execution plan.
+
+inputs:
+  task-source:
+    description: Task file or directory under .github/jev-ci/tasks for this workflow.
+    required: true
+  execution-policy:
+    description: changes for PR/push selection, or all for unconditional execution.
+    required: true
+  requested-task:
+    description: Task ID to run with the all policy, or all.
+    default: all
+  mode:
+    description: shadow retains PR tasks with usable Jev judgments; enforce applies Jev selection. Path fallback always applies.
+    default: enforce
+  github-token:
+    description: Read-only token for fetching immutable Git objects.
+    default: ${{ github.token }}
+  api-key:
+    description: Jev API key; an empty or unusable key falls back to force_paths.
+    default: ''
+  allow-external-context:
+    description: Explicit consent to send changes and task descriptions to Jev.
+    default: 'false'
+
+outputs:
+  run:
+    description: JSON map of effective task decisions.
+    value: ${{ steps.plan.outputs.run }}
+  selected:
+    description: Sorted JSON array of effectively selected task IDs.
+    value: ${{ steps.plan.outputs.selected }}
+  has-tasks:
+    description: Whether the plan contains any tasks, as true or false.
+    value: ${{ steps.plan.outputs.has-tasks }}
+  matrix:
+    description: Include matrix joining selected IDs to validated execution parameters.
+    value: ${{ steps.plan.outputs.matrix }}
+  status:
+    description: Effective selection status, including local path fallback.
+    value: ${{ steps.plan.outputs.status }}
+  report-path:
+    description: Runner-local path to the source-free effective selection report.
+    value: ${{ steps.plan.outputs.report-path }}
+
+runs:
+  using: composite
+  steps:
+    - name: Load and validate tasks
+      id: load
+      uses: ./.github/actions/jev-select/runtime
+      with:
+        phase: load
+      env:
+        TASK_SOURCE: ${{ inputs.task-source }}
+        EXECUTION_POLICY: ${{ inputs.execution-policy }}
+        REQUESTED_TASK: ${{ inputs.requested-task }}
+        SELECT_MODE: ${{ inputs.mode }}
+    - name: Select tasks
+      id: selector
+      if: ${{ github.event_name == 'pull_request' && inputs.execution-policy == 'changes' }}
+      # Only upstream execution is recoverable. The next step validates successful
+      # outputs and explicitly resolves failed or unavailable decisions by paths.
+      continue-on-error: true
+      uses: guilhem/jev-ci-selector@e00e299bfc0309fc954766cee589fd0650071e21
+      with:
+        tasks: ${{ steps.load.outputs.tasks }}
+        mode: ${{ inputs.mode }}
+        github-token: ${{ inputs.github-token }}
+        api-key: ${{ inputs.api-key }}
+        api-base-url: 'https://www.rightapi.ai'
+        allow-external-context: ${{ inputs.allow-external-context }}
+        model: jev-1.13.0
+        tested-ref: merge
+        timeout-ms: '120000'
+        max-jev-calls: '16'
+        max-collected-patch-bytes: '8388608'
+        max-analysis-bytes: '33554432'
+    - name: Resolve selection and validate execution plan
+      id: plan
+      uses: ./.github/actions/jev-select/runtime
+      with:
+        phase: plan
+      env:
+        EXECUTION_TABLE: ${{ steps.load.outputs.execution-table }}
+        SELECTOR_OUTCOME: ${{ steps.selector.outcome }}
+        SELECT_RUN: ${{ steps.selector.outputs.run }}
+        SELECT_SELECTED: ${{ steps.selector.outputs.selected }}
+        SELECT_HAS_TASKS: ${{ steps.selector.outputs.has-tasks }}
+        SELECT_STATUS: ${{ steps.selector.outputs.status }}
+        SELECT_TESTED_SHA: ${{ steps.selector.outputs.tested-sha }}
+        SELECT_REPORT_PATH: ${{ steps.selector.outputs.report-path }}
+    - name: Log changed files from the verified comparison
+      if: ${{ always() && steps.plan.outputs.report-path != '' }}
+      uses: ./.github/actions/jev-select/runtime
+      with:
+        phase: diagnostics
+      env:
+        SELECT_REPORT_PATH: ${{ steps.plan.outputs.report-path }}
+    - name: Preserve selection report
+      if: ${{ always() && (steps.plan.outputs.report-path != '' || steps.selector.outputs.report-path != '') }}
+      uses: actions/upload-artifact@v4
+      with:
+        name: jev-selection-${{ github.job }}
+        path: |
+          ${{ steps.selector.outputs.report-path }}
+          ${{ steps.plan.outputs.report-path }}
+        if-no-files-found: error
+        retention-days: 14

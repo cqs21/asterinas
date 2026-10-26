@@ -1,0 +1,18 @@
+id: drm
+description: >
+  Builds the Asterinas kernel, boots an AsterNixOS image in QEMU, and runs
+  test/nixos/tests/drm.
+  Checks Xorg and Mesa startup with XFCE enabled, DRM device access, GLX output,
+  and connected display discovery.
+  Covers kernel DRM/KMS support, guest desktop modules and patches, and the shared
+  NixOS image builder, boot process, and host test framework.
+force_paths:
+  - .github/jev-ci/tasks/test_nixos_full/drm.yml
+  - distro/etc_nixos/modules/xfce/**
+  - distro/etc_nixos/overlays/desktop/**
+  - test/nixos/tests/drm/**
+execution:
+  suite: drm
+  disk_size: 8192
+  timeout_minutes: 45
+  test_timeout_minutes: 10

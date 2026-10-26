@@ -1,0 +1,16 @@
+id: development-tools-python
+description: >
+  Builds the Asterinas kernel, boots an AsterNixOS image in QEMU, and runs
+  test/nixos/tests/development-tools-python.
+  Runs the selected CPython 3.12 regression cases from src/testcases.txt using
+  the matching source and a writable Python installation fixture.
+  Covers Python runtime and system interfaces, guest Python packaging, and the
+  shared NixOS image builder, boot process, and host test framework.
+force_paths:
+  - .github/jev-ci/tasks/test_nixos_full/development-tools-python.yml
+  - test/nixos/tests/development-tools-python/**
+execution:
+  suite: development-tools-python
+  disk_size: 8192
+  timeout_minutes: 60
+  test_timeout_minutes: 10

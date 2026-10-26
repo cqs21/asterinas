@@ -7,41 +7,54 @@ name: Test AsterNixOS (minimal)
 
 on:
   workflow_dispatch:
+    inputs:
+      task:
+        description: Task ID to run (test_nixos_minimal), or all.
+        type: string
+        default: all
   pull_request:
   push:
     branches:
       - main
 
+permissions:
+  contents: read
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.run_id }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
 jobs:
+  select:
+    if: ${{ github.event_name != 'push' || !github.event.deleted }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    outputs:
+      run: ${{ steps.select.outputs.run }}
+    steps:
+      - uses: actions/checkout@v4
+      - id: select
+        uses: ./.github/actions/jev-select
+        with:
+          task-source: .github/jev-ci/tasks/test_nixos_minimal.yml
+          execution-policy: ${{ (github.event_name == 'pull_request' || github.event_name == 'push') && 'changes' || 'all' }}
+          requested-task: ${{ inputs.task || 'all' }}
+          mode: enforce
+          api-key: ${{ secrets.JEV_API_KEY }}
+          allow-external-context: 'true'
+
   minimal-nixos-test:
+    needs: select
+    if: ${{ fromJSON(needs.select.outputs.run).test_nixos_minimal }}
     runs-on: ubuntu-latest
     strategy:
       fail-fast: false
     steps:
-      # In the subsequent tests, a relatively large disk (4GB) will be created to install AsterNixOS.
-      # Standard GitHub runners may encounter "insufficient disk space" errors.
-      # Therefore, we first execute the following action to free up
-      # some disk space. The amount of space saved can be referenced in
-      # https://github.com/endersonmenezes/free-disk-space?tab=readme-ov-file#size-savings,
-      # currently amounting to approximately 24GB.
-      - uses: endersonmenezes/free-disk-space@v3
-        with:
-          rm_cmd: "rmz"
-          remove_android: true
-          remove_dotnet: true
-          remove_haskell: true
-          remove_tool_cache: true
       - uses: actions/checkout@v4
       - name: Run the hello test on AsterNixOS
         timeout-minutes: 30
-        uses: maus007/docker-run-action-fork@v1
+        uses: ./.github/actions/test-nixos-suite
         with:
-          image: asterinas/kernel-dev:0.19.0-20261012
-          options: --privileged -v /dev:/dev -v ${{ github.workspace }}:/root/asterinas
-          # `docker-run-action-fork` joins these lines with ';' and runs them via
-          # `sh -c` without fail-fast settings, unlike a normal `run:` step.
-          # So we have to do `set -e` explicitly here.
-          run: |
-            set -e
-            make nixos NIXOS_TEST_SUITE=hello NIXOS_DISK_SIZE_IN_MB=6144
-            make run_nixos NIXOS_TEST_SUITE=hello
+          suite: hello
+          disk_size: 6144
+          test_timeout_minutes: 10

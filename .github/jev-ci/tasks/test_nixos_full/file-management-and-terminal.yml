@@ -1,0 +1,16 @@
+id: file-management-and-terminal
+description: >
+  Builds the Asterinas kernel, boots an AsterNixOS image in QEMU, and runs
+  test/nixos/tests/file-management-and-terminal.
+  Checks archive and text tools, file search, GNU Screen sessions, encryption and
+  signing, password tools, local Restic backup, and wipe file deletion.
+  Covers guest CLI packages, filesystem and terminal behavior, and the shared NixOS
+  image builder, boot process, and host test framework.
+force_paths:
+  - .github/jev-ci/tasks/test_nixos_full/file-management-and-terminal.yml
+  - test/nixos/tests/file-management-and-terminal/**
+execution:
+  suite: file-management-and-terminal
+  disk_size: 8192
+  timeout_minutes: 30
+  test_timeout_minutes: 10

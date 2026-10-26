@@ -1,0 +1,15 @@
+id: web-browsers
+description: >
+  Builds the Asterinas kernel, boots an AsterNixOS image in QEMU, and runs
+  test/nixos/tests/web-browsers.
+  Checks headless Firefox screenshot creation and Links2/w3m text dumps of an HTTPS page.
+  Covers guest browser packages, headless rendering, networking, and file output,
+  plus the shared NixOS image builder, boot process, and host test framework.
+force_paths:
+  - .github/jev-ci/tasks/test_nixos_full/web-browsers.yml
+  - test/nixos/tests/web-browsers/**
+execution:
+  suite: web-browsers
+  disk_size: 8192
+  timeout_minutes: 30
+  test_timeout_minutes: 10

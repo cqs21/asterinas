@@ -1,0 +1,17 @@
+id: system-core
+description: >
+  Builds the Asterinas kernel, boots an AsterNixOS image in QEMU, and runs
+  test/nixos/tests/system-core.
+  Checks shells and script execution, BusyBox, core utilities, systemctl inspection,
+  Fastfetch, and process, memory, and filesystem reporting.
+  Covers guest core packages, permissions and system information, and the shared
+  NixOS image builder, boot process, and host test framework.
+force_paths:
+  - .github/jev-ci/tasks/test_nixos_full/system-core.yml
+  - distro/etc_nixos/overlays/fastfetch/**
+  - test/nixos/tests/system-core/**
+execution:
+  suite: system-core
+  disk_size: 10240
+  timeout_minutes: 45
+  test_timeout_minutes: 10
