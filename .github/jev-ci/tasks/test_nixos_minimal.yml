@@ -1,0 +1,27 @@
+id: test_nixos_minimal
+description: >
+  Required for Asterinas kernel implementation changes that can affect compilation
+  or runtime behavior, and NixOS source or configuration changes that can affect
+  image creation, installation, boot, system startup, or basic userspace execution.
+  Also required for implementation changes to test/nixos/tests/hello/
+  or its related NixOS test code, fixtures, and test configuration.
+  Documentation, comments, or formatting changes alone do not require this task,
+  even inside kernel, NixOS, or test source files. A source path alone is insufficient.
+force_paths:
+  - .github/actions/test-nixos-suite/**
+  - .github/jev-ci/tasks/test_nixos_minimal.yml
+  - .github/workflows/test_nixos_minimal.yml
+  - distro/aster_nixos_installer/**
+  - distro/etc_nixos/configuration.nix
+  - distro/etc_nixos/modules/core.nix
+  - distro/etc_nixos/modules/systemd.nix
+  - distro/etc_nixos/overlays/{hello-asterinas,systemd,switch-to-configuration-ng}/**
+  - distro/nixpkgs.nix
+  - test/nixos/Cargo.lock
+  - test/nixos/Cargo.toml
+  - test/nixos/Makefile
+  - test/nixos/common/**
+  - test/nixos/tests/hello/**
+  - tools/nixos/build_nixos.sh
+  - tools/nixos/print_target_nix_system.sh
+  - tools/nixos/run.sh

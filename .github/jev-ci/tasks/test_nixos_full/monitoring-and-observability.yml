@@ -1,0 +1,16 @@
+id: monitoring-and-observability
+description: >
+  Required only for implementation changes to the NixOS test code in
+  test/nixos/tests/monitoring-and-observability/
+  or changes to its related test code, fixtures, and test configuration.
+  Kernel code changes alone do not require this task.
+  Documentation, comments, or formatting changes alone do not require this task,
+  even inside test source files. A source path alone is insufficient.
+force_paths:
+  - .github/jev-ci/tasks/test_nixos_full/monitoring-and-observability.yml
+  - test/nixos/tests/monitoring-and-observability/**
+execution:
+  suite: monitoring-and-observability
+  disk_size: 8192
+  timeout_minutes: 30
+  test_timeout_minutes: 10

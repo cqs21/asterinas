@@ -1,0 +1,16 @@
+id: cicd-and-devops
+description: >
+  Required only for implementation changes to the NixOS test code in
+  test/nixos/tests/cicd-and-devops/
+  or changes to its related test code, fixtures, and test configuration.
+  Kernel code changes alone do not require this task.
+  Documentation, comments, or formatting changes alone do not require this task,
+  even inside test source files. A source path alone is insufficient.
+force_paths:
+  - .github/jev-ci/tasks/test_nixos_full/cicd-and-devops.yml
+  - test/nixos/tests/cicd-and-devops/**
+execution:
+  suite: cicd-and-devops
+  disk_size: 8192
+  timeout_minutes: 45
+  test_timeout_minutes: 10

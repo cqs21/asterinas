@@ -1,0 +1,17 @@
+id: system-core
+description: >
+  Required for Asterinas kernel implementation changes that can affect compilation
+  or runtime behavior, including changes to logic, constants, types, or interfaces.
+  Also required for changes to test/nixos/tests/system-core/ or its related
+  NixOS test code, fixtures, and test configuration.
+  Documentation, comments, or formatting changes alone do not require this task,
+  even inside kernel source files. A kernel source path alone is insufficient.
+force_paths:
+  - .github/jev-ci/tasks/test_nixos_full/system-core.yml
+  - distro/etc_nixos/overlays/fastfetch/**
+  - test/nixos/tests/system-core/**
+execution:
+  suite: system-core
+  disk_size: 10240
+  timeout_minutes: 45
+  test_timeout_minutes: 10
