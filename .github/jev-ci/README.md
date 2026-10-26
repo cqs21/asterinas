@@ -53,49 +53,6 @@ the local action resolves that bypass using the configured paths.
 Configuration errors, inconsistent selection results, and failures to complete a required Git comparison
 fail the selection job and prevent dependent test jobs from running.
 
-## Add a NixOS suite task
-
-The full NixOS workflow already creates one matrix job per selected task.
-Adding a suite requires its tests and task definition;
-there is no separate suite list to update in the workflow or selector.
-
-1. Create `test/nixos/tests/<suite>/` following the
-   [NixOS test suite guide](../../test/nixos/README.md).
-2. Add `.github/jev-ci/tasks/test_nixos_full/<suite>.yml`.
-   Use the same name for the file, task `id`, test directory, and `execution.suite`.
-3. Declare the suite's own paths in that file.
-   Review [`_defaults.yml`](tasks/test_nixos_full/_defaults.yml) for existing shared inputs;
-   add a path there only when every full suite must run for changes to it.
-
-For example, a new `json-tools` suite that tests `jq` could use:
-
-```yaml
-id: json-tools
-description: >
-  Builds and boots an AsterNixOS image and runs test/nixos/tests/json-tools.
-  Checks jq JSON parsing and object field selection, including the suite fixtures,
-  guest jq package configuration, shared NixOS image builder, and host test framework.
-force_paths:
-  - .github/jev-ci/tasks/test_nixos_full/json-tools.yml
-  - test/nixos/tests/json-tools/**
-execution:
-  suite: json-tools
-  disk_size: 8192
-  timeout_minutes: 30
-  test_timeout_minutes: 10
-```
-
-The full workflow requires exactly these four execution fields.
-`disk_size` is the image size in MB,
-`timeout_minutes` limits the suite action step,
-and `test_timeout_minutes` is passed to the NixOS test runner.
-All three numeric fields must be positive integers, and the suite directory must exist.
-The shared [`test-nixos-suite`](../actions/test-nixos-suite/action.yml) action
-builds the image and runs the selected suite.
-
-For an existing example with application-specific dependencies, see the
-[`drm` task](tasks/test_nixos_full/drm.yml).
-
 ## Define tasks for another workflow
 
 Create the task source matching the workflow's filename using one of the layouts above.
