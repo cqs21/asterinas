@@ -18,7 +18,7 @@ concurrency:
 
 jobs:
   test-cargo-component:
-    runs-on: [self-hosted, ci-concurrency-validation-no-runner]
+    runs-on: ubuntu-latest
     timeout-minutes: 20
     container: asterinas/kernel-dev:0.19.0-20261012
     steps:
