@@ -9,7 +9,7 @@ on:
       - kernel/libs/comp-sys/controlled/**
       - .github/workflows/test_cargo_component.yml
   push:
-    branches: [main]
+    branches: [main, ci/pr-concurrency-isolation]
     paths: *cargo_component_paths
 
 concurrency:
