@@ -3,7 +3,32 @@ name: Test ISO image
 on:
   workflow_dispatch:
   pull_request:
-    paths:
+    paths: &triggering_paths
+      # Keep shared inputs aligned with test_nixos_full.yml.
+      - .cargo/**
+      - .github/actions/test/**
+      - Cargo.toml
+      - Cargo.lock
+      - Components.toml
+      - Makefile
+      - OSDK.toml
+      - VERSION
+      - rust-toolchain.toml
+      - flake.nix
+      - kernel/**
+      - ostd/**
+      - osdk/**
+      - test/initramfs/**
+      - test/nixos/Makefile
+      - test/nixos/Cargo.toml
+      - test/nixos/Cargo.lock
+      - test/nixos/common/**
+      - test/nixos/tests/hello/**
+      # Cargo resolves every member of the NixOS test workspace.
+      - test/nixos/tests/*/Cargo.toml
+      - tools/qemu_args.sh
+      - tools/run_virtiofsd.sh
+      - tools/net/**
       - distro/**
       - flake.lock
       - .github/workflows/test_iso_image.yml
@@ -11,11 +36,7 @@ on:
   push:
     branches:
       - main
-    paths:
-      - distro/**
-      - flake.lock
-      - .github/workflows/test_iso_image.yml
-      - tools/nixos/**
+    paths: *triggering_paths
 
 jobs:
   iso-test:

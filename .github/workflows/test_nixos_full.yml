@@ -20,12 +20,34 @@ on:
         type: string
   pull_request:
     paths: &triggering_paths
-      # Paths of test infra, which triggers smoke test.
-      # REMINDER: Keep in sync with INFRA_PATH_PREFIXES below.
+      # Shared build and test inputs select all suites.
+      # Keep in sync with FULL_TEST_PATH_PREFIXES below.
+      - .cargo/**
+      - .github/actions/test/**
+      - Cargo.toml
+      - Cargo.lock
+      - Components.toml
+      - Makefile
+      - OSDK.toml
+      - VERSION
+      - rust-toolchain.toml
+      - flake.nix
+      - kernel/**
+      - ostd/**
+      - osdk/**
+      - test/initramfs/**
+      - test/nixos/Makefile
+      - test/nixos/Cargo.toml
+      - test/nixos/Cargo.lock
+      - tools/qemu_args.sh
+      - tools/run_virtiofsd.sh
+      - tools/net/**
+      # Distro changes retain smoke and desktop/DRM selection.
       - distro/**
       - flake.lock
       - tools/nixos/**
       - tools/github_workflows/filter_json_array_with_changed_files.sh
+      - tools/github_workflows/test_nixos_paths.py
       - test/nixos/common/**
       - .github/workflows/test_nixos_full.yml
       # Paths of test suites, which trigger runs of the corresponding test suites.
@@ -44,10 +66,8 @@ jobs:
   #
   # Running all NixOS test suites would be too time consuming
   # if triggered upon every PR change.
-  # So our strategy is to run the full set only for infrequent CI triggers
-  # such as `schedule`
-  # and to run a select set for frequent CI triggers
-  # such as `pull_request` and `push`.
+  # Run the full set for schedules and shared build/test inputs,
+  # and select suites for suite-local and distro changes.
   # The `workflow` CI trigger selects all or one test suites
   # depending on the user input.
   #
@@ -67,17 +87,17 @@ jobs:
         run: |
           case '${{ github.event_name }}' in
             pull_request)
-              git diff --name-only \
-                '${{ github.event.pull_request.base.sha }}' \
-                '${{ github.event.pull_request.head.sha }}' > /tmp/changed
+              # Match GitHub's PR comparison and include both sides of renames.
+              git diff --name-only --no-renames \
+                '${{ github.event.pull_request.base.sha }}...${{ github.event.pull_request.head.sha }}' > /tmp/changed
               ;;
             push)
               if [ '${{ github.event.before }}' \
                   = '0000000000000000000000000000000000000000' ]; then
-                git diff-tree --no-commit-id --name-only \
+                git diff-tree --root --no-commit-id --name-only --no-renames \
                   -r '${{ github.sha }}' > /tmp/changed
               else
-                git diff --name-only \
+                git diff --name-only --no-renames \
                   '${{ github.event.before }}' '${{ github.sha }}' > /tmp/changed
               fi
               ;;
@@ -85,14 +105,38 @@ jobs:
       - name: Select matrix
         id: select
         env:
-          # Keep in sync with on.<event>.paths above (anchored as &triggering_paths).
-          INFRA_PATH_PREFIXES: |
-            distro/
+          # Directories end in '/', while file names match exactly.
+          # Keep in sync with the shared inputs in on.<event>.paths above.
+          FULL_TEST_PATH_PREFIXES: |
+            .cargo/
+            .github/actions/test/
+            Cargo.toml
+            Cargo.lock
+            Components.toml
+            Makefile
+            OSDK.toml
+            VERSION
+            rust-toolchain.toml
+            flake.nix
+            kernel/
+            ostd/
+            osdk/
+            test/initramfs/
+            test/nixos/Makefile
+            test/nixos/Cargo.toml
+            test/nixos/Cargo.lock
+            tools/qemu_args.sh
+            tools/run_virtiofsd.sh
+            tools/net/
+            distro/nixpkgs.nix
             flake.lock
             tools/nixos/
             tools/github_workflows/filter_json_array_with_changed_files.sh
+            tools/github_workflows/test_nixos_paths.py
             test/nixos/common/
             .github/workflows/test_nixos_full.yml
+          INFRA_PATH_PREFIXES: |
+            distro/
           # A matrix that keeps the info about the entire test suites.
           FULL_TEST_MATRIX: >-
             [
@@ -123,6 +167,20 @@ jobs:
           # A special value of "all" is used to select all test suites, rather than one.
           MANUAL_TEST_NAME: ${{ github.event.inputs.suite }}
         run: |
+          paths_changed() {
+            local path prefix
+            while IFS= read -r path; do
+              while IFS= read -r prefix; do
+                [ -n "$prefix" ] || continue
+                if [[ "$path" = "$prefix" ]] \
+                  || [[ "$prefix" = */ && "$path" = "$prefix"* ]]; then
+                  return 0
+                fi
+              done <<< "$1"
+            done < /tmp/changed
+            return 1
+          }
+
           event='${{ github.event_name }}'
           if [ "$event" = 'schedule' ]; then
             matrix="$FULL_TEST_MATRIX"
@@ -140,7 +198,7 @@ jobs:
                 exit 1
               fi
             fi
-          elif grep -Fxq -e flake.lock -e distro/nixpkgs.nix /tmp/changed; then
+          elif paths_changed "$FULL_TEST_PATH_PREFIXES"; then
             matrix="$FULL_TEST_MATRIX"
           else
             matrix="$(
@@ -150,11 +208,7 @@ jobs:
                 < /tmp/changed
             )"
             if [ "$(jq 'length' <<< "$matrix")" -eq 0 ] \
-              && grep -qE -f <(
-                  printf '%s\n' "$INFRA_PATH_PREFIXES" \
-                  | grep -v '^$' \
-                  | sed 's|^|^|'
-                ) /tmp/changed; then
+              && paths_changed "$INFRA_PATH_PREFIXES"; then
               matrix="$(
                 jq -c \
                   --arg suite_name "$SMOKE_TEST_NAME" \
@@ -173,6 +227,7 @@ jobs:
             fi
           fi
           matrix="$(jq -c <<< "$matrix")"
+          echo "Selected NixOS suites: $(jq -c '[.[].name]' <<< "$matrix")"
           echo "matrix=$matrix" >> "$GITHUB_OUTPUT"
           if [ "$(jq 'length' <<< "$matrix")" -gt 0 ]; then
             echo "run=true" >> "$GITHUB_OUTPUT"

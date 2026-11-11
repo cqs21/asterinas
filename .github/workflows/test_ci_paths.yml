@@ -1,0 +1,30 @@
+name: Test CI paths
+
+permissions:
+  contents: read
+
+# Keep this lightweight check unfiltered so unrelated PRs also get a result.
+on:
+  workflow_dispatch:
+  pull_request:
+  push:
+    branches:
+      - main
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.event_name }}-${{ github.event.pull_request.number || github.run_id }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+jobs:
+  check-paths:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v6
+        with:
+          python-version: '3.12'
+      - name: Install workflow parser
+        run: python3 -m pip install PyYAML==6.0.3
+      - name: Check NixOS triggers and suite selection
+        run: python3 tools/github_workflows/test_nixos_paths.py
