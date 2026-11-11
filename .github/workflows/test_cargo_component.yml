@@ -26,3 +26,5 @@ jobs:
       - name: Test cargo-component
         working-directory: kernel/libs/comp-sys/cargo-component
         run: cargo test --locked
+
+# Fork-only push isolation probe: first overlapping push.
