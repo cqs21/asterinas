@@ -40,8 +40,8 @@ jobs:
           runs_on: 'ubuntu-latest'
           cache_image: ${{ env.CI_CACHE_IMAGE }}
           cache_osdk: ${{ vars.CI_CACHE_OSDK != 'false' && matrix.id != 'usermode_test' }}
-          # Kernel cache transfers did not pay off in the trial; opt in explicitly.
-          cache_kernel: ${{ vars.CI_CACHE_KERNEL == 'true' && (matrix.id == 'compile' || matrix.id == 'ktest') }}
+          cache_kernel: ${{ vars.CI_CACHE_KERNEL != 'false' && matrix.id == 'compile' }}
+          cache_save: ${{ matrix.id == 'compile' }}
 
   osdk-test:
     runs-on: ubuntu-latest
@@ -95,7 +95,7 @@ jobs:
           rootfs_boot: ${{ matrix.rootfs_boot }}
           cache_image: ${{ env.CI_CACHE_IMAGE }}
           cache_osdk: ${{ vars.CI_CACHE_OSDK != 'false' }}
-          cache_kernel: ${{ vars.CI_CACHE_KERNEL == 'true' && matrix.variant == 'multiboot2-smp4' }}
+          cache_kernel: ${{ vars.CI_CACHE_KERNEL != 'false' && matrix.variant == 'multiboot2-smp4' }}
 
   regression-test:
     runs-on: ubuntu-latest
@@ -129,7 +129,8 @@ jobs:
           boot_protocol: ${{ matrix.boot_protocol || 'linux-efi-handover64' }}
           cache_image: ${{ env.CI_CACHE_IMAGE }}
           cache_osdk: ${{ vars.CI_CACHE_OSDK != 'false' }}
-          cache_kernel: ${{ vars.CI_CACHE_KERNEL == 'true' && matrix.variant == 'multiboot2-smp4' }}
+          cache_kernel: ${{ vars.CI_CACHE_KERNEL != 'false' && matrix.variant == 'multiboot2-smp4' }}
+          cache_save: ${{ matrix.variant == 'multiboot2-smp4' }}
 
   conformance-test:
     runs-on: ubuntu-latest
@@ -179,7 +180,7 @@ jobs:
           boot_protocol: ${{ matrix.boot_protocol || 'linux-efi-handover64' }}
           cache_image: ${{ env.CI_CACHE_IMAGE }}
           cache_osdk: ${{ vars.CI_CACHE_OSDK != 'false' }}
-          cache_kernel: ${{ vars.CI_CACHE_KERNEL == 'true' && matrix.variant == 'multiboot2-smp4' }}
+          cache_kernel: ${{ vars.CI_CACHE_KERNEL != 'false' && matrix.variant == 'multiboot2-smp4' }}
 
   cross-compile-test:
     timeout-minutes: 30
