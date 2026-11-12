@@ -44,7 +44,6 @@ jobs:
         uses: ./.github/actions/test
         with:
           auto_test: 'general'
-          runs_on: 'ubuntu-latest'
           cache_image: ${{ env.CI_CACHE_IMAGE }}
           cache_osdk: ${{ vars.CI_CACHE_OSDK != 'false' && matrix.id != 'usermode_test' }}
           cache_kernel: ${{ vars.CI_CACHE_KERNEL != 'false' && (matrix.id == 'compile' || matrix.id == 'ktest') }}
@@ -69,7 +68,6 @@ jobs:
           auto_test: 'boot'
           smp: ${{ matrix.smp }}
           boot_protocol: ${{ matrix.boot_protocol }}
-          rootfs_boot: ${{ matrix.rootfs_boot }}
           cache_image: ${{ env.CI_CACHE_IMAGE }}
           cache_osdk: ${{ vars.CI_CACHE_OSDK != 'false' }}
           cache_kernel: ${{ vars.CI_CACHE_KERNEL != 'false' && matrix.variant == 'multiboot2-smp4' }}
