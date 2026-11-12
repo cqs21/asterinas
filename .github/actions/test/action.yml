@@ -146,6 +146,7 @@ runs:
           echo "host_target=target/$profile"
         } >> "$GITHUB_OUTPUT"
 
+    # Match individual dependency files so tar cannot re-include excluded executables.
     - name: Restore OSDK build cache
       if: ${{ inputs.cache_osdk == 'true' }}
       id: osdk-cache
@@ -153,7 +154,7 @@ runs:
       continue-on-error: true
       with:
         path: |
-          /tmp/ci-osdk-target/release/deps
+          /tmp/ci-osdk-target/release/deps/*
           /tmp/ci-osdk-target/release/build
           /tmp/ci-osdk-target/release/.fingerprint
           !/tmp/ci-osdk-target/release/deps/cargo_osdk-*
@@ -181,7 +182,7 @@ runs:
       continue-on-error: true
       with:
         path: |
-          /tmp/ci-osdk-target/release/deps
+          /tmp/ci-osdk-target/release/deps/*
           /tmp/ci-osdk-target/release/build
           /tmp/ci-osdk-target/release/.fingerprint
           !/tmp/ci-osdk-target/release/deps/cargo_osdk-*
@@ -194,7 +195,7 @@ runs:
       continue-on-error: true
       with:
         path: |
-          ${{ steps.cache-config.outputs.kernel_target }}/deps
+          ${{ steps.cache-config.outputs.kernel_target }}/deps/*
           ${{ steps.cache-config.outputs.kernel_target }}/build
           ${{ steps.cache-config.outputs.kernel_target }}/.fingerprint
           !${{ steps.cache-config.outputs.kernel_target }}/deps/*_osdk_bin-*
@@ -263,14 +264,13 @@ runs:
           make test_osdk
         fi
 
-    # Final executables are rebuilt from current sources; retain their dependencies.
     - name: Save kernel build cache
       if: ${{ github.event_name == 'push' && github.ref == 'refs/heads/main' && inputs.cache_save == 'true' && inputs.cache_kernel == 'true' && steps.kernel-cache.outputs.cache-matched-key != steps.cache-config.outputs.kernel_key }}
       uses: actions/cache/save@v6
       continue-on-error: true
       with:
         path: |
-          ${{ steps.cache-config.outputs.kernel_target }}/deps
+          ${{ steps.cache-config.outputs.kernel_target }}/deps/*
           ${{ steps.cache-config.outputs.kernel_target }}/build
           ${{ steps.cache-config.outputs.kernel_target }}/.fingerprint
           !${{ steps.cache-config.outputs.kernel_target }}/deps/*_osdk_bin-*
