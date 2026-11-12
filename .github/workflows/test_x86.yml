@@ -16,6 +16,13 @@ jobs:
       matrix:
         id:
         - compile
+        cache:
+        - 'off'
+        - 'on'
+        sample:
+        - 1
+        - 2
+        - 3
     steps:
     - name: Free disk space
       run: rm -rf /usr/lib/google-cloud-sdk/* /usr/local/lib/android/* /usr/share/dotnet/*
@@ -25,12 +32,9 @@ jobs:
       with:
         auto_test: general
         cache_image: ${{ env.CI_CACHE_IMAGE }}
-        cache_osdk: ${{ vars.CI_CACHE_OSDK != 'false' && matrix.id != 'usermode_test' }}
-        cache_kernel: ${{ vars.CI_CACHE_KERNEL != 'false' && matrix.id == 'compile' }}
-        cache_save: ${{ matrix.id == 'compile' }}
+        cache_osdk: ${{ matrix.cache == 'on' }}
+        cache_kernel: ${{ matrix.cache == 'on' }}
+        cache_save: 'true'
 'on':
-  workflow_dispatch: null
   pull_request: null
-  push:
-    branches:
-    - main
+  workflow_dispatch: null

@@ -15,6 +15,13 @@ jobs:
       matrix:
         id:
         - compile
+        cache:
+        - 'off'
+        - 'on'
+        sample:
+        - 1
+        - 2
+        - 3
       fail-fast: false
     steps:
     - name: Free disk space
@@ -26,9 +33,9 @@ jobs:
         auto_test: general
         arch: riscv64
         cache_image: ${{ env.CI_CACHE_IMAGE }}
-        cache_osdk: ${{ vars.CI_CACHE_OSDK != 'false' && matrix.id != 'usermode_test' }}
-        cache_kernel: ${{ vars.CI_CACHE_KERNEL != 'false' && matrix.id == 'compile' }}
-        cache_save: ${{ matrix.id == 'compile' }}
+        cache_osdk: ${{ matrix.cache == 'on' }}
+        cache_kernel: ${{ matrix.cache == 'on' }}
+        cache_save: 'true'
   integration-test:
     runs-on: ubuntu-latest
     container:
@@ -43,6 +50,9 @@ jobs:
         include:
         - test_id: boot-release
           release: true
+        cache:
+        - 'off'
+        - 'on'
       fail-fast: false
     steps:
     - name: Free disk space
@@ -56,12 +66,9 @@ jobs:
         arch: riscv64
         conformance_test_suite: ltp
         cache_image: ${{ env.CI_CACHE_IMAGE }}
-        cache_osdk: ${{ vars.CI_CACHE_OSDK != 'false' }}
-        cache_kernel: ${{ vars.CI_CACHE_KERNEL != 'false' }}
-        cache_save: ${{ matrix.test_id == 'boot-release' }}
+        cache_osdk: ${{ matrix.cache == 'on' }}
+        cache_kernel: ${{ matrix.cache == 'on' }}
+        cache_save: 'true'
 'on':
-  workflow_dispatch: null
   pull_request: null
-  push:
-    branches:
-    - main
+  workflow_dispatch: null

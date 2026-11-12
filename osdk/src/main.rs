@@ -1,4 +1,5 @@
 // SPDX-License-Identifier: MPL-2.0
+// Exercise cache reuse with a changed source file in the validation PR.
 
 use env_logger::Env;
 
