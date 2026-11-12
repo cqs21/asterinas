@@ -24,3 +24,5 @@ fn main() {
 
     cli::main();
 }
+
+// Verify that main build caches rebuild the current PR source.

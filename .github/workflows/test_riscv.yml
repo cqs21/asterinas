@@ -1,10 +1,6 @@
 name: 'Test riscv64  '
 'on':
   workflow_dispatch: null
-  pull_request: null
-  push:
-    branches:
-    - main
 env:
   CI_CACHE_IMAGE: asterinas/kernel-dev:0.19.0-20261012
 jobs:

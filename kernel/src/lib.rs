@@ -22,3 +22,5 @@ extern crate aster_uart as _;
 fn main() {
     aster_core::boot();
 }
+
+// Verify that main build caches rebuild the current PR source.

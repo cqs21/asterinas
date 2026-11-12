@@ -20,18 +20,70 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
+        id:
+        - ktest
+        cache:
+        - 'off'
+        - 'on'
+        sample:
+        - 1
+        - 2
+        - 3
+    steps:
+    - name: Free disk space
+      run: rm -rf /usr/lib/google-cloud-sdk/* /usr/local/lib/android/* /usr/share/dotnet/*
+    - uses: actions/checkout@v4
+    - name: Run ktest
+      uses: ./.github/actions/test
+      with:
+        auto_test: general
+        cache_image: ${{ env.CI_CACHE_IMAGE }}
+        cache_osdk: 'true'
+        cache_kernel: ${{ matrix.cache == 'on' }}
+        cache_save: 'true'
+    - name: Record dependency reuse
+      if: always()
+      shell: bash
+      run: "python3 - <<'PYCODE'\nfrom pathlib import Path\nimport json\nroot=Path('target')\nfor side in ['debug','x86_64-unknown-none/debug']:\n\
+        \ files=list((root/side/'deps').glob('*'))\n print('DEPENDENCIES', json.dumps({'side':side,'count':len(files),'rlibs':sorted(p.name\
+        \ for p in files if p.suffix in ['.rlib','.rmeta'])}))\nPYCODE"
+    env:
+      CARGO_INCREMENTAL: '0'
+    name: ktest (${{ matrix.cache }}, sample ${{ matrix.sample }})
+  kernel-smoke:
+    runs-on: ubuntu-latest
+    container:
+      image: asterinas/kernel-dev:0.19.0-20261012
+      options: -v /dev:/dev --privileged
+      volumes:
+      - /usr/lib/google-cloud-sdk:/usr/lib/google-cloud-sdk
+      - /usr/local/lib/android:/usr/local/lib/android
+      - /usr/share/dotnet:/usr/share/dotnet
+    strategy:
+      fail-fast: false
+      matrix:
         include:
         - id: compile
+          arch: x86_64
           profile: debug
           release: '0'
         - id: compile
+          arch: x86_64
+          profile: release
+          release: '1'
+        - id: compile
+          arch: riscv64
+          profile: debug
+          release: '0'
+        - id: compile
+          arch: riscv64
           profile: release
           release: '1'
     steps:
     - name: Free disk space
       run: rm -rf /usr/lib/google-cloud-sdk/* /usr/local/lib/android/* /usr/share/dotnet/*
     - uses: actions/checkout@v4
-    - name: Build ordinary ${{ matrix.profile }} kernel
+    - name: Rebuild current kernel source
       uses: ./.github/actions/test
       with:
         auto_test: general
@@ -39,5 +91,7 @@ jobs:
         cache_osdk: 'true'
         cache_kernel: 'true'
         cache_save: 'true'
+        arch: ${{ matrix.arch }}
     env:
       RELEASE: ${{ matrix.release }}
+    name: kernel (${{ matrix.profile }}, ${{ matrix.arch }})
