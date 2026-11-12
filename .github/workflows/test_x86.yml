@@ -72,22 +72,3 @@ jobs:
           cache_osdk: ${{ vars.CI_CACHE_OSDK != 'false' }}
           cache_kernel: ${{ vars.CI_CACHE_KERNEL != 'false' && matrix.variant == 'multiboot2-smp4' }}
 
-  kernel-test:
-    if: ${{ github.repository == 'cqs21/asterinas' }}
-    timeout-minutes: 30
-    runs-on: ubuntu-latest
-    container:
-      image: asterinas/kernel-dev:0.19.0-20261012
-      options: -v /dev:/dev --privileged
-    strategy:
-      matrix:
-        id: ['ktest']
-    steps:
-      - uses: actions/checkout@v4
-      - name: Run kernel tests
-        uses: ./.github/actions/test
-        with:
-          auto_test: 'general'
-          cache_image: ${{ env.CI_CACHE_IMAGE }}
-          cache_osdk: true
-          cache_kernel: true
