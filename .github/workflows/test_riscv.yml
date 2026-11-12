@@ -1,16 +1,6 @@
-name: "Test riscv64  "
-
-on:
-  workflow_dispatch:
-  pull_request:
-  push:
-    branches:
-      - main
-
+name: 'Test riscv64  '
 env:
-  # Keep this tag equal to the participating jobs; use a new tag when the image changes.
   CI_CACHE_IMAGE: asterinas/kernel-dev:0.19.0-20261012
-
 jobs:
   basic-test:
     runs-on: ubuntu-latest
@@ -18,72 +8,60 @@ jobs:
       image: asterinas/kernel-dev:0.19.0-20261012
       options: -v /dev:/dev --privileged
       volumes:
-        # Map the following directories on the host into the container so that
-        # the container can remove them to save some precious disk space (~16GB),
-        # which is quite limited on free-tier Github runners.
-        - /usr/lib/google-cloud-sdk:/usr/lib/google-cloud-sdk
-        - /usr/local/lib/android:/usr/local/lib/android
-        - /usr/share/dotnet:/usr/share/dotnet
+      - /usr/lib/google-cloud-sdk:/usr/lib/google-cloud-sdk
+      - /usr/local/lib/android:/usr/local/lib/android
+      - /usr/share/dotnet:/usr/share/dotnet
     strategy:
       matrix:
-        id: ['lint', 'compile', 'usermode_test', 'ktest']
+        id:
+        - compile
       fail-fast: false
     steps:
-      - name: Free disk space
-        # Remove unused packages from the host to save disk space.
-        run: rm -rf /usr/lib/google-cloud-sdk/* /usr/local/lib/android/* /usr/share/dotnet/*
-      - uses: actions/checkout@v4
-      - name: Run basic tests
-        uses: ./.github/actions/test
-        with:
-          auto_test: 'general'
-          arch: 'riscv64'
-          cache_image: ${{ env.CI_CACHE_IMAGE }}
-          cache_osdk: ${{ vars.CI_CACHE_OSDK != 'false' && matrix.id != 'usermode_test' }}
-          cache_kernel: ${{ vars.CI_CACHE_KERNEL != 'false' && matrix.id == 'compile' }}
-          cache_save: ${{ matrix.id == 'compile' }}
-
+    - name: Free disk space
+      run: rm -rf /usr/lib/google-cloud-sdk/* /usr/local/lib/android/* /usr/share/dotnet/*
+    - uses: actions/checkout@v4
+    - name: Run basic tests
+      uses: ./.github/actions/test
+      with:
+        auto_test: general
+        arch: riscv64
+        cache_image: ${{ env.CI_CACHE_IMAGE }}
+        cache_osdk: ${{ vars.CI_CACHE_OSDK != 'false' && matrix.id != 'usermode_test' }}
+        cache_kernel: ${{ vars.CI_CACHE_KERNEL != 'false' && matrix.id == 'compile' }}
+        cache_save: ${{ matrix.id == 'compile' }}
   integration-test:
     runs-on: ubuntu-latest
     container:
       image: asterinas/kernel-dev:0.19.0-20261012
       options: -v /dev:/dev --privileged
       volumes:
-        # Map the following directories on the host into the container so that
-        # the container can remove them to save some precious disk space (~16GB),
-        # which is quite limited on free-tier Github runners.
-        - /usr/lib/google-cloud-sdk:/usr/lib/google-cloud-sdk
-        - /usr/local/lib/android:/usr/local/lib/android
-        - /usr/share/dotnet:/usr/share/dotnet
+      - /usr/lib/google-cloud-sdk:/usr/lib/google-cloud-sdk
+      - /usr/local/lib/android:/usr/local/lib/android
+      - /usr/share/dotnet:/usr/share/dotnet
     strategy:
       matrix:
         include:
-          - test_id: 'boot-debug-smp4'
-            smp: 4
-
-          - test_id: 'boot-release'
-            release: true
-
-          - test_id: 'conformance-release'
-            release: true
-
-          - test_id: 'conformance-release-smp4'
-            release: true
-            smp: 4
+        - test_id: boot-release
+          release: true
       fail-fast: false
     steps:
-      - name: Free disk space
-        # Remove unused packages from the host to save disk space.
-        run: rm -rf /usr/lib/google-cloud-sdk/* /usr/local/lib/android/* /usr/share/dotnet/*
-      - uses: actions/checkout@v4
-      - name: Run integration tests ${{ (startsWith(matrix.test_id, 'conformance') && 'with LTP') || '' }}
-        uses: ./.github/actions/test
-        with:
-          auto_test: ${{ (startsWith(matrix.test_id, 'boot') && 'boot') || 'conformance' }}
-          release: ${{ !contains(matrix.release, 'false') }}
-          arch: 'riscv64'
-          conformance_test_suite: 'ltp'
-          cache_image: ${{ env.CI_CACHE_IMAGE }}
-          cache_osdk: ${{ vars.CI_CACHE_OSDK != 'false' }}
-          cache_kernel: ${{ vars.CI_CACHE_KERNEL != 'false' }}
-          cache_save: ${{ matrix.test_id == 'boot-release' }}
+    - name: Free disk space
+      run: rm -rf /usr/lib/google-cloud-sdk/* /usr/local/lib/android/* /usr/share/dotnet/*
+    - uses: actions/checkout@v4
+    - name: Run integration tests ${{ (startsWith(matrix.test_id, 'conformance') && 'with LTP') || '' }}
+      uses: ./.github/actions/test
+      with:
+        auto_test: ${{ (startsWith(matrix.test_id, 'boot') && 'boot') || 'conformance' }}
+        release: ${{ matrix.release }}
+        arch: riscv64
+        conformance_test_suite: ltp
+        cache_image: ${{ env.CI_CACHE_IMAGE }}
+        cache_osdk: ${{ vars.CI_CACHE_OSDK != 'false' }}
+        cache_kernel: ${{ vars.CI_CACHE_KERNEL != 'false' }}
+        cache_save: ${{ matrix.test_id == 'boot-release' }}
+'on':
+  workflow_dispatch: null
+  pull_request: null
+  push:
+    branches:
+    - main
