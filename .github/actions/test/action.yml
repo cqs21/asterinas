@@ -119,7 +119,7 @@ runs:
         workspace=$(pwd -P | sha256sum | cut -c1-16)
         toolchain=$(sha256sum rust-toolchain.toml | cut -c1-16)
         environment="v2-$(uname -s)-$(uname -m)-$CACHE_IMAGE-$workspace-$toolchain"
-        tested_sha=$(git rev-parse HEAD)
+        tested_sha=$(git -c safe.directory="$PWD" rev-parse HEAD)
         arch=${CACHE_ARCH:-${TARGET_ARCH:-x86_64}}
         case "$arch" in
           x86_64) triple=x86_64-unknown-none ;;
